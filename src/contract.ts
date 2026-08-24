@@ -39,6 +39,10 @@ export interface FlexTask {
   done: boolean;
   progress?: number;       // 0-100; engine reduces duration by this share
   urgent?: boolean;        // matched the urgent trigger word — colour only
+  /** 完成时刻（当日分钟数）。来自 `d18:21` 这样的锚点。
+   *  🔴 已完成任务【没有它就画不出来】—— historicalDoneSlice() 拿不到结束时刻
+   *  会直接返回 null，引擎拒绝编造它没被告知的历史。 */
+  doneAt?: DayMinutes;
 }
 
 /** What the code-block parser hands to the engine and the renderer. */

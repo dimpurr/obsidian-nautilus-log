@@ -7,7 +7,7 @@
  * "changed") and on a per-minute tick (nowMinutes moves, so Overload moves).
  */
 
-import { Plugin, MarkdownRenderChild, MarkdownRenderer, TFile, type MarkdownPostProcessorContext } from 'obsidian';
+import { Plugin, MarkdownRenderChild, MarkdownRenderer, TFile, type Editor, type MarkdownPostProcessorContext } from 'obsidian';
 import { parsePlan, taskDescription } from './parser';
 import { renderSpiral } from './spiral';
 import { parseBlockConfig, applyOverrides, extractPlanBody } from './blockconfig';
@@ -274,6 +274,29 @@ export default class NautilusLogPlugin extends Plugin {
     }
 
     this.addSettingTab(new NautilusLogSettingTab(this.app, this));
+
+    // 勾选当前行并追加 `dHH:MM` 完成锚点。
+    // 🔴 默认【不绑快捷键】—— 由用户在 设置 → 快捷键 自行指定。
+    // 为什么需要它：Roam 侧有 Todo Trigger 自动打时间戳，Obsidian 没有；
+    // 而没有锚点的已完成任务在盘上画不出来（引擎拒绝编造历史）。
+    this.addCommand({
+      id: 'complete-with-timestamp',
+      name: 'Complete task with timestamp / 勾选并打完成时间戳',
+      editorCallback: (editor: Editor) => {
+        const cursor = editor.getCursor();
+        const line = editor.getLine(cursor.line);
+        const now = new Date();
+        const stamp = `d${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+        if (/(?:^|\s)d\d{1,2}:\d{2}(?=\s|$)/.test(line)) return;   // 已有锚点，不重复追加
+        let next = line;
+        if (/^\s*[-*+]\s*\[ \]/.test(next)) {
+          next = next.replace(/^(\s*[-*+]\s*)\[ \]/, '$1[x]');      // 未勾选 => 勾上
+        } else if (!/^\s*[-*+]\s*\[[xX]\]/.test(next)) {
+          return;                                                    // 不是任务行，不动
+        }
+        editor.setLine(cursor.line, `${next.replace(/\s+$/, '')} ${stamp}`);
+      },
+    });
 
     this.addCommand({
       id: 'create-test-note',

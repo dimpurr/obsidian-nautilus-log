@@ -28,6 +28,16 @@ import type {
 /* ------------------------------------------------------------------ */
 
 interface SpiralCore {
+  /** 从完成锚点反推已完成任务的历史区间。拿不到结束时刻时返回 null
+   *  —— 引擎不编造未被告知的历史。 */
+  historicalDoneSlice(args: {
+    done?: boolean;
+    doneAt?: number;
+    duration?: number;
+    defaultDuration?: number;
+    actualDuration?: number;
+    lastClockEnd?: number;
+  }): { start: number; end: number; duration: number } | null;
   normalizeScheduleSettings(args: {
     startHour?: number;
     endHour?: number;
@@ -1003,7 +1013,34 @@ export function renderSpiral(
     urgent: t.urgent,
   }));
 
-  const allEvents = fixedEvents.concat(taskEvents);
+  // 已完成的任务不进排程（remainingDuration=0），所以不在 scheduledTasks 里。
+  // 它们要画成灰色历史切片，位置由引擎的 historicalDoneSlice 从完成锚点反推。
+  // 🔴 没有锚点就拿不到结束时刻 => 返回 null => 不画。这是上游的明确立场：
+  //    "does not invent history"。
+  const doneEvents: RenderEvent[] = plan.tasks
+    .filter((t) => t.done)
+    .map((t) => {
+      const slice = core.historicalDoneSlice({
+        done: true,
+        doneAt: t.doneAt,
+        duration: t.duration,
+        defaultDuration: s.defaultDuration,
+      });
+      if (!slice) return null;
+      return {
+        uid: t.uid,
+        text: t.string,
+        start: Math.max(workdayStart, slice.start),
+        end: Math.min(workdayEnd, slice.end),
+        done: true,
+        meeting: false,
+        todo: true,
+        progress: 0,
+      } as RenderEvent;
+    })
+    .filter((e): e is RenderEvent => e !== null && e.start < e.end);
+
+  const allEvents = fixedEvents.concat(taskEvents, doneEvents);
 
   const initialWidth = container.clientWidth || 600;
   const initialHeight = container.clientHeight || 800;

@@ -47,7 +47,13 @@ const logCore = require('./vendor/log-core') as unknown as {
   truncateTextToWidth(args: { text: string; maxWidth: number }): string;
 };
 
-const CHECKBOX_RE = /^-\s*\[( |x|X)\]\s*/;
+const CHECKBOX_RE = /^[-*+]\s*\[( |x|X)\]\s*/;
+/** 裸列表标记（无复选框）。事件行推荐写成 `- 08:30-09:30 起床`，
+ *  与 `- [ ]` 在阅读模式下缩进一致；不写 `- ` 也仍然接受。 */
+const LIST_MARKER_RE = /^[-*+]\s+/;
+/** 完成时刻锚点：`d18:21`（沿用上游 Todo Trigger 的写法）。
+ *  没有它，已完成任务无法落到盘上 —— 见 contract.ts FlexTask.doneAt。 */
+const DONE_AT_RE = /(?:^|\s)d(\d{1,2}):(\d{2})(?=\s|$)/i;
 const DONE_RE = /\[x\]/i;
 
 /** Options the parser needs beyond the block text itself. */
@@ -65,7 +71,12 @@ export interface ParseOptions {
  *  truncate the remainder to `descLength` glyphs for display. */
 export function taskDescription(line: string, descLength: number): string {
   const { cleanedText } = logCore.parseDurationToken({ text: line });
-  const description = cleanedText.replace(CHECKBOX_RE, '').trim();
+  // 先剥复选框，再剥裸列表标记 —— 否则 `- 08:30-09:30 起床` 的图例会带着 "- "。
+  const description = cleanedText
+    .replace(CHECKBOX_RE, '')
+    .replace(LIST_MARKER_RE, '')
+    .replace(DONE_AT_RE, '')
+    .trim();
   return logCore.truncateTextToWidth({ text: description, maxWidth: descLength });
 }
 
@@ -164,11 +175,18 @@ export function parsePlan(source: string, options: ParseOptions): ParsedPlan {
         });
         continue;
       }
+      const anchor = DONE_AT_RE.exec(text);
+      const anchorMinutes = anchor
+        ? Number(anchor[1]) * 60 + Number(anchor[2])
+        : null;
       tasks.push({
         uid,
         string: text,
         duration: duration.minutes,
         done: DONE_RE.test(text),
+        ...(anchorMinutes !== null && anchorMinutes < 1440
+          ? { doneAt: anchorMinutes as DayMinutes }
+          : {}),
       });
       continue;
     }

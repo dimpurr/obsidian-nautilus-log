@@ -62,8 +62,33 @@ are accepted.
 - **Line order is priority.** Reorder the lines and the schedule follows.
 - Durations support `30m`, `30min`, `1h`, and `1h30m`.
 
-> ⚠️ A completed task (`- [x]`) disappears from the chart unless it carries a
-> completion time — the engine refuses to invent history it was not given.
+### Completed work
+
+A completed task needs a **completion time** to be drawn — the engine refuses to
+invent history it was not given. Write it as a `d`-prefixed anchor:
+
+```markdown
+- [x] Academic reading 40m d11:20
+```
+
+That renders as a muted 10:40–11:20 slice. Without the anchor the task still
+counts as done (it stops consuming capacity) but cannot be placed on the chart.
+
+Rather than typing anchors by hand, use the command **Complete task with
+timestamp**, which ticks the current line and appends the current time. It ships
+with **no default hotkey** — bind one in Settings → Hotkeys if you want it.
+
+### Style
+
+Events read best as list items too, so they line up with tasks:
+
+```markdown
+- 08:30-09:30 Morning routine
+- [ ] Write brief 45m
+```
+
+Bare lines (`08:30-09:30 Morning routine`) still parse, but mixing the two looks
+inconsistent once rendered.
 
 ## Differences from the Roam original
 
