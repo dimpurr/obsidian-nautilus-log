@@ -117,7 +117,7 @@ function formatDate(format: string): string {
 
 /** 解析今天的 Daily Note 路径。优先用内置 Daily Notes 插件的 format/folder；
  *  读不到就退回根目录的 `YYYY-MM-DD.md`，并把 viaPlugin 置 false 供 UI 提示。 */
-function resolveDailyNoteInfo(app: App): DailyNoteInfo {
+export function resolveDailyNoteInfo(app: App): DailyNoteInfo {
   const opts = readDailyNotesOptions(app);
   // 🔴 只要拿到 folder 或 format 之一就算配置有效。
   //    早先写成 `if (opts && opts.format)`，而 Obsidian 在用户【没改过日期格式】时

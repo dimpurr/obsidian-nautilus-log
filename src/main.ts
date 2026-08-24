@@ -7,12 +7,12 @@
  * "changed") and on a per-minute tick (nowMinutes moves, so Overload moves).
  */
 
-import { Plugin, MarkdownRenderChild, MarkdownRenderer, TFile, type Editor, type MarkdownPostProcessorContext } from 'obsidian';
+import { Notice, Plugin, MarkdownRenderChild, MarkdownRenderer, TFile, type Editor, type MarkdownPostProcessorContext } from 'obsidian';
 import { parsePlan, taskDescription } from './parser';
 import { renderSpiral } from './spiral';
 import { renderCapacityHeader } from './header';
 import { renderChartControls, type ChartControlState } from './controls';
-import { NAUTILUS_VIEW_TYPE, NautilusSidebarView } from './sidebar';
+import { NAUTILUS_VIEW_TYPE, NautilusSidebarView, resolveDailyNoteInfo, primeDailyNotesConfig } from './sidebar';
 import { initTimingObsidian } from './timing-obsidian';
 import { renderTimingStatusBar } from './statusbar';
 import type { ExecViewContext, TimingRuntime } from './timing-contract';
@@ -349,7 +349,15 @@ export default class NautilusLogPlugin extends Plugin {
 
     // 执行层数据适配器：vendored 的 timing-runtime 通过它读写 vault。
     // 🔴 必须在任何执行层功能之前初始化，否则 getApp() 会抛「未初始化」。
-    initTimingObsidian({ app: this.app });
+    // 🔴 必须把日记定位【注入】给执行层适配器，否则它会走自己那份兜底逻辑
+    //    （只认根目录 YYYY-MM-DD.md）=> 面板永远说「今天没有 Nautilus Log」，
+    //    而侧栏这边明明已经能找到。同一个定位规则只允许有一份实现。
+    void primeDailyNotesConfig(this.app);
+    initTimingObsidian({
+      app: this.app,
+      notify: (msg: string) => { new Notice(msg); },
+      dailyNotePath: () => resolveDailyNoteInfo(this.app).path,
+    });
 
     // 右侧栏视图 —— 不打开笔记也能看今天的盘。共用 renderSpiral。
     this.registerView(NAUTILUS_VIEW_TYPE, (leaf) => new NautilusSidebarView(
