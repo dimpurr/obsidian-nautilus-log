@@ -24,7 +24,7 @@ const esbuild = require("esbuild");
 const { JSDOM } = require("jsdom");
 
 const SRC = path.join(__dirname, "..", "src");
-const MOCK_OBSIDIAN = path.join(__dirname, ".mock-obsidian.cjs");
+const MOCK_OBSIDIAN = path.join(__dirname, "obsidian-mock.cjs");
 const { ItemView, TFile, WorkspaceLeaf } = require(MOCK_OBSIDIAN);
 
 /* ------------------------------------------------------------------ */

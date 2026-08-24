@@ -18,7 +18,7 @@ esbuild.buildSync({
   entryPoints: [path.join(__dirname, '../src/settings.ts')],
   bundle: true, format: 'cjs', platform: 'node',
   outfile: path.join(__dirname, '.settings.cjs'),
-  alias: { obsidian: path.join(__dirname, '.obsidian-stub.cjs') },
+  alias: { obsidian: path.join(__dirname, 'obsidian-mock.cjs') },
   logLevel: 'error',
 });
 const { clampMinutes } = require('./.settings.cjs');
