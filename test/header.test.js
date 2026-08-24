@@ -1,0 +1,270 @@
+/*
+ * header.test.js — smoke test for the capacity header renderer.
+ *
+ * Uses jsdom: we bundle `src/header.ts` with esbuild into a single CJS file,
+ * install a jsdom document, render the header into a container, then assert on
+ * the serialized DOM.
+ *
+ * Covered:
+ *   · normal plan renders the six-item header (summary row + capacity row,
+ *     current/full-day totals, and the flame when that minute burns);
+ *   · overload renders "Overload", fragmented renders "No fitting slot" — and
+ *     the two stay distinct;
+ *   · zh settings produce Chinese copy;
+ *   · null/missing burningBucket and a broken capacity degrade without throwing.
+ */
+
+"use strict";
+
+const assert = require("node:assert/strict");
+const { test } = require("node:test");
+const path = require("node:path");
+const esbuild = require("esbuild");
+const { JSDOM } = require("jsdom");
+
+/* ------------------------------------------------------------------ */
+/* Load the bundled renderer                                           */
+/* ------------------------------------------------------------------ */
+
+const result = esbuild.buildSync({
+  entryPoints: [path.join(__dirname, "..", "src", "header.ts")],
+  bundle: true,
+  format: "cjs",
+  platform: "node",
+  write: false,
+});
+const moduleShim = { exports: {} };
+// eslint-disable-next-line no-new-func
+new Function("module", "exports", "require", result.outputFiles[0].text)(
+  moduleShim,
+  moduleShim.exports,
+  require,
+);
+const { renderCapacityHeader } = moduleShim.exports;
+
+/* ------------------------------------------------------------------ */
+/* jsdom                                                               */
+/* ------------------------------------------------------------------ */
+
+const dom = new JSDOM("<!DOCTYPE html><body></body>");
+globalThis.document = dom.window.document;
+
+function render(capacity, settings, nowMinutes) {
+  const container = document.createElement("div");
+  renderCapacityHeader(container, capacity, settings, nowMinutes);
+  return container;
+}
+
+function textOf(el) {
+  return el ? el.textContent.replace(/\s+/g, " ").trim() : "";
+}
+
+function summaryItems(container) {
+  return container.querySelectorAll(
+    ".nautilus-log-metrics-summary .nautilus-log-metric-summary-item",
+  );
+}
+
+function readings(container) {
+  return container.querySelectorAll(".nautilus-log-metrics-capacity .nautilus-log-metric");
+}
+
+/* ------------------------------------------------------------------ */
+/* Fixtures                                                            */
+/* ------------------------------------------------------------------ */
+
+const settings = {
+  language: "en",
+  workdayStartHour: 5,
+  workdayEndHour: 21,
+  descLength: 22,
+  todoDuration: 15,
+  urgentTrigger: "",
+};
+
+const zhSettings = { ...settings, language: "zh" };
+
+/** Normal day: 3h30m of demand against 14h30m full-day flexible time. */
+function normalCapacity(extra) {
+  return {
+    availableMinutes: 311, // 5h11m
+    demandMinutes: 90, // 1h30m
+    overloadMinutes: 0,
+    slackMinutes: 221, // 3h41m
+    unplacedMinutes: 0,
+    fixedMinutes: 0,
+    totalAvailableMinutes: 900, // 15h
+    totalFixedMinutes: 0,
+    burningBucket: "available",
+    scheduledTasks: [],
+    overflowTasks: [],
+    ...extra,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Tests                                                               */
+/* ------------------------------------------------------------------ */
+
+test("normal plan renders the six-item header with totals and a flame", () => {
+  const container = render(normalCapacity(), settings, 600);
+  const metrics = container.querySelector(".nautilus-log-metrics");
+
+  assert.ok(metrics, "container should carry a .nautilus-log-metrics element");
+  assert.ok(metrics.getAttribute("aria-label"), "metrics container should be labelled");
+
+  // Summary row: Planned · Remaining · left% (three cells, two separators).
+  const items = summaryItems(container);
+  assert.strictEqual(items.length, 3, "summary row should hold three items");
+  assert.strictEqual(
+    container.querySelectorAll(".nautilus-log-metric-separator").length,
+    2,
+    "summary row should have two separators",
+  );
+
+  assert.match(textOf(items[0]), /1h30m/, "Planned cell carries the demand value");
+  assert.match(textOf(items[0]), /planned/, "Planned cell carries its label");
+  assert.match(textOf(items[1]), /3h41m/, "Remaining cell carries the slack value");
+  assert.match(textOf(items[1]), /free/, "Remaining cell carries its label");
+  assert.match(textOf(items[2]), /25%/, "left% cell carries the percentage");
+  assert.match(textOf(items[2]), /left/, "left% cell carries its label");
+
+  // Capacity row: Available and Events, each with current / full-day totals.
+  const caps = readings(container);
+  assert.strictEqual(caps.length, 2, "capacity row should hold two readings");
+  assert.match(textOf(caps[0]), /Available/, "first reading is Available");
+  assert.match(textOf(caps[0]), /5h11m/, "Available shows current minutes");
+  assert.match(textOf(caps[0]), /\/ 15h/, "Available shows the full-day total");
+  assert.match(textOf(caps[1]), /Events/, "second reading is Events");
+  assert.match(textOf(caps[1]), /0m/, "Events shows current minutes");
+  assert.match(textOf(caps[1]), /\/ 0m/, "Events shows the full-day total");
+
+  // Flame: capacity burns Available, so only the Available reading carries it.
+  const flames = container.querySelectorAll(".nautilus-log-burning-icon");
+  assert.strictEqual(flames.length, 1, "a live Available minute shows one flame");
+  assert.ok(
+    caps[0].querySelector(".nautilus-log-burning-icon"),
+    "the flame sits on the Available reading",
+  );
+  assert.match(
+    caps[0].querySelector(".nautilus-log-burning-icon").getAttribute("aria-label"),
+    /Flexible time is elapsing/,
+    "flame carries the burning label",
+  );
+});
+
+test("an event-burning minute puts the flame on the Events reading", () => {
+  const container = render(
+    normalCapacity({
+      availableMinutes: 400,
+      fixedMinutes: 20,
+      totalFixedMinutes: 90,
+      burningBucket: "events",
+    }),
+    settings,
+    620,
+  );
+  const caps = readings(container);
+  assert.strictEqual(
+    caps[1].querySelectorAll(".nautilus-log-burning-icon").length,
+    1,
+    "the flame sits on the Events reading",
+  );
+  assert.strictEqual(
+    caps[0].querySelectorAll(".nautilus-log-burning-icon").length,
+    0,
+    "the Available reading has no flame",
+  );
+});
+
+test("overloaded plan renders Overload and not No fitting slot", () => {
+  const container = render(
+    normalCapacity({
+      availableMinutes: 100,
+      demandMinutes: 160,
+      overloadMinutes: 60,
+      slackMinutes: 0,
+      unplacedMinutes: 0,
+    }),
+    settings,
+    600,
+  );
+
+  const html = container.innerHTML;
+  assert.match(html, /Overload/, "overload should appear in the summary row");
+  assert.match(textOf(summaryItems(container)[1]), /1h/, "Overload cell carries the excess");
+  assert.doesNotMatch(html, /No fitting slot/, "overload must not render as fragmented");
+
+  // Warning tone is applied to the Overload summary cell.
+  assert.ok(
+    container.querySelector(
+      ".nautilus-log-metrics-summary .nautilus-log-metric-summary-item.nautilus-log-metric--warning",
+    ),
+    "Overload summary cell should carry the warning tone",
+  );
+});
+
+test("fragmented plan renders No fitting slot, distinct from Overload", () => {
+  const container = render(
+    normalCapacity({
+      availableMinutes: 100,
+      demandMinutes: 90,
+      overloadMinutes: 0,
+      slackMinutes: 10,
+      unplacedMinutes: 30, // enough total time, but no continuous gap
+    }),
+    settings,
+    600,
+  );
+
+  const html = container.innerHTML;
+  assert.match(html, /No fitting slot/, "fragmentation should appear in the summary row");
+  assert.match(textOf(summaryItems(container)[1]), /30m/, "No-fitting-slot cell carries the unplaced share");
+  assert.doesNotMatch(html, />Overload</, "fragmented must not render as Overload");
+});
+
+test("zh settings produce Chinese copy", () => {
+  const container = render(normalCapacity(), zhSettings, 600);
+
+  const html = container.innerHTML;
+  assert.match(html, /已计划/, "Planned label is localised");
+  assert.match(html, /余量/, "Remaining label is localised");
+  assert.match(html, /可安排/, "Available label is localised");
+  assert.match(html, /事件/, "Events label is localised");
+  assert.match(html, /剩余/, "left% label is localised");
+  assert.match(html, /可安排时间正在流逝/, "flame label is localised");
+});
+
+test("null burningBucket renders a flame-less header without throwing", () => {
+  const container = render(normalCapacity({ burningBucket: null }), settings, 100);
+  assert.strictEqual(
+    container.querySelectorAll(".nautilus-log-burning-icon").length,
+    0,
+    "no flame when the engine says nothing is burning",
+  );
+  assert.strictEqual(
+    summaryItems(container).length,
+    3,
+    "summary row still renders",
+  );
+});
+
+test("missing burningBucket still renders (degraded flame) without throwing", () => {
+  const { burningBucket, ...noBucket } = normalCapacity();
+  const container = render(noBucket, settings, 600);
+  assert.strictEqual(
+    summaryItems(container).length,
+    3,
+    "a capacity without burningBucket still renders the six-item header",
+  );
+});
+
+test("broken capacity degrades to a zeroed header instead of throwing", () => {
+  const container = render({ totally: "wrong" }, settings, 600);
+  assert.strictEqual(
+    summaryItems(container).length,
+    3,
+    "a broken capacity still renders a neutral header",
+  );
+  assert.match(textOf(summaryItems(container)[0]), /0m/, "neutral header shows zeroed values");
+});
