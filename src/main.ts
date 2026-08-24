@@ -38,7 +38,10 @@ class NautilusLogView extends MarkdownRenderChild {
   }
 
   onload(): void {
-    this.render();
+    // 🔴 不能在这里直接 render：此刻 containerEl 还没挂进文档，
+    //    ctx.getSectionInfo() 会一路返回 null（实测 7/7 块全 null），
+    //    计划正文完全取不到 => 图全空。延到挂载之后再取。
+    this.scheduleRender();
     this.metadataListener = (file) => {
       if (file.path === this.sourcePath) this.render();
     };
@@ -47,6 +50,7 @@ class NautilusLogView extends MarkdownRenderChild {
   }
 
   onunload(): void {
+    this.sectionRetryCancelled = true;
     if (this.timer !== null) {
       window.clearInterval(this.timer);
       this.timer = null;
@@ -57,9 +61,54 @@ class NautilusLogView extends MarkdownRenderChild {
     }
   }
 
-  render(): void {
+  /** getSectionInfo 依赖元素已在文档中。onload 时通常还没挂上，
+   *  这里按帧重试若干次；仍拿不到就走 fallback（读文件自行定位本块）。 */
+  private scheduleRender(attempt = 0): void {
+    if (this.ctx.getSectionInfo(this.containerEl) || attempt >= 12) {
+      void this.render();
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      if (this.sectionRetryCancelled) return;
+      this.scheduleRender(attempt + 1);
+    });
+  }
+
+  /** fallback：getSectionInfo 始终为 null 时，直接读文件、按「第 N 个内容相同的
+   *  nautilus 块」定位自己。N 取自本块在文档中已渲染的同源块序号。 */
+  private async locateByFile(): Promise<{ text: string; lineEnd: number } | null> {
+    const file = this.plugin.app.vault.getAbstractFileByPath(this.sourcePath);
+    if (!(file instanceof TFile)) return null;
+    const text = await this.plugin.app.vault.cachedRead(file);
+    const lines = text.split(/\r?\n/);
+    const ends: { body: string; lineEnd: number }[] = [];
+    for (let i = 0; i < lines.length; i += 1) {
+      if (!/^\s*```+\s*nautilus\s*$/.test(lines[i])) continue;
+      let j = i + 1;
+      const body: string[] = [];
+      while (j < lines.length && !/^\s*```+\s*$/.test(lines[j])) { body.push(lines[j]); j += 1; }
+      ends.push({ body: body.join('\n'), lineEnd: j });
+      i = j;
+    }
+    if (ends.length === 0) return null;
+    const src = this.source.replace(/\s+$/, '');
+    const same = ends.filter((e) => e.body.replace(/\s+$/, '') === src);
+    const pool = same.length > 0 ? same : ends;
+    // 同源块可能有多个（例如都是空块）=> 用本块在 DOM 中的出现次序消歧
+    const rendered = Array.from(
+      this.containerEl.ownerDocument.querySelectorAll('.nautilus-log-block'),
+    );
+    const ordinal = Math.max(0, rendered.indexOf(this.containerEl));
+    const pick = pool[Math.min(ordinal, pool.length - 1)];
+    return { text, lineEnd: pick.lineEnd };
+  }
+
+  private sectionRetryCancelled = false;
+
+  async render(): Promise<void> {
     const el = this.containerEl;
     el.empty();
+    el.addClass('nautilus-log-block');
 
     // ── 方案 5 ──────────────────────────────────────────────────────────
     // 代码块内容 = 当天配置覆盖（YAML 风格）；计划正文 = 块【之后】到第一个
@@ -67,19 +116,22 @@ class NautilusLogView extends MarkdownRenderChild {
     const overrides = parseBlockConfig(this.source);
     const settings = applyOverrides(this.plugin.settings, overrides);
 
-    const section = this.ctx.getSectionInfo(this.containerEl);
+    let src: { text: string; lineEnd: number } | null = this.ctx.getSectionInfo(this.containerEl);
+    let via = 'section';
+    if (!src) { src = await this.locateByFile(); via = 'file'; }
     let planBody = '';
     let lineOffset = 0;
-    if (section) {
-      const extracted = extractPlanBody(section.text, section.lineEnd);
+    if (src) {
+      const extracted = extractPlanBody(src.text, src.lineEnd);
       planBody = extracted.body;
       lineOffset = extracted.startLine;
     }
+    const section = src;
     // 诊断：getSectionInfo 官方文档明写「很多情况下返回 null」，而计划正文完全
     // 依赖它。没有这条，"图是空的" 会有十几种可能原因，无法区分。
     const diag = section
-      ? `section ✓ lines ${section.lineStart}-${section.lineEnd} of ${section.text.split('\n').length} · plan ${planBody.split('\n').filter((l) => l.trim()).length} lines from ${lineOffset}`
-      : 'section ✗ getSectionInfo() returned null';
+      ? `via ${via} ✓ blockEnd ${section.lineEnd} of ${section.text.split('\n').length} lines · plan ${planBody.split('\n').filter((l) => l.trim()).length} lines from ${lineOffset}`
+      : '✗ both getSectionInfo() and file fallback failed';
 
     const copy = logCore.uiCopy(settings.language).capacity;
     const panelCopy = logCore.uiCopy(settings.language).panels;
