@@ -29,5 +29,6 @@ test('嵌套的事件行同样不算', () => {
 
 test('顶层顺序保持不变', () => {
   const {tasks}=P(['- [ ] 第一 10m','   - [ ] 子 5m','- [ ] 第二 10m','- [ ] 第三 10m']);
-  assert.deepEqual(tasks.map(t=>t.string.match(/第.\b?|第./)[0]),['第一','第二','第三']);
+  assert.deepEqual(tasks.map(t=>t.string.trim().replace(/^- \[ \] /,'').split(' ')[0]),
+                   ['第一','第二','第三']);
 });

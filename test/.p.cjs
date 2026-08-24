@@ -1299,9 +1299,20 @@ function parsePlan(source, options) {
   const tasks = [];
   const malformed = [];
   const lines = source.split("\n");
+  let baseIndent = null;
+  for (const raw of lines) {
+    if (raw.trim()) {
+      baseIndent = raw.length - raw.trimStart().length;
+      break;
+    }
+  }
   for (let index = 0; index < lines.length; index += 1) {
-    const text = lines[index].trim();
+    const raw = lines[index];
+    const text = raw.trim();
     if (!text)
+      continue;
+    const indent = raw.length - raw.trimStart().length;
+    if (baseIndent !== null && indent > baseIndent)
       continue;
     const uid = lineUid(sourcePath, lineOffset + index);
     const range = logCore.parseTimeRangeToken({
