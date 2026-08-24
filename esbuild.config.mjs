@@ -13,6 +13,9 @@ const ctx = await esbuild.context({
   logLevel: "info",
   sourcemap: prod ? false : "inline",
   treeShaking: true,
+  // docs/test-note.md 直接内联成字符串 —— repo 里那份就是唯一真源，
+  // 「创建测试笔记」命令与文档不可能漂移。
+  loader: { '.md': 'text' },
   outfile: "main.js",
 });
 

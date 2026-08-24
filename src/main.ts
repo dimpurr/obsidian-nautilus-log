@@ -11,6 +11,7 @@ import { Plugin, MarkdownRenderChild, MarkdownRenderer, TFile, type MarkdownPost
 import { parsePlan, taskDescription } from './parser';
 import { renderSpiral } from './spiral';
 import { parseBlockConfig, applyOverrides, extractPlanBody } from './blockconfig';
+import TEST_NOTE from '../docs/test-note.md';
 import { NautilusLogSettingTab } from './settings';
 import { DEFAULT_SETTINGS, type NautilusSettings, type LogCore } from './contract';
 
@@ -48,7 +49,10 @@ class NautilusLogView extends MarkdownRenderChild {
     //    计划正文完全取不到 => 图全空。延到挂载之后再取。
     this.scheduleRender();
     this.metadataListener = (file) => {
-      if (file.path === this.sourcePath) this.render();
+      if (file.path !== this.sourcePath) return;
+      // 🔴 先失效缓存再重渲染，否则会拿改动前的正文画图。
+      this.plugin.fileCache.delete(this.sourcePath);
+      void this.render();
     };
     this.plugin.app.metadataCache.on('changed', this.metadataListener);
     this.timer = window.setInterval(() => this.render(), 60_000);
@@ -81,10 +85,7 @@ class NautilusLogView extends MarkdownRenderChild {
 
   /** fallback：getSectionInfo 始终为 null 时，直接读文件、按「第 N 个内容相同的
    *  nautilus 块」定位自己。N 取自本块在文档中已渲染的同源块序号。 */
-  private async locateByFile(): Promise<{ text: string; lineEnd: number } | null> {
-    const file = this.plugin.app.vault.getAbstractFileByPath(this.sourcePath);
-    if (!(file instanceof TFile)) return null;
-    const text = await this.plugin.app.vault.cachedRead(file);
+  private locateInText(text: string): { text: string; lineEnd: number } | null {
     const lines = text.split(/\r?\n/);
     const ends: { body: string; lineEnd: number }[] = [];
     for (let i = 0; i < lines.length; i += 1) {
@@ -110,6 +111,12 @@ class NautilusLogView extends MarkdownRenderChild {
 
   private sectionRetryCancelled = false;
 
+  /** 缓存命中则同步返回（PDF 导出走这条）；未命中返回 null，由调用方补一次异步。 */
+  private locateCached(): { text: string; lineEnd: number } | null {
+    const cached = this.plugin.fileCache.get(this.sourcePath);
+    return cached ? this.locateInText(cached) : null;
+  }
+
   async render(): Promise<void> {
     const el = this.containerEl;
     el.empty();
@@ -123,7 +130,12 @@ class NautilusLogView extends MarkdownRenderChild {
 
     let src: { text: string; lineEnd: number } | null = this.ctx.getSectionInfo(this.containerEl);
     let via = 'section';
-    if (!src) { src = await this.locateByFile(); via = 'file'; }
+    if (!src) { src = this.locateCached(); via = 'cache'; }
+    if (!src) {
+      // 缓存冷：异步读一次，写入缓存后重渲染。下次（含 PDF 导出）就走同步路径了。
+      const text = await this.plugin.primeCache(this.sourcePath);
+      if (text) { src = this.locateInText(text); via = 'file'; }
+    }
     let planBody = '';
     let lineOffset = 0;
     if (src) {
@@ -229,6 +241,19 @@ class NautilusLogView extends MarkdownRenderChild {
 export default class NautilusLogPlugin extends Plugin {
   settings: NautilusSettings = { ...DEFAULT_SETTINGS };
 
+  /** 文件正文缓存。PDF 导出是独立渲染上下文：getSectionInfo() 必然 null，
+   *  而读文件兜底是异步的、导出流程不等它 => 导出的 PDF 会是空计划。
+   *  缓存让兜底在缓存命中时变成【同步】，导出因而拿得到计划。 */
+  readonly fileCache = new Map<string, string>();
+
+  async primeCache(path: string): Promise<string | null> {
+    const f = this.app.vault.getAbstractFileByPath(path);
+    if (!(f instanceof TFile)) return null;
+    const text = await this.app.vault.cachedRead(f);
+    this.fileCache.set(path, text);
+    return text;
+  }
+
   async onload(): Promise<void> {
     await this.loadSettings();
 
@@ -241,6 +266,21 @@ export default class NautilusLogPlugin extends Plugin {
     }
 
     this.addSettingTab(new NautilusLogSettingTab(this.app, this));
+
+    this.addCommand({
+      id: 'create-test-note',
+      name: 'Create Nautilus Log test note / 创建 Nautilus Log 测试笔记',
+      callback: async () => {
+        const base = 'Nautilus Log 测试';
+        let path = `${base}.md`;
+        // 已存在就加序号，绝不覆盖用户已有的笔记
+        for (let n = 2; this.app.vault.getAbstractFileByPath(path); n += 1) {
+          path = `${base} ${n}.md`;
+        }
+        const file = await this.app.vault.create(path, TEST_NOTE);
+        await this.app.workspace.getLeaf(false).openFile(file);
+      },
+    });
 
     this.addCommand({
       id: 'open-nautilus-settings',
