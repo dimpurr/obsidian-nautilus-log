@@ -69,7 +69,9 @@ export interface TimingRuntime {
   startTask(taskUid: string, taskString?: string): Promise<unknown>;
   stopTask(): Promise<unknown>;
   completeTask(taskUid?: string): Promise<unknown>;
-  deleteCurrentClock(): Promise<unknown>;
+  /** ⚠️ 收 taskUid —— 不传会报 "Only the current Timing CLOCK can be deleted."
+   *  （vendor/timing-runtime.js:422 实际签名；初版契约漏了这个参数）。 */
+  deleteCurrentClock(taskUid?: string): Promise<unknown>;
   startStandalonePomodoro(): Promise<unknown> | unknown;
   stopStandalonePomodoro(): Promise<unknown> | unknown;
   locate(): Promise<unknown> | unknown;
