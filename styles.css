@@ -1981,3 +1981,8 @@ button.nautilus-log-timing__plan-heading:focus-visible {
 .dark .nautilus-log-exec-forgotten {
   color: #d89a46;
 }
+
+/* 溢出列表：项目符号在 DOM 层，正文走 MarkdownRenderer（链接/标签可点） */
+.nautilus-log-overflow-bullet { color: var(--text-faint); }
+.nautilus-log-overflow-text { display: inline; }
+.nautilus-log-overflow-text > p { margin: 0; display: inline; }

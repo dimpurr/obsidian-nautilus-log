@@ -63,13 +63,45 @@ interface DailyNoteInfo {
 }
 
 function readDailyNotesOptions(app: App): DailyNotesOptions | null {
+  // 路径一：内部插件实例。它【只在插件已加载后】才有 instance.options，
+  // 而且用户没改过默认值时 options 可能是空对象。
   const dn = (app as unknown as {
     internalPlugins?: { plugins?: Record<string, { instance?: { options?: DailyNotesOptions } }> };
   }).internalPlugins?.plugins?.['daily-notes'];
   const opts = dn?.instance?.options;
-  if (!opts) return null;
-  return { format: opts.format, folder: opts.folder };
+  if (opts && (opts.folder || opts.format)) {
+    return { format: opts.format, folder: opts.folder };
+  }
+  // 路径二：直接读 .obsidian/daily-notes.json。
+  // 🔴 这条是必须的 —— 实测某 vault 的配置只落在该文件里
+  //    （folder: "Daily/_Daily"），走路径一拿到的是空，侧栏因而退回根目录、
+  //    报「找不到今日笔记」，而笔记明明就在那儿。
+  try {
+    const adapter = (app.vault as unknown as {
+      adapter?: { read?(p: string): Promise<string> };
+      configDir?: string;
+    });
+    const dir = (app.vault as unknown as { configDir?: string }).configDir || '.obsidian';
+    const raw = cachedDailyNotesJson ?? adapter.adapter?.read?.(`${dir}/daily-notes.json`);
+    if (raw && typeof raw !== 'string') {
+      // 异步：先返回 null，读回来后缓存，下一次渲染即可用（每分钟 tick 会重来）。
+      void (raw as Promise<string>).then((text) => {
+        try { cachedDailyNotesJson = JSON.stringify(JSON.parse(text)); } catch { /* ignore */ }
+      }).catch(() => { /* 没有该文件是正常的 */ });
+      return null;
+    }
+    if (typeof raw === 'string') {
+      const parsed = JSON.parse(raw) as DailyNotesOptions;
+      if (parsed && (parsed.folder || parsed.format)) {
+        return { format: parsed.format, folder: parsed.folder };
+      }
+    }
+  } catch { /* ignore */ }
+  return null;
 }
+
+/** daily-notes.json 的内容缓存（adapter.read 是异步的，同步路径拿不到）。 */
+let cachedDailyNotesJson: string | null = null;
 
 /** 用 moment 渲染 Daily Notes 的 format；没有 moment 时退化为 YYYY-MM-DD。
  *  (Obsidian 恒有 window.moment；退化路径只是给测试/无 DOM 环境的兜底。) */

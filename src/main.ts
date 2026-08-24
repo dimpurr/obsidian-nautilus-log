@@ -307,9 +307,14 @@ class NautilusLogView extends MarkdownRenderChild {
       // ⚠️ 它是异步的；渲染失败退回纯文本，不能让一个坏链接吃掉整个列表。
       for (const task of capacity.overflowTasks) {
         const row = box.createDiv({ cls: 'nautilus-log-overflow-item' });
-        const md = `· ${taskDescription(task.string, settings.descLength)} ${logCore.formatDuration(task.duration)}`;
-        MarkdownRenderer.render(this.plugin.app, md, row, this.sourcePath, this)
-          .catch(() => { row.setText(md); });
+        // 🔴 项目符号必须留在 DOM 层，【不能进 markdown 字符串】——
+        //    行首的 `· ` 会被 Markdown 当成列表标记吃掉，正文只剩一个省略号
+        //    （实测：`· Nautilus Log 插件完善 30m` 渲染成 `· ... 30m`）。
+        row.createSpan({ cls: 'nautilus-log-overflow-bullet', text: '· ' });
+        const body = row.createSpan({ cls: 'nautilus-log-overflow-text' });
+        const md = `${taskDescription(task.string, settings.descLength)} ${logCore.formatDuration(task.duration)}`;
+        MarkdownRenderer.render(this.plugin.app, md, body, this.sourcePath, this)
+          .catch(() => { body.setText(md); });
       }
     }
   }
