@@ -102,12 +102,20 @@ export interface LogCore {
     tasks?: FlexTask[];
     fixedEvents?: FixedEvent[];
   }): { scheduledTasks: unknown[]; overflowTasks: FlexTask[] };
-  parseDurationToken(args: { text?: string; fallback?: number }): number | null;
+  /* ⚠️ 2026-08-24 修正：这两个返回的是【对象】，不是标量。
+   *    初版契约把 parseDurationToken 写成 `number | null` —— 错的，实测：
+   *      parseDurationToken({text:'写简报 45m'})
+   *        => { minutes: 45, token: '45m', cleanedText: '写简报' }
+   *      parseTimeRangeToken({text:'12:30-14:00 午饭', windowStartMinutes:300, windowEndMinutes:1260})
+   *        => { start: 750, end: 840, token: '12:30-14:00', cleanedText: '午饭', warningCode: '' }
+   *    `cleanedText` 是剥掉 token 后的正文 —— 渲染图例时该用它，别自己再写一遍剥离逻辑。 */
+  parseDurationToken(args: { text?: string; fallback?: number }):
+    { minutes: number; token: string; cleanedText: string } | null;
   parseTimeRangeToken(args: {
     text?: string;
     windowStartMinutes?: DayMinutes;
     windowEndMinutes?: DayMinutes;
-  }): { start: DayMinutes; end: DayMinutes } | null;
+  }): { start: DayMinutes; end: DayMinutes; token: string; cleanedText: string; warningCode: string } | null;
   normalizeScheduleSettings(args: { startHour: number; endHour: number }): {
     startHour: number; endHour: number;
     startMinutes: DayMinutes; endMinutes: DayMinutes;
