@@ -50,11 +50,20 @@ stays editable, reorderable, and visible to Tasks and Dataview. The plan ends at
 the first blank line. Both ```` ```nautilus ```` and the shorter ```` ```naut ````
 are accepted.
 
-- A time range is a fixed event.
-- An unchecked task is a flexible task.
-- Line order is priority.
+- **A time range pins the line to the clock** — `12:30-14:00`, `9 to 10:45`.
+  This works with or without a checkbox, so `- [ ] 09:00-10:00 Standup` is a
+  fixed event you can still tick off.
+- **A single start time also pins it** — `- [ ] 09:00 Write brief 30m` becomes
+  09:00–09:30. Without a duration it uses the configured default.
+  A bare number is *not* read as a time (`Read chapter 9` stays flexible);
+  write `9:00` or `9am` to mean a clock time.
+- **An unchecked task with no clock time is flexible** — it flows into whatever
+  time remains.
+- **Line order is priority.** Reorder the lines and the schedule follows.
 - Durations support `30m`, `30min`, `1h`, and `1h30m`.
-- Untimed tasks use the configured default.
+
+> ⚠️ A completed task (`- [x]`) disappears from the chart unless it carries a
+> completion time — the engine refuses to invent history it was not given.
 
 ## Differences from the Roam original
 

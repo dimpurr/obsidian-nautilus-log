@@ -73,6 +73,43 @@ function lineUid(sourcePath: string, lineIndex: number): LineId {
   return `${sourcePath}:${lineIndex}`;
 }
 
+
+/** 单个时刻 token（不是区间）：`09:00` / `9:30` / `9am` / `9 pm`。
+ *  🔴 故意【不】接受裸数字（`9`）—— 那和「第 9 章」「9 个」无法区分，会把普通
+ *  任务误判成固定事件。必须带冒号或 am/pm 才算表达了时刻意图。
+ *  与引擎 clockTokenMinutes 的可接受集合保持一致（它未导出，无法直接复用）。 */
+const START_TIME_RE = /(?:^|\s)(\d{1,2}:\d{1,2}(?:\s*(?:am|pm))?|\d{1,2}\s*(?:am|pm))(?=\s|$)/i;
+
+/** `09:00` + 30m => 合成区间字符串交给引擎解析。
+ *  自己算分钟数会与引擎的 am/pm、跨午夜对齐逻辑漂移，所以只负责【找 token】，
+ *  解释与窗口对齐一律回交 parseTimeRangeToken。 */
+function pinnedRange(
+  text: string,
+  durationMinutes: number,
+  startMinutes: number,
+  endMinutes: number,
+): { start: number; end: number } | null {
+  const token = START_TIME_RE.exec(text)?.[1];
+  if (!token) return null;
+  const probe = logCore.parseTimeRangeToken({
+    text: `${token}-${token}`,
+    windowStartMinutes: startMinutes,
+    windowEndMinutes: endMinutes,
+  });
+  if (!probe) return null;
+  const h = Math.floor(probe.start / 60);
+  const m = probe.start % 60;
+  const endTotal = probe.start + Math.max(1, durationMinutes);
+  const eh = Math.floor(endTotal / 60) % 24;
+  const em = endTotal % 60;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return logCore.parseTimeRangeToken({
+    text: `${pad(h)}:${pad(m)}-${pad(eh)}:${pad(em)}`,
+    windowStartMinutes: startMinutes,
+    windowEndMinutes: endMinutes,
+  });
+}
+
 export function parsePlan(source: string, options: ParseOptions): ParsedPlan {
   const { sourcePath, settings } = options;
   const lineOffset = options.lineOffset ?? 0;
@@ -113,6 +150,20 @@ export function parsePlan(source: string, options: ParseOptions): ParsedPlan {
         text,
         fallback: settings.todoDuration,
       });
+      // 只写了开始时刻（`- [ ] 09:00 写周报 30m`）=> 视为钉死的事件。
+      // 写了时刻就是表达「这件事就在这个点」，没写时长则用默认时长。
+      const pinned = pinnedRange(text, duration.minutes, schedule.startMinutes, schedule.endMinutes);
+      if (pinned) {
+        events.push({
+          uid,
+          string: text,
+          start: pinned.start as DayMinutes,
+          end: pinned.end as DayMinutes,
+          meeting: true,
+          done: DONE_RE.test(text),
+        });
+        continue;
+      }
       tasks.push({
         uid,
         string: text,
