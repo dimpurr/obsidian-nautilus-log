@@ -194,11 +194,11 @@ test("点播放 -> playback 从 workdayStart 推进；再点停止 -> 回到 nul
   assert.equal(calls.length, 1, "点击播放立即开始");
   assert.deepEqual(calls[0].playback, { minute: 300 }, "从 workdayStart 开始");
 
-  t.mock.timers.tick(1000);
-  assert.equal(calls[calls.length - 1].playback.minute, 301, "每 tick 推进");
-
-  t.mock.timers.tick(3000);
-  assert.equal(calls[calls.length - 1].playback.minute, 304, "继续推进");
+  // 🔴 2026-08-24 起：推进【不再由本组件负责】。它只上报意图，
+  //    时钟归宿主（view）——定时器放在这里会随组件重建变成清不掉的孤儿。
+  //    推进与自动停止的覆盖在 test/playback.test.js。
+  t.mock.timers.tick(5000);
+  assert.equal(calls.length, 1, "本组件不得自行推进，tick 后不应有新回调");
 
   play.click();
   assert.equal(calls[calls.length - 1].playback, null, "再点一次 -> 停止回放");
@@ -211,38 +211,18 @@ test("点播放 -> playback 从 workdayStart 推进；再点停止 -> 回到 nul
   destroy();
 });
 
-test("回放到达 nowMinutes 自动停止", (t) => {
+test("本组件不自行停止回放（自动停止归宿主）", (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
-  const { container, opts, storageKey, calls, handlers } = makeFixture({
-    workdayStartMinutes: 300,
-    nowMinutes: 303, // 只播 3 分钟
-  });
+  const { container, opts, storageKey, calls, handlers } = makeFixture();
   const { destroy } = renderChartControls(
-    container,
-    initialState(),
-    handlers,
-    SETTINGS,
-    opts,
-    storageKey,
+    container, initialState(), handlers, SETTINGS, opts, storageKey,
   );
-
   const [, play] = buttonsOf(container);
-
   play.click();
-  assert.deepEqual(calls[0].playback, { minute: 300 });
-
-  t.mock.timers.tick(1000); // 301
-  t.mock.timers.tick(1000); // 302
-  t.mock.timers.tick(1000); // 303 -> 到达 now，自动停
-
-  const last = calls[calls.length - 1];
-  assert.equal(last.playback, null, "到点后 playback 自动回到 null");
-  assert.equal(
-    play.classList.contains("nautilus-log-playback-active"),
-    false,
-    "自动停止后退出活动态",
-  );
-
+  const after = calls.length;
+  t.mock.timers.tick(60_000);
+  assert.equal(calls.length, after, "长时间后仍不应有自发回调");
+  assert.notEqual(calls[calls.length - 1].playback, null, "状态保持在回放中");
   destroy();
 });
 
