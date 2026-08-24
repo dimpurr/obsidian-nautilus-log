@@ -63,8 +63,7 @@ interface DailyNoteInfo {
 }
 
 function readDailyNotesOptions(app: App): DailyNotesOptions | null {
-  // 路径一：内部插件实例。它【只在插件已加载后】才有 instance.options，
-  // 而且用户没改过默认值时 options 可能是空对象。
+  // 路径一：内部插件实例（用户改过设置后才有 options）。
   const dn = (app as unknown as {
     internalPlugins?: { plugins?: Record<string, { instance?: { options?: DailyNotesOptions } }> };
   }).internalPlugins?.plugins?.['daily-notes'];
@@ -72,36 +71,35 @@ function readDailyNotesOptions(app: App): DailyNotesOptions | null {
   if (opts && (opts.folder || opts.format)) {
     return { format: opts.format, folder: opts.folder };
   }
-  // 路径二：直接读 .obsidian/daily-notes.json。
-  // 🔴 这条是必须的 —— 实测某 vault 的配置只落在该文件里
-  //    （folder: "Daily/_Daily"），走路径一拿到的是空，侧栏因而退回根目录、
-  //    报「找不到今日笔记」，而笔记明明就在那儿。
-  try {
-    const adapter = (app.vault as unknown as {
-      adapter?: { read?(p: string): Promise<string> };
-      configDir?: string;
-    });
-    const dir = (app.vault as unknown as { configDir?: string }).configDir || '.obsidian';
-    const raw = cachedDailyNotesJson ?? adapter.adapter?.read?.(`${dir}/daily-notes.json`);
-    if (raw && typeof raw !== 'string') {
-      // 异步：先返回 null，读回来后缓存，下一次渲染即可用（每分钟 tick 会重来）。
-      void (raw as Promise<string>).then((text) => {
-        try { cachedDailyNotesJson = JSON.stringify(JSON.parse(text)); } catch { /* ignore */ }
-      }).catch(() => { /* 没有该文件是正常的 */ });
-      return null;
-    }
-    if (typeof raw === 'string') {
-      const parsed = JSON.parse(raw) as DailyNotesOptions;
-      if (parsed && (parsed.folder || parsed.format)) {
-        return { format: parsed.format, folder: parsed.folder };
-      }
-    }
-  } catch { /* ignore */ }
-  return null;
+  // 路径二：.obsidian/daily-notes.json 的缓存（由 primeDailyNotesConfig 预读）。
+  // 🔴 这条是必须的 —— 实测某 vault 的配置只落在该文件里（folder: "Daily/_Daily"），
+  //    路径一拿到空 => 退回根目录 => 报「找不到今日笔记」，而笔记就在那儿。
+  return cachedDailyNotesOptions;
 }
 
-/** daily-notes.json 的内容缓存（adapter.read 是异步的，同步路径拿不到）。 */
-let cachedDailyNotesJson: string | null = null;
+/** 预读 .obsidian/daily-notes.json。
+ *  🔴 必须在首次渲染【之前】await 一次 —— 早先做成"渲染时异步读、下次 tick 生效"，
+ *     用户看到的第一屏永远是错的，而 tick 是 60 秒一次。 */
+export async function primeDailyNotesConfig(app: App): Promise<void> {
+  try {
+    const vault = app.vault as unknown as {
+      configDir?: string;
+      adapter?: { read?(p: string): Promise<string>; exists?(p: string): Promise<boolean> };
+    };
+    const dir = vault.configDir || '.obsidian';
+    const path = `${dir}/daily-notes.json`;
+    if (vault.adapter?.exists && !(await vault.adapter.exists(path))) return;
+    const text = await vault.adapter?.read?.(path);
+    if (!text) return;
+    const parsed = JSON.parse(text) as DailyNotesOptions;
+    if (parsed && (parsed.folder || parsed.format)) {
+      cachedDailyNotesOptions = { format: parsed.format, folder: parsed.folder };
+    }
+  } catch { /* 没有该文件是正常的 */ }
+}
+
+/** daily-notes.json 的解析结果缓存（adapter.read 异步，同步路径拿不到）。 */
+let cachedDailyNotesOptions: DailyNotesOptions | null = null;
 
 /** 用 moment 渲染 Daily Notes 的 format；没有 moment 时退化为 YYYY-MM-DD。
  *  (Obsidian 恒有 window.moment；退化路径只是给测试/无 DOM 环境的兜底。) */
@@ -212,6 +210,7 @@ export class NautilusSidebarView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.contentEl.addClass('nautilus-log-sidebar');
+    await primeDailyNotesConfig(this.app);   // 🔴 必须在首次 render 之前
     await this.render();
     this.renderExecutionArea();
 

@@ -137,6 +137,24 @@ test('overnight window 21:00-02:00 normalizes end to 1560, not 120', () => {
   assert.equal(schedule.endMinutes, 1560);
 });
 
+test('🔴🔴 有 canvas 的环境下也不许把正文截没（真实浏览器路径）', () => {
+  // truncateTextToWidth 默认用 canvas 按【像素】测量。descLength 是【字符数】，
+  // 直接传进去 => 22 被当成 22 像素 ≈ 两个字符宽 => 正文只剩 "…"。
+  // 🔴 jsdom 没有 canvas，会退化成按字符计宽，所以这个 bug 在测试里【永远复现不出】。
+  //    这里显式装一个假 canvas，把真实浏览器那条路径逼出来。
+  const saved = global.document;
+  global.document = {
+    createElement: () => ({ getContext: () => ({ measureText: (t) => ({ width: t.length * 7 }) }) }),
+  };
+  try {
+    const out = parser.taskDescription('- [ ] Nautilus Log 插件完善 30m', 22);
+    assert.ok(out.length > 1 && out !== '…', `正文被像素测量截没了: ${out}`);
+    assert.match(out, /Nautilus Log/);
+  } finally {
+    global.document = saved;
+  }
+});
+
 test('🔴 descLength 非法时不得吞掉正文（只剩 "…"）', () => {
   // truncateTextToWidth 在 maxWidth 为 0/NaN/undefined 时返回单个 "…"，
   // 且不报错 —— 界面上表现为 `· ... 30m`，正文整个消失。

@@ -44,7 +44,15 @@ const logCore = require('./vendor/log-core') as unknown as {
     startHour: number;
     endHour: number;
   }): { startMinutes: number; endMinutes: number };
-  truncateTextToWidth(args: { text: string; maxWidth: number }): string;
+  /** ⚠️ 默认用 canvas 按【像素】测量（measureText），不是字符数。
+   *  把字符数当 maxWidth 传进去会把正文几乎全截掉、只剩 "…"。
+   *  要按字符/显示宽度截断必须显式传 measure。 */
+  truncateTextToWidth(args: {
+    text: string;
+    maxWidth: number;
+    font?: string;
+    measure?: (candidate: string) => number;
+  }): string;
 };
 
 const CHECKBOX_RE = /^[-*+]\s*\[( |x|X)\]\s*/;
@@ -69,6 +77,23 @@ export interface ParseOptions {
 
 /** Strip the checkbox marker and any duration token from a raw task line,
  *  truncate the remainder to `descLength` glyphs for display. */
+/** 按【显示宽度】计宽：CJK / 全角字符算 2，其余算 1。
+ *  与 truncateTextToWidth 默认的 canvas 像素测量区分开 —— descLength 是字符数。 */
+function displayWidth(text: string): number {
+  let w = 0;
+  for (const ch of Array.from(String(text ?? ''))) {
+    const c = ch.codePointAt(0) || 0;
+    w += (c >= 0x1100 && (
+      c <= 0x115f || c === 0x2329 || c === 0x232a ||
+      (c >= 0x2e80 && c <= 0xa4cf && c !== 0x303f) ||
+      (c >= 0xac00 && c <= 0xd7a3) || (c >= 0xf900 && c <= 0xfaff) ||
+      (c >= 0xfe30 && c <= 0xfe6f) || (c >= 0xff00 && c <= 0xff60) ||
+      (c >= 0xffe0 && c <= 0xffe6) || (c >= 0x20000 && c <= 0x3fffd)
+    )) ? 2 : 1;
+  }
+  return w;
+}
+
 export function taskDescription(line: string, descLength: number): string {
   const { cleanedText } = logCore.parseDurationToken({ text: line });
   // 先剥复选框，再剥裸列表标记 —— 否则 `- 08:30-09:30 起床` 的图例会带着 "- "。
@@ -77,12 +102,21 @@ export function taskDescription(line: string, descLength: number): string {
     .replace(LIST_MARKER_RE, '')
     .replace(DONE_AT_RE, '')
     .trim();
-  // 🔴 maxWidth 非法（0 / NaN / undefined）时 truncateTextToWidth 会返回单个 "…"
-  //    —— 正文整个丢掉，界面上只剩省略号，且【不报错】。
-  //    settings 若来自旧版 data.json 或被覆盖成非法值就会这样，必须兜住。
+  // 🔴🔴 不能直接把 descLength 交给 truncateTextToWidth。
+  //    它默认用 canvas 按【像素】测量（measureText().width），
+  //    而 descLength 语义是【字符数】（上游 15-30）=> 22 会被当成 22 像素，
+  //    约两个字符宽，正文几乎全被截掉，界面上只剩一个 "…"。
+  //    spiral.ts 是换算过的：legendLenLimit * (FONT_SIZE / RECT_WIDTH_COEF)，
+  //    所以图例正常、这里却全是省略号。
+  //    ⚠️ 该 bug 在 jsdom 下【永远复现不出】—— 没有 canvas 就退化成按字符计宽。
+  //    这里显式传入按显示宽度计的 measure：CJK/全角算 2，其余算 1。
   const width = Number(descLength);
   if (!Number.isFinite(width) || width <= 0) return description;
-  return logCore.truncateTextToWidth({ text: description, maxWidth: width });
+  return logCore.truncateTextToWidth({
+    text: description,
+    maxWidth: width,
+    measure: displayWidth,
+  });
 }
 
 function lineUid(sourcePath: string, lineIndex: number): LineId {
