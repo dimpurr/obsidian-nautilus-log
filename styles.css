@@ -1522,3 +1522,30 @@ button.nautilus-log-timing__plan-heading:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .nautilus-log-timing__located { animation: none; }
 }
+
+/* ── 方案 5：空计划提示 / 配置警告（2026-08-24） ── */
+.nautilus-log-empty {
+  padding: 0.9em 1em;
+  border: 1px dashed var(--background-modifier-border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 0.9em;
+}
+.nautilus-log-empty pre {
+  margin: 0.6em 0;
+  padding: 0.6em 0.8em;
+  background: var(--background-secondary);
+  border-radius: 4px;
+  font-size: 0.9em;
+  white-space: pre-wrap;
+}
+.nautilus-log-empty-note { font-size: 0.85em; color: var(--text-faint); }
+.nautilus-log-config-warning {
+  margin-bottom: 0.5em;
+  padding: 0.35em 0.6em;
+  border-left: 3px solid var(--text-warning, #d9822b);
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  font-size: 0.85em;
+  border-radius: 3px;
+}

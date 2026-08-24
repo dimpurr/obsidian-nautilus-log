@@ -10,6 +10,7 @@
 import { Plugin, MarkdownRenderChild, TFile, type MarkdownPostProcessorContext } from 'obsidian';
 import { parsePlan, taskDescription } from './parser';
 import { renderSpiral } from './spiral';
+import { parseBlockConfig, applyOverrides, extractPlanBody } from './blockconfig';
 import { NautilusLogSettingTab } from './settings';
 import { DEFAULT_SETTINGS, type NautilusSettings, type LogCore } from './contract';
 
@@ -31,6 +32,7 @@ class NautilusLogView extends MarkdownRenderChild {
     private plugin: NautilusLogPlugin,
     private sourcePath: string,
     private source: string,
+    private ctx: MarkdownPostProcessorContext,
   ) {
     super(containerEl);
   }
@@ -59,14 +61,28 @@ class NautilusLogView extends MarkdownRenderChild {
     const el = this.containerEl;
     el.empty();
 
-    const settings = this.plugin.settings;
+    // ── 方案 5 ──────────────────────────────────────────────────────────
+    // 代码块内容 = 当天配置覆盖（YAML 风格）；计划正文 = 块【之后】到第一个
+    // 空白行为止的兄弟行。这样任务始终是可编辑的原生 markdown，也进全局索引。
+    const overrides = parseBlockConfig(this.source);
+    const settings = applyOverrides(this.plugin.settings, overrides);
+
+    const section = this.ctx.getSectionInfo(this.containerEl);
+    let planBody = '';
+    let lineOffset = 0;
+    if (section) {
+      const extracted = extractPlanBody(section.text, section.lineEnd);
+      planBody = extracted.body;
+      lineOffset = extracted.startLine;
+    }
+
     const copy = logCore.uiCopy(settings.language).capacity;
     const panelCopy = logCore.uiCopy(settings.language).panels;
     const schedule = logCore.normalizeScheduleSettings({
       startHour: settings.workdayStartHour,
       endHour: settings.workdayEndHour,
     });
-    const plan = parsePlan(this.source, { sourcePath: this.sourcePath, settings });
+    const plan = parsePlan(planBody, { sourcePath: this.sourcePath, settings, lineOffset });
     const capacity = logCore.calculateCapacity({
       startMinutes: schedule.startMinutes,
       endMinutes: schedule.endMinutes,
@@ -77,6 +93,26 @@ class NautilusLogView extends MarkdownRenderChild {
     });
 
     const root = el.createDiv({ cls: 'nautilus-log' });
+
+    // 无法识别的配置键：报出来，不静默吞掉（否则用户敲错一个词会以为插件坏了）
+    if (overrides.unknown.length > 0) {
+      const warn = root.createDiv({ cls: 'nautilus-log-config-warning' });
+      warn.setText('⚠ ' + overrides.unknown
+        .map((u) => (u.value ? `${u.key}: ${u.value}` : u.key)).join(' · '));
+      warn.title = 'Unrecognised setting. Supported: start, end, default-duration, legend-length, urgent, language';
+    }
+
+    // 计划为空：给出可照抄的写法，而不是渲染一张空盘让人猜
+    if (plan.events.length === 0 && plan.tasks.length === 0) {
+      const hint = root.createDiv({ cls: 'nautilus-log-empty' });
+      hint.createDiv().setText('Nautilus Log — write the plan directly below this block:');
+      const pre = hint.createEl('pre');
+      pre.setText('05:00-06:00 Morning routine\n- [ ] Write project brief 45m\n- [ ] Review notes 30m');
+      hint.createDiv({ cls: 'nautilus-log-empty-note' })
+        .setText('The plan ends at the first blank line. The block itself holds per-day overrides, e.g. `end: 02:00`.');
+      return;
+    }
+
 
     const line = root.createDiv({ cls: 'nautilus-log-line' });
     line.setText([
@@ -123,7 +159,7 @@ export default class NautilusLogPlugin extends Plugin {
     await this.loadSettings();
 
     this.registerMarkdownCodeBlockProcessor('nautilus', (source, el, ctx: MarkdownPostProcessorContext) => {
-      ctx.addChild(new NautilusLogView(el, this, ctx.sourcePath, source));
+      ctx.addChild(new NautilusLogView(el, this, ctx.sourcePath, source, ctx));
     });
 
     this.addSettingTab(new NautilusLogSettingTab(this.app, this));

@@ -56,6 +56,9 @@ export interface ParseOptions {
   sourcePath: string;
   /** Resolved plugin settings (window + todoDuration + language-aware copy). */
   settings: NautilusSettings;
+  /** 计划正文在文件中的起始行号（0 起）。方案 5 下计划来自代码块【之后】的
+   *  兄弟行，uid 必须用真实行号，否则跨块会撞 uid、点击定位也会跳错行。 */
+  lineOffset?: number;
 }
 
 /** Strip the checkbox marker and any duration token from a raw task line,
@@ -72,6 +75,7 @@ function lineUid(sourcePath: string, lineIndex: number): LineId {
 
 export function parsePlan(source: string, options: ParseOptions): ParsedPlan {
   const { sourcePath, settings } = options;
+  const lineOffset = options.lineOffset ?? 0;
   const schedule = logCore.normalizeScheduleSettings({
     startHour: settings.workdayStartHour,
     endHour: settings.workdayEndHour,
@@ -85,7 +89,7 @@ export function parsePlan(source: string, options: ParseOptions): ParsedPlan {
   for (let index = 0; index < lines.length; index += 1) {
     const text = lines[index].trim();
     if (!text) continue;
-    const uid = lineUid(sourcePath, index);
+    const uid = lineUid(sourcePath, lineOffset + index);
 
     const range = logCore.parseTimeRangeToken({
       text,
