@@ -9,6 +9,7 @@
 
 import { Plugin, MarkdownRenderChild, TFile, type MarkdownPostProcessorContext } from 'obsidian';
 import { parsePlan, taskDescription } from './parser';
+import { renderSpiral } from './spiral';
 import { NautilusLogSettingTab } from './settings';
 import { DEFAULT_SETTINGS, type NautilusSettings, type LogCore } from './contract';
 
@@ -84,6 +85,19 @@ class NautilusLogView extends MarkdownRenderChild {
       `${copy.events} ${logCore.formatDuration(capacity.fixedMinutes)}`,
       `${copy.remaining} ${logCore.formatDuration(capacity.slackMinutes)}`,
     ].join(' · '));
+
+    // 螺旋图。几何全部来自 vendor 的 log-core（spiralCellInnerHour /
+    // hourlyGridSegments / placeLabelTracks 等），这里只负责把它挂上 DOM。
+    const chart = root.createDiv({ cls: 'nautilus-log-chart' });
+    try {
+      renderSpiral(chart, plan, capacity, settings, nowMinutes());
+    } catch (err) {
+      // 图挂了不该带走整个块 —— 容量数字比图更重要，必须还能看见。
+      chart.remove();
+      const warn = root.createDiv({ cls: 'nautilus-log-chart-error' });
+      warn.setText('⚠ chart failed to render (capacity figures above are still valid)');
+      console.error('[Nautilus Log] renderSpiral failed', err);
+    }
 
     if (capacity.overloadMinutes > 0) {
       const overload = root.createDiv({ cls: 'nautilus-log-overload' });
