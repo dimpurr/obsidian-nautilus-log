@@ -12,6 +12,7 @@ import { parsePlan, taskDescription } from './parser';
 import { renderSpiral } from './spiral';
 import { renderCapacityHeader } from './header';
 import { renderChartControls, type ChartControlState } from './controls';
+import { resolveDayState } from './daystate';
 import { NAUTILUS_VIEW_TYPE, NautilusSidebarView, resolveDailyNoteInfo, primeDailyNotesConfig } from './sidebar';
 import { initTimingObsidian } from './timing-obsidian';
 import { renderTimingStatusBar } from './statusbar';
@@ -210,10 +211,21 @@ class NautilusLogView extends MarkdownRenderChild {
       endHour: settings.workdayEndHour,
     });
     const plan = parsePlan(planBody, { sourcePath: this.sourcePath, settings, lineOffset });
-    const capacity = logCore.calculateCapacity({
+    // 🔴 容量的"从哪一刻算"取决于这篇笔记是哪一天：
+    //    看昨天 => 从当天【终点】算（＝那天原本的完整容量，"还剩多少"没有意义）
+    //    看明天 => 从当天【起点】算
+    //    看今天 => 从此刻算
+    const dayState = resolveDayState({
+      sourcePath: this.sourcePath,
       startMinutes: schedule.startMinutes,
       endMinutes: schedule.endMinutes,
       nowMinutes: nowMinutes(),
+      playback: this.chartState.playback !== null,
+    });
+    const capacity = logCore.calculateCapacity({
+      startMinutes: schedule.startMinutes,
+      endMinutes: schedule.endMinutes,
+      nowMinutes: dayState.capacityFromMinutes,
       fixedEvents: plan.events,
       allFixedEvents: plan.events,
       pendingTasks: plan.tasks,
@@ -248,7 +260,7 @@ class NautilusLogView extends MarkdownRenderChild {
       d.setText(`⚠ nothing scheduled — ${diag} · events ${plan.events.length} · tasks ${plan.tasks.length} · malformed ${plan.malformed.length}`);
     }
 
-    renderCapacityHeader(root, capacity, settings, nowMinutes());
+    renderCapacityHeader(root, capacity, settings, dayState.capacityFromMinutes);
 
 
     // 螺旋图。几何全部来自 vendor 的 log-core（spiralCellInnerHour /
@@ -269,7 +281,10 @@ class NautilusLogView extends MarkdownRenderChild {
       {
         workdayStartMinutes: schedule.startMinutes,
         workdayEndMinutes: schedule.endMinutes,
-        nowMinutes: nowMinutes(),
+        // 🔴 非今天时把 now 置为起点 => 回放"没有可回放区间"从而不启动。
+        //    眼睛与折叠保留（看历史时收起图 / 切换已完成显示仍然合理），
+        //    只有"回放今天到现在"对非今天没有意义。
+        nowMinutes: dayState.interactive ? nowMinutes() : schedule.startMinutes,
       },
       `${this.sourcePath}:${lineOffset}`,
     );
@@ -288,6 +303,7 @@ class NautilusLogView extends MarkdownRenderChild {
       this.spiral = renderSpiral(chart, plan, capacity, settings, nowMinutes(), {
         showDone: this.chartState.showDone,
         playbackMinute: this.chartState.playback?.minute ?? null,
+        dayState,
       });
     } catch (err) {
       // 图挂了不该带走整个块 —— 容量数字比图更重要，必须还能看见。

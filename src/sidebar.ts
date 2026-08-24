@@ -24,6 +24,7 @@ import { parsePlan } from './parser';
 import { parseBlockConfig, applyOverrides, extractPlanBody } from './blockconfig';
 import type { Capacity, NautilusSettings } from './contract';
 import { renderExecPanel } from './exec-panel';
+import { resolveDayState } from './daystate';
 import { renderPomoControl } from './pomo';
 import type { ExecViewContext } from './timing-contract';
 
@@ -333,7 +334,16 @@ export class NautilusSidebarView extends ItemView {
       // 上一次的 hover 监听必须先拆，否则每次重渲染（每分钟 tick + 文件改动）
       //    都会再挂一层，很快就累积成泄漏。
       this.disposeSpiral();
-      this.spiral = renderSpiral(chart, parsed, capacity, settings, nowMinutes());
+      // 侧栏总是看今天，但仍显式解析 —— 万一 Primary Plan 落在别的日期
+      // （例如跨午夜窗口把昨天的计划算作 today），也能走对分支。
+      this.spiral = renderSpiral(chart, parsed, capacity, settings, nowMinutes(), {
+        dayState: resolveDayState({
+          sourcePath: plan.path,
+          startMinutes: schedule.startMinutes,
+          endMinutes: schedule.endMinutes,
+          nowMinutes: nowMinutes(),
+        }),
+      });
     } catch (err) {
       chart.remove();
       const warn = root.createDiv({ cls: 'nautilus-log-chart-error' });

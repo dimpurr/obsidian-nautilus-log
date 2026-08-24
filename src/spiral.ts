@@ -17,6 +17,7 @@
 import * as logCoreModule from "./vendor/log-core";
 import { createSvg } from "./svg-util";
 import { createTooltip, type TooltipTarget } from "./tooltip";
+import type { DayState } from "./daystate";
 import type {
   Capacity,
   LineId,
@@ -975,6 +976,9 @@ export interface SpiralOptions {
   showDone?: boolean;
   /** 回放中的时刻；给了就用它当"当前时刻"画针与流逝区。 */
   playbackMinute?: number | null;
+  /** 笔记日期与今天的关系。缺省即按"今天"处理（向后兼容）。
+   *  🔴 看昨天不该画红针、看明天不该画斜纹 —— 全由它决定，别自己判。 */
+  dayState?: DayState;
 }
 
 /** 供外部（main.ts）在重渲染前清理上一次的监听。 */
@@ -995,11 +999,17 @@ export function renderSpiral(
 
   // 回放：把"当前时刻"换成回放游标。不改任何 Markdown —— 上游语义就是纯视觉。
   const effectiveNow = options.playbackMinute ?? nowMinutes;
+  const ds = options.dayState;
   const timelineMinute = effectiveNow;
-  const elapsedThrough = clamp(effectiveNow, workdayStart, workdayEnd);
-  const showElapsed = true;
+  // 过去的日子：斜纹铺满整天（那天已经过完了）；未来：不铺。
+  const elapsedThrough = ds
+    ? clamp(ds.elapsedThroughMinutes, workdayStart, workdayEnd)
+    : clamp(effectiveNow, workdayStart, workdayEnd);
+  // 🔴 未来的日子【完全不画】已流逝区 —— 明天还没开始。
+  const showElapsed = ds ? ds.showElapsed : true;
   const interactive = true;
-  const showNow = effectiveNow >= workdayStart && effectiveNow < workdayEnd;
+  // 🔴 只有今天画红针。看昨天/明天时画一根"现在"的针是没有意义的。
+  const showNow = ds ? ds.showNow : (effectiveNow >= workdayStart && effectiveNow < workdayEnd);
 
   // Fixed events stay visible even after they have passed; flexible work is
   // already scheduled by the engine and handed to us via `capacity`.
