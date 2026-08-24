@@ -1565,3 +1565,18 @@ button.nautilus-log-timing__plan-heading:focus-visible {
 }
 /* 方案 9：MarkdownRenderer 会包一层 <p>，去掉它带来的额外间距 */
 .nautilus-log-overflow-item > p { margin: 0; display: inline; }
+
+/* ================================================================
+   Task C · chart control buttons (src/controls.ts)
+   Appended at the end of styles.css; existing rules untouched.
+   ================================================================ */
+
+/* 眼睛开启「显示已完成」时按钮进入活动态，用强调色标出 */
+.nautilus-log-toggle-btn--active {
+  color: var(--text-accent);
+}
+
+/* 回放进行中：播放按钮变为「停止」，同样用强调色标出 */
+.nautilus-log-toggle-btn.nautilus-log-playback-active {
+  color: var(--text-accent);
+}
