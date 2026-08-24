@@ -195,11 +195,16 @@ export function parsePlan(source: string, options: ParseOptions): ParsedPlan {
       const anchorMinutes = anchor
         ? Number(anchor[1]) * 60 + Number(anchor[2])
         : null;
+      // 紧急触发词：命中则只改颜色，【不改排程顺序】（上游明确语义）。
+      // 🔴 此前设置项存在但 parser 从不产出 urgent 字段 => 设置永远不生效。
+      const trigger = (settings.urgentTrigger || '').trim();
+      const urgent = trigger.length > 0 && text.includes(trigger);
       tasks.push({
         uid,
         string: text,
         duration: duration.minutes,
         done: DONE_RE.test(text),
+        ...(urgent ? { urgent: true } : {}),
         ...(anchorMinutes !== null && anchorMinutes < 1440
           ? { doneAt: anchorMinutes as DayMinutes }
           : {}),
