@@ -1549,3 +1549,19 @@ button.nautilus-log-timing__plan-heading:focus-visible {
   font-size: 0.85em;
   border-radius: 3px;
 }
+
+/* 诊断条：解析到行但排不出东西时明说，别让人对着空盘猜 */
+.nautilus-log-diag {
+  margin: 0.4em 0;
+  padding: 0.3em 0.55em;
+  background: var(--background-secondary);
+  border-left: 3px solid var(--text-faint);
+  border-radius: 3px;
+  color: var(--text-faint);
+  font-family: var(--font-monospace);
+  font-size: 0.78em;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* 方案 9：MarkdownRenderer 会包一层 <p>，去掉它带来的额外间距 */
+.nautilus-log-overflow-item > p { margin: 0; display: inline; }

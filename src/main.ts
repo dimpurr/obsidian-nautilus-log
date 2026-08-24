@@ -7,7 +7,7 @@
  * "changed") and on a per-minute tick (nowMinutes moves, so Overload moves).
  */
 
-import { Plugin, MarkdownRenderChild, TFile, type MarkdownPostProcessorContext } from 'obsidian';
+import { Plugin, MarkdownRenderChild, MarkdownRenderer, TFile, type MarkdownPostProcessorContext } from 'obsidian';
 import { parsePlan, taskDescription } from './parser';
 import { renderSpiral } from './spiral';
 import { parseBlockConfig, applyOverrides, extractPlanBody } from './blockconfig';
@@ -75,6 +75,11 @@ class NautilusLogView extends MarkdownRenderChild {
       planBody = extracted.body;
       lineOffset = extracted.startLine;
     }
+    // 诊断：getSectionInfo 官方文档明写「很多情况下返回 null」，而计划正文完全
+    // 依赖它。没有这条，"图是空的" 会有十几种可能原因，无法区分。
+    const diag = section
+      ? `section ✓ lines ${section.lineStart}-${section.lineEnd} of ${section.text.split('\n').length} · plan ${planBody.split('\n').filter((l) => l.trim()).length} lines from ${lineOffset}`
+      : 'section ✗ getSectionInfo() returned null';
 
     const copy = logCore.uiCopy(settings.language).capacity;
     const panelCopy = logCore.uiCopy(settings.language).panels;
@@ -110,9 +115,16 @@ class NautilusLogView extends MarkdownRenderChild {
       pre.setText('05:00-06:00 Morning routine\n- [ ] Write project brief 45m\n- [ ] Review notes 30m');
       hint.createDiv({ cls: 'nautilus-log-empty-note' })
         .setText('The plan ends at the first blank line. The block itself holds per-day overrides, e.g. `end: 02:00`.');
+      hint.createDiv({ cls: 'nautilus-log-diag' }).setText(diag);
       return;
     }
 
+
+    // 解析到了行、但排不出任何需求/事件 => 一定有问题，明说，别渲染一张空盘让人猜
+    if (capacity.demandMinutes === 0 && capacity.totalFixedMinutes === 0) {
+      const d = root.createDiv({ cls: 'nautilus-log-diag' });
+      d.setText(`⚠ nothing scheduled — ${diag} · events ${plan.events.length} · tasks ${plan.tasks.length} · malformed ${plan.malformed.length}`);
+    }
 
     const line = root.createDiv({ cls: 'nautilus-log-line' });
     line.setText([
@@ -144,9 +156,14 @@ class NautilusLogView extends MarkdownRenderChild {
       const box = root.createDiv({ cls: 'nautilus-log-overflow' });
       box.createDiv({ cls: 'nautilus-log-overflow-heading' })
         .setText(`▼ ${panelCopy.overflow}`);
+      // 方案 9：用 MarkdownRenderer 渲染，这样溢出任务里的 [[链接]] / #标签 是活的。
+      // 先例：Tasks 插件的查询结果同样走 MarkdownRenderer.render()。
+      // ⚠️ 它是异步的；渲染失败退回纯文本，不能让一个坏链接吃掉整个列表。
       for (const task of capacity.overflowTasks) {
         const row = box.createDiv({ cls: 'nautilus-log-overflow-item' });
-        row.setText(`· ${taskDescription(task.string, settings.descLength)} ${logCore.formatDuration(task.duration)}`);
+        const md = `· ${taskDescription(task.string, settings.descLength)} ${logCore.formatDuration(task.duration)}`;
+        MarkdownRenderer.render(this.plugin.app, md, row, this.sourcePath, this)
+          .catch(() => { row.setText(md); });
       }
     }
   }
