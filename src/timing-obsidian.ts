@@ -276,11 +276,19 @@ function scanFile(path: string, lines: string[]): TimingEntry[] {
   return entries.sort((a, b) => b.start.getTime() - a.start.getTime());
 }
 
+/** 🔴 CLOCK 行只精确到【分钟】，而调用方给的 Date 带秒和毫秒。
+ *  严格相等比较永远不成立 => Clock In 写入成功却"确认失败"，真机上必然报
+ *  "Clock In could not be confirmed."。比较前一律截到分钟。 */
+function toMinuteMs(ms: number | null): number | null {
+  return ms === null ? null : Math.floor(ms / 60000) * 60000;
+}
+
 function findClockIndexByStart(lines: string[], startMs: number | null, running: boolean | undefined): number {
-  if (startMs === null) return -1;
+  const target = toMinuteMs(startMs);
+  if (target === null) return -1;
   for (let i = 0; i < lines.length; i += 1) {
     const p = parseClockLineFromLine(lines[i]);
-    if (!p || toMs(p.start) !== startMs) continue;
+    if (!p || toMinuteMs(toMs(p.start)) !== target) continue;
     if (running === undefined || p.running === running) return i;
   }
   return -1;

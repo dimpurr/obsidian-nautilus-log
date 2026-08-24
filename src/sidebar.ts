@@ -233,6 +233,9 @@ export class NautilusSidebarView extends ItemView {
   }
 
   /** 执行层区域。总开关关闭时什么都不渲染（也就不起任何订阅/定时器）。 */
+  /** 供外部（设置页切换总开关时）主动刷新执行区。 */
+  refreshExecutionArea(): void { this.renderExecutionArea(); }
+
   private renderExecutionArea(): void {
     this.exec?.destroy(); this.exec = null;
     this.pomo?.destroy(); this.pomo = null;

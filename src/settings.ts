@@ -121,6 +121,9 @@ export class NautilusLogSettingTab extends PluginSettingTab {
           // 立刻生效：开则起 runtime + 状态栏，关则全部拆掉（不留定时器/订阅）。
           if (value) this.plugin.startExecutionLayer();
           else this.plugin.stopExecutionLayer();
+          // 🔴 已打开的侧栏必须一并刷新，否则用户开了开关却什么也没发生，
+          //    要关掉侧栏再打开才出现 —— 看起来就像开关坏了。
+          this.plugin.refreshSidebars();
           this.display();
         }));
 

@@ -419,6 +419,8 @@ export default class NautilusLogPlugin extends Plugin {
   /** 执行层运行时 + 状态栏。总开关关闭时保持 null，不占任何资源。 */
   timingRuntime: TimingRuntime | null = null;
   private statusBar: { destroy(): void } | null = null;
+  /** runtime 的内部状态（番茄钟等）。与用户设置分开存，避免污染 NautilusSettings。 */
+  runtimeState: Record<string, unknown> = {};
 
   execContext(): ExecViewContext {
     return {
@@ -434,7 +436,22 @@ export default class NautilusLogPlugin extends Plugin {
     if (this.timingRuntime) return;
     try {
       this.timingRuntime = createTimingRuntime({
-        extensionAPI: { settings: { get: (k: string) => (this.settings as unknown as Record<string, unknown>)[k] } },
+        // 🔴 runtime 需要 get 和 set 两个 —— 它用 settings.set 持久化番茄钟状态
+        //    （POMODORO_STATE_KEY / STANDALONE_POMODORO_STATE_KEY）。
+        //    只给 get 时 Clock Out 会抛 "settings.set is not a function"。
+        //    这些是 runtime 的内部状态键，不属于 NautilusSettings，单独存一份。
+        extensionAPI: {
+          settings: {
+            get: (k: string) => {
+              const own = (this.settings as unknown as Record<string, unknown>)[k];
+              return own !== undefined ? own : this.runtimeState[k];
+            },
+            set: async (k: string, v: unknown) => {
+              this.runtimeState[k] = v;
+              await this.saveSettings();
+            },
+          },
+        },
       }) as unknown as TimingRuntime;
       void this.timingRuntime.initialize();
       const el = this.addStatusBarItem();
@@ -448,6 +465,14 @@ export default class NautilusLogPlugin extends Plugin {
 
   onunload(): void {
     this.stopExecutionLayer();
+  }
+
+  /** 总开关切换后，让已经打开的侧栏立刻反映变化 —— 否则要关掉侧栏再开才生效。 */
+  refreshSidebars(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(NAUTILUS_VIEW_TYPE)) {
+      const view = leaf.view as unknown as { refreshExecutionArea?(): void };
+      view?.refreshExecutionArea?.();
+    }
   }
 
   stopExecutionLayer(): void {
@@ -470,10 +495,13 @@ export default class NautilusLogPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const data = (await this.loadData()) as Record<string, unknown> | null;
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+    // runtime 的内部状态（番茄钟等）与用户设置同文件不同键，避免互相污染。
+    this.runtimeState = (data?._runtime as Record<string, unknown>) || {};
   }
 
   async saveSettings(): Promise<void> {
-    await this.saveData(this.settings);
+    await this.saveData({ ...this.settings, _runtime: this.runtimeState });
   }
 }
