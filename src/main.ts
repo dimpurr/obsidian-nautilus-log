@@ -347,7 +347,8 @@ export default class NautilusLogPlugin extends Plugin {
     initTimingObsidian({ app: this.app });
 
     // 右侧栏视图 —— 不打开笔记也能看今天的盘。共用 renderSpiral。
-    this.registerView(NAUTILUS_VIEW_TYPE, (leaf) => new NautilusSidebarView(leaf, this.settings));
+    this.registerView(NAUTILUS_VIEW_TYPE, (leaf) => new NautilusSidebarView(
+      leaf, this.settings, () => (this.timingRuntime ? this.execContext() : null)));
     this.addRibbonIcon('compass', 'Open Nautilus Log', () => { void this.activateSidebar(); });
     this.addCommand({
       id: 'open-sidebar',

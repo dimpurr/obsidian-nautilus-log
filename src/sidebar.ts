@@ -23,6 +23,9 @@ import { renderCapacityHeader } from './header';
 import { parsePlan } from './parser';
 import { parseBlockConfig, applyOverrides, extractPlanBody } from './blockconfig';
 import type { Capacity, NautilusSettings } from './contract';
+import { renderExecPanel } from './exec-panel';
+import { renderPomoControl } from './pomo';
+import type { ExecViewContext } from './timing-contract';
 
 const logCore = require('./vendor/log-core') as {
   calculateCapacity(args: {
@@ -159,7 +162,15 @@ export class NautilusSidebarView extends ItemView {
   /** 当前 Primary Plan 文件。null 表示还没解析到（没有今日笔记）。 */
   private primaryPath: string | null = null;
 
-  constructor(leaf: WorkspaceLeaf, private settings: NautilusSettings) {
+  private exec: { destroy(): void } | null = null;
+  private pomo: { destroy(): void } | null = null;
+
+  constructor(
+    leaf: WorkspaceLeaf,
+    private settings: NautilusSettings,
+    /** 执行层上下文提供者。返回 null 表示总开关关闭 —— 此时不渲染任何执行层 UI。 */
+    private getExecContext: (() => ExecViewContext | null) = () => null,
+  ) {
     super(leaf);
   }
 
@@ -170,6 +181,7 @@ export class NautilusSidebarView extends ItemView {
   async onOpen(): Promise<void> {
     this.contentEl.addClass('nautilus-log-sidebar');
     await this.render();
+    this.renderExecutionArea();
 
     // 只监听元数据变化：变的是当前 Primary Plan 文件才重渲染。
     // 若还没取到 Primary（没有今日笔记），任何文件变动都重试一次 —— 这样用户
@@ -185,8 +197,27 @@ export class NautilusSidebarView extends ItemView {
     this.timer = window.setInterval(() => void this.render(), 60_000);
   }
 
+  /** 执行层区域。总开关关闭时什么都不渲染（也就不起任何订阅/定时器）。 */
+  private renderExecutionArea(): void {
+    this.exec?.destroy(); this.exec = null;
+    this.pomo?.destroy(); this.pomo = null;
+    const ctx = this.getExecContext();
+    if (!ctx || !ctx.runtime) return;
+    const host = this.contentEl.createDiv({ cls: 'nautilus-log-exec-area' });
+    try {
+      this.pomo = renderPomoControl(host.createDiv({ cls: 'nautilus-log-pomo-slot' }), ctx);
+      this.exec = renderExecPanel(host.createDiv({ cls: 'nautilus-log-exec-slot' }), ctx);
+    } catch (err) {
+      // 执行层挂了不该带走螺旋图 —— 规划视图必须还在。
+      console.error('[Nautilus Log] execution panel failed', err);
+      host.remove();
+    }
+  }
+
   async onClose(): Promise<void> {
-    // 🔴 三个都得清，一个都不许漏：interval、事件监听、spiral handle。
+    // 🔴 五个都得清，一个都不许漏：interval、事件监听、spiral、执行面板、POMO。
+    this.exec?.destroy(); this.exec = null;
+    this.pomo?.destroy(); this.pomo = null;
     if (this.timer !== null) {
       window.clearInterval(this.timer);
       this.timer = null;
