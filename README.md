@@ -35,13 +35,20 @@ siblings rather than children:
 
 ````markdown
 ```nautilus
+end: 02:00
+```
 05:00-06:00 Morning routine
 - [ ] Write project brief 45m
 - [ ] Review notes 30m
 11:45-12:30 Lunch
 - [ ] Reply to email
-```
 ````
+
+The fenced block holds **per-day overrides** (leave it empty to use your global
+settings); the plan itself lives **below** the block as ordinary Markdown, so it
+stays editable, reorderable, and visible to Tasks and Dataview. The plan ends at
+the first blank line. Both ```` ```nautilus ```` and the shorter ```` ```naut ````
+are accepted.
 
 - A time range is a fixed event.
 - An unchecked task is a flexible task.

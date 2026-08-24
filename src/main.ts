@@ -23,6 +23,11 @@ function nowMinutes(): number {
 
 /** One ```nautilus block. Owns its DOM node and its listeners, and cleans
  *  every one of them up on unload. */
+/** 代码块语言别名。改这里即可，围栏正则由它派生 —— 只有一处真源。 */
+const BLOCK_LANGS = ['nautilus', 'naut'] as const;
+const FENCE_OPEN_RE = new RegExp(`^\\s*\`\`\`+\\s*(?:${BLOCK_LANGS.join('|')})\\s*$`);
+const FENCE_CLOSE_RE = /^\s*```+\s*$/;
+
 class NautilusLogView extends MarkdownRenderChild {
   private timer: number | null = null;
   private metadataListener: ((file: TFile) => void) | null = null;
@@ -83,10 +88,10 @@ class NautilusLogView extends MarkdownRenderChild {
     const lines = text.split(/\r?\n/);
     const ends: { body: string; lineEnd: number }[] = [];
     for (let i = 0; i < lines.length; i += 1) {
-      if (!/^\s*```+\s*nautilus\s*$/.test(lines[i])) continue;
+      if (!FENCE_OPEN_RE.test(lines[i])) continue;
       let j = i + 1;
       const body: string[] = [];
-      while (j < lines.length && !/^\s*```+\s*$/.test(lines[j])) { body.push(lines[j]); j += 1; }
+      while (j < lines.length && !FENCE_CLOSE_RE.test(lines[j])) { body.push(lines[j]); j += 1; }
       ends.push({ body: body.join('\n'), lineEnd: j });
       i = j;
     }
@@ -227,9 +232,13 @@ export default class NautilusLogPlugin extends Plugin {
   async onload(): Promise<void> {
     await this.loadSettings();
 
-    this.registerMarkdownCodeBlockProcessor('nautilus', (source, el, ctx: MarkdownPostProcessorContext) => {
-      ctx.addChild(new NautilusLogView(el, this, ctx.sourcePath, source, ctx));
-    });
+    // 两个都认：`nautilus` 是全名，`naut` 是好记的短写。
+    // 🔴 新增别名时必须同步改 locateByFile() 的围栏正则，否则兜底定位不到该块。
+    for (const lang of BLOCK_LANGS) {
+      this.registerMarkdownCodeBlockProcessor(lang, (source, el, ctx: MarkdownPostProcessorContext) => {
+        ctx.addChild(new NautilusLogView(el, this, ctx.sourcePath, source, ctx));
+      });
+    }
 
     this.addSettingTab(new NautilusLogSettingTab(this.app, this));
 
