@@ -118,6 +118,9 @@ export class NautilusLogSettingTab extends PluginSettingTab {
         .onChange(async (value) => {
           this.plugin.settings.actualTimeTracking = value;
           await this.plugin.saveSettings();
+          // 立刻生效：开则起 runtime + 状态栏，关则全部拆掉（不留定时器/订阅）。
+          if (value) this.plugin.startExecutionLayer();
+          else this.plugin.stopExecutionLayer();
           this.display();
         }));
 

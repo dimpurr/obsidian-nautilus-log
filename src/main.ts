@@ -14,6 +14,9 @@ import { renderCapacityHeader } from './header';
 import { renderChartControls, type ChartControlState } from './controls';
 import { NAUTILUS_VIEW_TYPE, NautilusSidebarView } from './sidebar';
 import { initTimingObsidian } from './timing-obsidian';
+import { renderTimingStatusBar } from './statusbar';
+import type { ExecViewContext, TimingRuntime } from './timing-contract';
+import { createTimingRuntime } from './vendor/timing-runtime';
 import { parseBlockConfig, applyOverrides, extractPlanBody } from './blockconfig';
 import TEST_NOTE from '../docs/test-note.md';
 import { NautilusLogSettingTab } from './settings';
@@ -352,6 +355,11 @@ export default class NautilusLogPlugin extends Plugin {
       callback: () => { void this.activateSidebar(); },
     });
 
+    // 执行层：总开关打开才起 runtime + 状态栏。
+    // 🔴 关闭时【一个定时器/订阅都不许起】—— 上游默认也是关的，
+    //    关着还跑就等于用户明确说不要、我们还在后台烧。
+    if (this.settings.actualTimeTracking) this.startExecutionLayer();
+
     this.addSettingTab(new NautilusLogSettingTab(this.app, this));
 
     // 勾选当前行并追加 `dHH:MM` 完成锚点。
@@ -402,6 +410,47 @@ export default class NautilusLogPlugin extends Plugin {
   }
 
   /** 打开（或聚焦）右侧栏视图。已存在就复用，不重复开。 */
+  /** 执行层运行时 + 状态栏。总开关关闭时保持 null，不占任何资源。 */
+  timingRuntime: TimingRuntime | null = null;
+  private statusBar: { destroy(): void } | null = null;
+
+  execContext(): ExecViewContext {
+    return {
+      runtime: this.timingRuntime as TimingRuntime,
+      language: this.settings.language,
+      pomodoroMinutes: this.settings.pomodoroMinutes,
+      forgottenTimerMinutes: this.settings.forgottenTimerMinutes,
+      recentRetentionMinutes: this.settings.recentRetentionMinutes,
+    };
+  }
+
+  startExecutionLayer(): void {
+    if (this.timingRuntime) return;
+    try {
+      this.timingRuntime = createTimingRuntime({
+        extensionAPI: { settings: { get: (k: string) => (this.settings as unknown as Record<string, unknown>)[k] } },
+      }) as unknown as TimingRuntime;
+      void this.timingRuntime.initialize();
+      const el = this.addStatusBarItem();
+      this.statusBar = renderTimingStatusBar(el, this.execContext(), () => { void this.activateSidebar(); });
+    } catch (err) {
+      // 执行层起不来不该带走整个插件 —— 规划与可视化必须还能用。
+      console.error('[Nautilus Log] execution layer failed to start', err);
+      this.stopExecutionLayer();
+    }
+  }
+
+  onunload(): void {
+    this.stopExecutionLayer();
+  }
+
+  stopExecutionLayer(): void {
+    this.statusBar?.destroy();
+    this.statusBar = null;
+    try { this.timingRuntime?.destroy(); } catch { /* ignore */ }
+    this.timingRuntime = null;
+  }
+
   async activateSidebar(): Promise<void> {
     const existing = this.app.workspace.getLeavesOfType(NAUTILUS_VIEW_TYPE);
     if (existing.length > 0) {

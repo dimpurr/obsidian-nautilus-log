@@ -29,9 +29,18 @@ export interface ActiveWork {
   windowMinutes: number;
 }
 
-/** 计划 vs 实际（Review 视图用）。字段由 timingCore.buildDailyReview 产出。 */
+/** 计划 vs 实际（Review 视图用）。结构由 tsc 从 buildDailyReview 的实际返回推出，
+ *  非猜测：初版把它写成 `[k:string]: unknown`，接线时被 TypeScript 当场纠正。 */
 export interface DailyReview {
-  [k: string]: unknown;
+  summary: {
+    totalCount: number;
+    completedCount: number;
+    comparedCount: number;
+    plannedMinutes: number;
+    actualMinutes: number;
+    varianceMinutes: number;
+  };
+  rows: unknown[];
 }
 
 /** runtime.subscribe 推送的快照。**revision 变化即表示有更新**。 */
@@ -52,8 +61,10 @@ export interface TimingSnapshot {
 
 /** createTimingRuntime 的完整公开面（逐条对照 vendor 第 515-537 行）。 */
 export interface TimingRuntime {
-  initialize(): Promise<void> | void;
-  refresh(): Promise<void> | void;
+  /** ⚠️ 返回的是【首个快照】，不是 void —— 初版契约写成 void，
+   *  接线时 tsc 直接顶回来。别照猜。 */
+  initialize(): Promise<TimingSnapshot>;
+  refresh(): Promise<TimingSnapshot> | TimingSnapshot;
   requestRefresh(): void;
   startTask(taskUid: string, taskString?: string): Promise<unknown>;
   stopTask(): Promise<unknown>;
