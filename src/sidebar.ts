@@ -119,9 +119,13 @@ function formatDate(format: string): string {
  *  读不到就退回根目录的 `YYYY-MM-DD.md`，并把 viaPlugin 置 false 供 UI 提示。 */
 function resolveDailyNoteInfo(app: App): DailyNoteInfo {
   const opts = readDailyNotesOptions(app);
-  if (opts && opts.format) {
+  // 🔴 只要拿到 folder 或 format 之一就算配置有效。
+  //    早先写成 `if (opts && opts.format)`，而 Obsidian 在用户【没改过日期格式】时
+  //    根本不写 format 键 —— daily-notes.json 里只有 {"folder": "Daily/_Daily"}。
+  //    结果 folder 被一起丢掉、退回根目录，报「找不到今日笔记」，而笔记就在那儿。
+  if (opts && (opts.folder || opts.format)) {
     const folder = opts.folder || '';
-    const dateStr = formatDate(opts.format);
+    const dateStr = formatDate(opts.format || 'YYYY-MM-DD');   // format 缺省即 Obsidian 默认
     return { path: folder ? `${folder}/${dateStr}.md` : `${dateStr}.md`, viaPlugin: true };
   }
   const dateStr = formatDate('YYYY-MM-DD');

@@ -259,3 +259,13 @@ test("onClose does not throw when opened against a missing Daily Note", async ()
   await view.onOpen();
   await view.onClose();   // must not throw even though no spiral was ever built
 });
+
+test('🔴 daily-notes.json 只有 folder、没有 format（Obsidian 未改日期格式时的真实形态）', async () => {
+  // 用户没改过日期格式时 Obsidian 【不写 format 键】，配置就是 {"folder":"Daily/_Daily"}。
+  // 早先要求 opts.format 存在，导致 folder 被一起丢掉、退回根目录，
+  // 报「找不到今日笔记」而笔记就在那儿。
+  const app = makeApp({ "Daily/_Daily/2026-08-24.md": MULTI_BLOCK }, { folder: "Daily/_Daily" });
+  const found = await resolvePrimaryPlan(app, SETTINGS);
+  assert.ok(found, '只有 folder 时也必须能定位到今日笔记');
+  assert.equal(found.path, "Daily/_Daily/2026-08-24.md");
+});
