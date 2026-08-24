@@ -64,6 +64,9 @@ class NautilusLogView extends MarkdownRenderChild {
     this.sectionRetryCancelled = true;
     this.spiral?.destroy();
     this.spiral = null;
+    this.controls?.destroy();
+    this.controls = null;
+    this.stopPlaybackClock();
     if (this.timer !== null) {
       window.clearInterval(this.timer);
       this.timer = null;
@@ -124,6 +127,35 @@ class NautilusLogView extends MarkdownRenderChild {
   private controls: { destroy(): void } | null = null;
   /** 图表控制状态。回放/显示已完成是【纯视觉】的，不写回 Markdown。 */
   private chartState: ChartControlState = { showDone: true, collapsed: false, playback: null };
+  /** 回放时钟。归 view 所有 —— controls 每次状态变化都会被重建，
+   *  定时器放在那里会变成清不掉的孤儿（见 controls.ts 的注释）。 */
+  private playbackTimer: number | null = null;
+
+  private stopPlaybackClock(): void {
+    if (this.playbackTimer !== null) {
+      window.clearInterval(this.playbackTimer);
+      this.playbackTimer = null;
+    }
+  }
+
+  /** 状态里有 playback 就保证时钟在跑，没有就保证停掉。幂等，可反复调。 */
+  private syncPlaybackClock(startMinutes: number, endMinutes: number): void {
+    if (this.chartState.playback === null) { this.stopPlaybackClock(); return; }
+    if (this.playbackTimer !== null) return;            // 已在跑，别重复起
+    const end = Math.max(startMinutes, Math.min(nowMinutes(), endMinutes));
+    const step = Math.max(1, Math.round((end - startMinutes) / 60));
+    this.playbackTimer = window.setInterval(() => {
+      const cur = this.chartState.playback;
+      if (cur === null) { this.stopPlaybackClock(); return; }
+      const next = Math.min(end, cur.minute + step);
+      this.chartState = { ...this.chartState, playback: { minute: next } };
+      if (next >= end) {
+        this.stopPlaybackClock();
+        this.chartState = { ...this.chartState, playback: null };
+      }
+      void this.render();
+    }, 120);
+  }
 
   /** 缓存命中则同步返回（PDF 导出走这条）；未命中返回 null，由调用方补一次异步。 */
   private locateCached(): { text: string; lineEnd: number } | null {
@@ -224,6 +256,7 @@ class NautilusLogView extends MarkdownRenderChild {
       {
         onChange: (next) => {
           this.chartState = next;
+          this.syncPlaybackClock(schedule.startMinutes, schedule.endMinutes);
           void this.render();
         },
       },

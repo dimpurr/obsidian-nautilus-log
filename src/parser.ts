@@ -134,9 +134,25 @@ export function parsePlan(source: string, options: ParseOptions): ParsedPlan {
   const malformed: ParsedPlan['malformed'] = [];
   const lines = source.split('\n');
 
+  // 计划正文的【顶层缩进】：以第一条非空行为准。比它更深的行是【子项】，
+  // 不参与排程 —— 与上游一致（上游只 pull 直接子块，嵌套块连读都不读）。
+  //
+  // 为什么这样设计（上游没写，但从行为能反推）：
+  //  · 双重计入：`写周报 60m` 下挂 `收集数据 20m` + `画图 20m`，
+  //    平铺会算成 100m，而真实需求是 60m。上游直接规避了这个问题。
+  //  · 优先级＝行序：平铺列表的顺序无歧义，树没有（深度优先还是广度优先？）。
+  //  · 子项是「怎么做」，父项才是「排什么」——可调度的单位是父项。
+  let baseIndent: number | null = null;
+  for (const raw of lines) {
+    if (raw.trim()) { baseIndent = raw.length - raw.trimStart().length; break; }
+  }
+
   for (let index = 0; index < lines.length; index += 1) {
-    const text = lines[index].trim();
+    const raw = lines[index];
+    const text = raw.trim();
     if (!text) continue;
+    const indent = raw.length - raw.trimStart().length;
+    if (baseIndent !== null && indent > baseIndent) continue;   // 子项：跳过
     const uid = lineUid(sourcePath, lineOffset + index);
 
     const range = logCore.parseTimeRangeToken({

@@ -10,7 +10,7 @@
  *     read/write-collapsed-state), so a collapsed chart stays collapsed
  *     across reloads;
  *   · playback  is `null` when idle and `{ minute }` while replaying the day —
- *     we scan from workdayStartMinutes up to nowMinutes with a setInterval
+ *     推进由【宿主】驱动（见下方 startPlayback 注释），本组件不持有定时器
  *     and stop automatically on arrival.  It never touches the Markdown.
  *
  * Icons are inline SVG (no third-party icon library, no obsidian import) so the
@@ -183,39 +183,25 @@ export function renderChartControls(
   /* Playback.                                                           */
   /* ------------------------------------------------------------------ */
 
-  let playbackTimer: ReturnType<typeof setInterval> | null = null;
 
+  // 🔴 播放时钟【不归本组件所有】。宿主（main.ts 的 view）每次状态变化都会
+  //    整块重渲染 => 本组件被 destroy 后重建。若在这里 setInterval，会出现：
+  //    onChange -> 宿主重渲染 -> destroy 本实例 -> 之后才 setInterval
+  //    => 定时器建在已销毁的实例上，clearInterval 永远轮不到它，
+  //       孤儿定时器不停把 playback 复活，表现就是「停不下来」。
+  //    本组件只上报【意图】，推进由宿主做（宿主本来就有渲染时钟）。
   function startPlayback(): void {
-    if (playbackTimer !== null) return;
-    // Playback replays the visible day up to "now"; never past the chart end.
     const end = Math.max(
       opts.workdayStartMinutes,
       Math.min(opts.nowMinutes, opts.workdayEndMinutes),
     );
-    if (end <= opts.workdayStartMinutes) return;   // nothing to replay
-    const step = Math.max(
-      1,
-      Math.round((end - opts.workdayStartMinutes) / PLAYBACK_TICK_COUNT),
-    );
-    let minute = opts.workdayStartMinutes;
-
-    current.playback = { minute };
+    if (end <= opts.workdayStartMinutes) return;   // 没有可回放的区间
+    current.playback = { minute: opts.workdayStartMinutes };
     handlers.onChange({ ...current });
     updatePlay();
-
-    playbackTimer = setInterval(() => {
-      minute = Math.min(end, minute + step);
-      current.playback = { minute };
-      handlers.onChange({ ...current });
-      if (minute >= end) stopPlayback();
-    }, PLAYBACK_TICK_MS);
   }
 
   function stopPlayback(): void {
-    if (playbackTimer !== null) {
-      clearInterval(playbackTimer);
-      playbackTimer = null;
-    }
     if (current.playback !== null) {
       current.playback = null;
       handlers.onChange({ ...current });
@@ -311,10 +297,6 @@ export function renderChartControls(
 
   return {
     destroy(): void {
-      if (playbackTimer !== null) {
-        clearInterval(playbackTimer);
-        playbackTimer = null;
-      }
       if (root.parentNode === container) {
         container.removeChild(root);
       }
