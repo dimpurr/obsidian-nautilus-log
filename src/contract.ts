@@ -52,8 +52,9 @@ export interface ParsedPlan {
   malformed: { line: number; text: string; reason: string }[];
 }
 
-/** Mirrors the 8 base settings upstream exposes. Execution-layer settings are
- *  deliberately absent — that is stage three. */
+/** Mirrors the 8 base settings upstream exposes, plus the 5 execution-layer
+ *  settings. `actualTimeTracking` is the master switch: while it is off the
+ *  four settings below it are not revealed in the settings tab. */
 export interface NautilusSettings {
   language: "en" | "zh";
   workdayStartHour: number;   // 0..23
@@ -61,6 +62,12 @@ export interface NautilusSettings {
   descLength: number;         // 15..30
   todoDuration: number;       // 5..60, fallback for untimed tasks
   urgentTrigger: string;      // "" disables
+  // ── Execution layer ──
+  actualTimeTracking: boolean;    // master switch; off hides the 4 below
+  timingLineSidebar: boolean;     // Clock In pins current task to right sidebar
+  pomodoroMinutes: number;        // pomodoro threshold; 0 = off, never stops work
+  recentRetentionMinutes: number; // Recent retention; 0 = off
+  forgottenTimerMinutes: number;  // forgotten-timer warning; 0 = off, warn only
 }
 
 export const DEFAULT_SETTINGS: NautilusSettings = {
@@ -70,6 +77,11 @@ export const DEFAULT_SETTINGS: NautilusSettings = {
   descLength: 22,
   todoDuration: 15,
   urgentTrigger: "",
+  actualTimeTracking: false,
+  timingLineSidebar: true,
+  pomodoroMinutes: 45,
+  recentRetentionMinutes: 45,
+  forgottenTimerMinutes: 120,
 };
 
 /** capacityMetrics 返回的单项。`percent`/`percentLabel` 就是上游的 `left` 百分比。 */
