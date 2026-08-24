@@ -1,11 +1,31 @@
 /*
- * Settings tab for Nautilus Log.  Mirrors the 6 base settings pinned in
- * src/contract.ts (the execution-layer settings are stage three).
+ * Settings tab for Nautilus Log.  Mirrors the 11 settings pinned in
+ * src/contract.ts: 6 base settings plus the 5 execution-layer settings.
+ * The execution-layer items sit behind `actualTimeTracking`, the master
+ * switch — while it is off they are hidden (the toggle re-renders the page).
  */
 
 import { App, PluginSettingTab, Setting } from 'obsidian';
 import type NautilusLogPlugin from './main';
 import type { NautilusSettings } from './contract';
+
+/** Clamp a numeric setting into `[1..max]`.
+ *  `allowZero` 才把 0 当成合法的「关闭」值 —— 上游只有 Recent Retention 与
+ *  Forgotten Timer Warning 标了 `0` disables；**Pomodoro Threshold 没有**
+ *  （guide §Settings 那张表逐项写明）。所有项一律允许 0 会凭空造出上游没有的语义，
+ *  而番茄钟阈值为 0 会让「到点变红」的判定在每一刻都成立。
+ *  非有限 / 越界输入退回 fallback，绝不把 NaN 写进设置。 */
+export function clampMinutes(
+  value: unknown,
+  max: number,
+  fallback: number,
+  allowZero = false,
+): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  if (value === 0) return allowZero ? 0 : fallback;
+  if (value < 1 || value > max) return fallback; // negative / too large → default
+  return value;
+}
 
 export class NautilusLogSettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: NautilusLogPlugin) {
@@ -86,5 +106,68 @@ export class NautilusLogSettingTab extends PluginSettingTab {
           this.plugin.settings.urgentTrigger = value;
           await this.plugin.saveSettings();
         }));
+
+    // ── Execution layer ──
+    // Master switch. Re-render the whole page on change so the four
+    // execution-layer settings below appear / disappear with it.
+    new Setting(containerEl)
+      .setName('Actual time tracking')
+      .setDesc('Execution-layer master switch. When off, the execution settings below are hidden.')
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.actualTimeTracking)
+        .onChange(async (value) => {
+          this.plugin.settings.actualTimeTracking = value;
+          await this.plugin.saveSettings();
+          this.display();
+        }));
+
+    // The four settings below are revealed only while the master switch is on.
+    if (this.plugin.settings.actualTimeTracking) {
+      new Setting(containerEl)
+        .setName('Timing line in sidebar')
+        .setDesc('Clock In pins the current task to the right sidebar.')
+        .addToggle((toggle) => toggle
+          .setValue(this.plugin.settings.timingLineSidebar)
+          .onChange(async (value) => {
+            this.plugin.settings.timingLineSidebar = value;
+            await this.plugin.saveSettings();
+          }));
+
+      new Setting(containerEl)
+        .setName('Pomodoro minutes')
+        .setDesc('Pomodoro threshold. Hitting it only changes the hint — it never stops work. 0 = off.')
+        .addSlider((slider) => slider
+          .setLimits(0, 180, 5)
+          .setValue(clampMinutes(this.plugin.settings.pomodoroMinutes, 180, 45))
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.pomodoroMinutes = clampMinutes(value, 180, 45);
+            await this.plugin.saveSettings();
+          }));
+
+      new Setting(containerEl)
+        .setName('Recent retention minutes')
+        .setDesc('How long Recent stays before it is dropped. 0 = off.')
+        .addSlider((slider) => slider
+          .setLimits(0, 1440, 15)
+          .setValue(clampMinutes(this.plugin.settings.recentRetentionMinutes, 1440, 45, true))
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.recentRetentionMinutes = clampMinutes(value, 1440, 45, true);
+            await this.plugin.saveSettings();
+          }));
+
+      new Setting(containerEl)
+        .setName('Forgotten timer warning minutes')
+        .setDesc('Warn when a timer has been left running this long. Warning only — never auto-stops or deletes a CLOCK. 0 = off.')
+        .addSlider((slider) => slider
+          .setLimits(0, 1440, 15)
+          .setValue(clampMinutes(this.plugin.settings.forgottenTimerMinutes, 1440, 120, true))
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.forgottenTimerMinutes = clampMinutes(value, 1440, 120, true);
+            await this.plugin.saveSettings();
+          }));
+    }
   }
 }
