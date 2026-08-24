@@ -138,7 +138,12 @@ export function initTimingObsidian(next: TimingHost): void {
   if (mc?.on) {
     try { mc.on('changed', metadataListener); } catch { /* ignore */ }
   }
-  void primeTimingCache();
+  // 🔴 预热【必须】等到 onLayoutReady。插件 onload 时 vault 还没索引完，
+  //    getMarkdownFiles() 返回空数组 => 缓存永远是 0 条，而同步读又只认缓存，
+  //    执行层于是永远报「今天没有 Nautilus Log」。实测踩到，别改回 onload 直调。
+  const ws = next.app.workspace as unknown as { onLayoutReady?: (cb: () => void) => void };
+  if (typeof ws?.onLayoutReady === 'function') ws.onLayoutReady(() => { void primeTimingCache(); });
+  else void primeTimingCache();
 }
 
 export function disposeTimingObsidian(): void {
@@ -212,7 +217,10 @@ function clockPrefix(rawLine: string): string {
 
 function cachedLines(path: string): string[] | null {
   const text = contentCache.get(path);
-  return typeof text === 'string' ? text.split('\n') : null;
+  // 未命中就【顺手补一次】。同步调用这里拿不到结果，但下一次 refresh（tick 或
+  //    任何写回）就能命中 —— 好过一直空着等用户去编辑那个文件。
+  if (typeof text !== 'string') { void primeFile(path); return null; }
+  return text.split('\n');
 }
 
 /* ─────────────────────────── 扫描：把 LOGBOOK 抽屉里的 CLOCK
@@ -415,7 +423,12 @@ async function writeChange(path: string, change: LineChange): Promise<void> {
     if (change.kind === 'replace') {
       editor.setLine(r.lineIndex, change.next);
     } else if (change.kind === 'insert') {
-      editor.replaceRange(`${change.next}\n`, { line: r.lineIndex, ch: editor.getLine(r.lineIndex).length });
+      // 🔴 必须是 `\n` + 内容，不能是 内容 + `\n`。
+      //    锚点是【行尾】，写 `内容\n` 等于把新行拼在锚点行尾巴上
+      //    （实测出过 `- [ ] 任务 20m    - LOGBOOK::` 这种脏行），
+      //    写 `\n内容` 才是「在锚点行之后另起一行」，与 applyChange 的
+      //    splice(idx + 1, 0, next) 语义一致。
+      editor.replaceRange(`\n${change.next}`, { line: r.lineIndex, ch: editor.getLine(r.lineIndex).length });
     } else {
       // remove：跨到下一行首删除整行（含换行）；末行则清空内容。
       const last = editor.lineCount() - 1;
@@ -768,4 +781,31 @@ export function legacyLogbookIsRunning(): boolean {
   // Obsidian 没有 Roam Logbook 这类会抢写 LOGBOOK 的扩展；其它可能写 LOGBOOK
   // 抽屉的插件也没有可靠的探测信号。拿不准就返回 false，避免误伤启动。
   return false;
+}
+
+/* ─────────────────────────── 诊断 ───────────────────────────
+ * 执行层「找不到今天的 Nautilus Log」时，把链路上每一环的实际取值报出来。
+ * 🔴 这条链有四个独立的失败点（注入的路径 / 文件存在 / 同步缓存命中 /
+ *    围栏正则命中），靠猜会连着猜错——本项目在这上面栽过三次。 */
+export function diagnoseTiming(date = new Date()): string {
+  if (!host) return 'adapter 未初始化';
+  const path = dailyNotePath(date);
+  if (!path) return 'dailyNotePath() = null（定位不到今日笔记）';
+  const a = getApp();
+  const exists = isFileLike(a.vault.getAbstractFileByPath(path));
+  const lines = cachedLines(path);
+  if (!lines) {
+    return `path=${path} · 文件存在=${exists} · 同步缓存未命中（cache size=${contentCache.size}）`;
+  }
+  let fenceOpen = -1; let fenceClose = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!FENCE_OPEN_RE.test(lines[i])) continue;
+    let j = i + 1;
+    while (j < lines.length && !FENCE_CLOSE_RE.test(lines[j])) j += 1;
+    if (j < lines.length) { fenceOpen = i; fenceClose = j; break; }
+  }
+  if (fenceClose < 0) return `path=${path} · 行数=${lines.length} · 未找到 nautilus 围栏`;
+  const snap = readPrimaryPlan(date);
+  return `path=${path} · 围栏=${fenceOpen}..${fenceClose} · rows=${snap.rows.length}`
+    + ` · tasks=${snap.tasks.length} · events=${snap.fixedEvents.length}`;
 }

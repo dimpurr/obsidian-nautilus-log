@@ -108,3 +108,76 @@ test('deleteClock 只删 CLOCK 行，不动任务行', async () => {
   assert.match(out,/- \[ \] 写周报 45m/,'任务行必须还在');
   v.cleanup();
 });
+
+/* ─────────────────── 笔记正被编辑器打开时的写回路径 ───────────────────
+ * 🔴 上面的 makeVault() 里 iterateAllLeaves 是空实现 => 永远走 vault.process 分支。
+ *    可现实中用户几乎【总是】开着今天的笔记，走的是 editor 分支。
+ *    这个夹具的「不完整」曾经完整地藏住一个 bug：editor 分支把新行写成
+ *    `内容\n` 追加在锚点【行尾】，产出 `- [ ] 任务 20m    - LOGBOOK::` 这种脏行。
+ *    所以 editor 分支必须单独有夹具、单独有断言。 */
+function makeVaultWithEditor(){
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'nl-vault-ed-'));
+  const abs=p=>path.join(dir,p);
+  const files=new Map();
+  const editors=new Map();   // path -> editor
+  function makeEditor(p){
+    return {
+      getValue(){ return fs.readFileSync(abs(p),'utf8'); },
+      _set(t){ fs.writeFileSync(abs(p),t); },
+      lineCount(){ return this.getValue().split('\n').length; },
+      getLine(i){ return this.getValue().split('\n')[i] ?? ''; },
+      setLine(i,text){ const l=this.getValue().split('\n'); l[i]=text; this._set(l.join('\n')); },
+      // CodeMirror 语义：把 (line,ch) 当成整份文本里的一个绝对偏移。
+      replaceRange(text,from,to){
+        const v=this.getValue(); const lines=v.split('\n');
+        const off=(pos)=>lines.slice(0,pos.line).reduce((n,l)=>n+l.length+1,0)+pos.ch;
+        const a=off(from), b=to?off(to):a;
+        this._set(v.slice(0,a)+text+v.slice(b));
+      },
+    };
+  }
+  const api={
+    dir,
+    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,{path:p});
+                   editors.set(p,makeEditor(p)); return files.get(p); },
+    read(p){ return fs.readFileSync(abs(p),'utf8'); },
+    cleanup(){ fs.rmSync(dir,{recursive:true,force:true}); },
+  };
+  const vault={
+    getAbstractFileByPath:p=>files.get(p)||null,
+    getMarkdownFiles:()=>[...files.values()],
+    cachedRead:async f=>fs.readFileSync(abs(f.path),'utf8'),
+    read:async f=>fs.readFileSync(abs(f.path),'utf8'),
+    process:async()=>{ throw new Error('开着编辑器时不该走 vault.process'); },
+  };
+  const app={vault,
+    workspace:{
+      iterateAllLeaves(cb){ for(const [p,ed] of editors) cb({view:{file:{path:p},editor:ed}}); },
+      getLeaf:()=>null, openLinkText:async()=>{},
+    },
+    metadataCache:{on(){},off(){}}};
+  T.initTimingObsidian({app});
+  return api;
+}
+
+test('🔴 笔记开着编辑器时 Clock In：LOGBOOK 必须另起一行，不得拼在任务行尾', async () => {
+  const v=makeVaultWithEditor(); v.write('d.md',NOTE);
+  await T.createRunningClock('d.md:3', new Date(2026,7,24,10,0));
+  const out=v.read('d.md');
+  const taskLine=out.split('\n').find(l=>l.includes('写周报'));
+  assert.equal(taskLine,'- [ ] 写周报 45m','任务行必须原样，不得被追加内容');
+  assert.match(out,/^\s+- LOGBOOK::$/m,'抽屉必须是独立的一行');
+  assert.match(out,/CLOCK: \[2026-08-24 [A-Za-z]{3} 10:00\]\s*$/m,'未闭合 CLOCK');
+  assert.match(out,/- \[ \] 回邮件 30m/,'其它行不得受损');
+  v.cleanup();
+});
+
+test('笔记开着编辑器时 closeClock 也能正确合上', async () => {
+  const v=makeVaultWithEditor(); v.write('d.md',NOTE);
+  await T.createRunningClock('d.md:3', new Date(2026,7,24,10,0));
+  const running=(await T.readAllEntries()).find(e=>e.running);
+  assert.ok(running,'应能读回正在跑的 CLOCK');
+  await T.closeClock(running,new Date(2026,7,24,10,18));
+  assert.match(v.read('d.md'),/--\[2026-08-24 [A-Za-z]{3} 10:18\] => 0:18/);
+  v.cleanup();
+});

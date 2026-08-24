@@ -14,7 +14,7 @@ import { renderCapacityHeader } from './header';
 import { renderChartControls, type ChartControlState } from './controls';
 import { resolveDayState } from './daystate';
 import { NAUTILUS_VIEW_TYPE, NautilusSidebarView, resolveDailyNoteInfo, primeDailyNotesConfig } from './sidebar';
-import { initTimingObsidian } from './timing-obsidian';
+import { initTimingObsidian, diagnoseTiming } from './timing-obsidian';
 import { renderTimingStatusBar } from './statusbar';
 import type { ExecViewContext, TimingRuntime } from './timing-contract';
 import { createTimingRuntime } from './vendor/timing-runtime';
@@ -389,6 +389,13 @@ export default class NautilusLogPlugin extends Plugin {
     // 🔴 关闭时【一个定时器/订阅都不许起】—— 上游默认也是关的，
     //    关着还跑就等于用户明确说不要、我们还在后台烧。
     if (this.settings.actualTimeTracking) this.startExecutionLayer();
+
+    // 执行层链路诊断 —— 面板说「今天没有 Nautilus Log」时按这条命令看到底断在哪。
+    this.addCommand({
+      id: 'diagnose-execution-layer',
+      name: 'Diagnose execution layer / 诊断执行层',
+      callback: () => { new Notice(`[Nautilus Log] ${diagnoseTiming()}`, 15000); },
+    });
 
     this.addSettingTab(new NautilusLogSettingTab(this.app, this));
 

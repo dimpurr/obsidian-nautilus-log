@@ -200,6 +200,13 @@ export class NautilusSidebarView extends ItemView {
   private exec: { destroy(): void } | null = null;
   private pomo: { destroy(): void } | null = null;
 
+  // 🔴 contentEl 下必须是【两个固定容器】，而不是让 render() 直接 empty(contentEl)。
+  //    否则每分钟 tick 的重渲染会连执行区 DOM 一起抹掉，而 renderExecutionArea()
+  //    只在 onOpen 调过一次 => 侧栏开满一分钟后按钮栏永久消失（实测踩到）。
+  //    分开之后：规划区随时重画，执行区保持挂载、不丢 tab/番茄钟的临时状态。
+  private planHost: HTMLElement | null = null;
+  private execHost: HTMLElement | null = null;
+
   constructor(
     leaf: WorkspaceLeaf,
     private settings: NautilusSettings,
@@ -215,6 +222,7 @@ export class NautilusSidebarView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.contentEl.addClass('nautilus-log-sidebar');
+    this.ensureHosts();
     await primeDailyNotesConfig(this.app);   // 🔴 必须在首次 render 之前
     await this.render();
     this.renderExecutionArea();
@@ -237,12 +245,24 @@ export class NautilusSidebarView extends ItemView {
   /** 供外部（设置页切换总开关时）主动刷新执行区。 */
   refreshExecutionArea(): void { this.renderExecutionArea(); }
 
+  /** 建立（或补建）两个固定容器，顺序固定：规划区在上，执行区在下。 */
+  private ensureHosts(): void {
+    if (!this.planHost || !this.planHost.isConnected) {
+      this.planHost = this.contentEl.createDiv({ cls: 'nautilus-log-plan-host' });
+    }
+    if (!this.execHost || !this.execHost.isConnected) {
+      this.execHost = this.contentEl.createDiv({ cls: 'nautilus-log-exec-host' });
+    }
+  }
+
   private renderExecutionArea(): void {
+    this.ensureHosts();
     this.exec?.destroy(); this.exec = null;
     this.pomo?.destroy(); this.pomo = null;
+    this.execHost!.empty();
     const ctx = this.getExecContext();
     if (!ctx || !ctx.runtime) return;
-    const host = this.contentEl.createDiv({ cls: 'nautilus-log-exec-area' });
+    const host = this.execHost!.createDiv({ cls: 'nautilus-log-exec-area' });
     try {
       this.pomo = renderPomoControl(host.createDiv({ cls: 'nautilus-log-pomo-slot' }), ctx);
       this.exec = renderExecPanel(host.createDiv({ cls: 'nautilus-log-exec-slot' }), ctx);
@@ -268,6 +288,8 @@ export class NautilusSidebarView extends ItemView {
     this.spiral?.destroy();
     this.spiral = null;
     this.primaryPath = null;
+    this.planHost = null;
+    this.execHost = null;
   }
 
   private disposeSpiral(): void {
@@ -276,7 +298,8 @@ export class NautilusSidebarView extends ItemView {
   }
 
   private async render(): Promise<void> {
-    const el = this.contentEl;
+    this.ensureHosts();
+    const el = this.planHost!;
     el.empty();
 
     const info = resolveDailyNoteInfo(this.app);
