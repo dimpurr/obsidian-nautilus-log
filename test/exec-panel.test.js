@@ -1,0 +1,505 @@
+/*
+ * exec-panel.test.js — the execution panel (three views).
+ *
+ * Bundles `src/exec-panel.ts` with esbuild, keeping `obsidian` external and
+ * resolving it to `obsidian-mock.cjs` so the panel and the test share the same
+ * DOM helper shapes. DOM comes from jsdom, with the Obsidian DOM helpers the
+ * panel relies on (createDiv / createEl / setText / addClass / empty)
+ * polyfilled onto the jsdom HTMLElement prototype — the same trick the sidebar
+ * test uses.
+ *
+ * The runtime is a controllable fake implementing the `TimingRuntime` shape:
+ * getSnapshot / subscribe / startTask / stopTask / completeTask /
+ * deleteCurrentClock / openTask / locate. It records every call so the tests
+ * can assert interactions, and it lets a test push a fresh snapshot (revision
+ * bump) or a same-revision clock tick (now only).
+ *
+ * Covered:
+ *   · Timing view renders the focused CLOCK row and recent rows;
+ *   · no CLOCK => Timing shows an empty state, does not crash;
+ *   · Plan view lists unfinished direct-child tasks and its empty states;
+ *   · Review view renders the summary and per-row variance;
+ *   · forgotten-timer threshold shows a warning and never auto-stops/deletes;
+ *   · row actions call the right runtime methods (start/stop/complete/open/locate);
+ *   · delete current CLOCK needs a two-click confirmation;
+ *   · a same-revision tick updates elapsed text without rebuilding the list;
+ *   · destroy() unsubscribes — later snapshots do not re-render.
+ */
+
+"use strict";
+
+const assert = require("node:assert/strict");
+const { test } = require("node:test");
+const path = require("node:path");
+const esbuild = require("esbuild");
+const { JSDOM } = require("jsdom");
+
+const SRC = path.join(__dirname, "..", "src");
+const MOCK_OBSIDIAN = path.join(__dirname, "obsidian-mock.cjs");
+
+/* ------------------------------------------------------------------ */
+/* Bundle the panel with obsidian left external                        */
+/* ------------------------------------------------------------------ */
+
+const result = esbuild.buildSync({
+  entryPoints: [path.join(SRC, "exec-panel.ts")],
+  bundle: true,
+  format: "cjs",
+  platform: "node",
+  write: false,
+  external: ["obsidian"],
+});
+const moduleShim = { exports: {} };
+const mockRequire = (id) => {
+  if (id === "obsidian") return require(MOCK_OBSIDIAN);
+  return require(id);
+};
+// eslint-disable-next-line no-new-func
+new Function("module", "exports", "require", result.outputFiles[0].text)(
+  moduleShim,
+  moduleShim.exports,
+  mockRequire,
+);
+const { renderExecPanel } = moduleShim.exports;
+
+/* ------------------------------------------------------------------ */
+/* jsdom + Obsidian DOM helpers + globals                              */
+/* ------------------------------------------------------------------ */
+
+function makeDom() {
+  const dom = new JSDOM("<!DOCTYPE html><body></body>", { url: "http://localhost/" });
+  const H = dom.window.HTMLElement.prototype;
+  H.addClass = function addClass(cls) { this.classList.add(cls); };
+  H.empty = function empty() { while (this.firstChild) this.removeChild(this.firstChild); };
+  H.createDiv = function createDiv(opts = {}) {
+    const d = dom.window.document.createElement("div");
+    if (opts.cls) d.className = opts.cls;
+    this.appendChild(d);
+    return d;
+  };
+  H.createEl = function createEl(tag, opts = {}) {
+    const e = dom.window.document.createElement(tag);
+    if (opts.cls) e.className = opts.cls;
+    if (opts.text) e.textContent = opts.text;
+    this.appendChild(e);
+    return e;
+  };
+  H.setText = function setText(t) { this.textContent = t; };
+  globalThis.window = dom.window;
+  globalThis.document = dom.window.document;
+  return dom;
+}
+
+/* ------------------------------------------------------------------ */
+/* Controllable TimingRuntime fake                                     */
+/* ------------------------------------------------------------------ */
+
+function makeRuntime(initialSnapshot) {
+  let snapshot = initialSnapshot;
+  const listeners = new Set();
+  const calls = {
+    startTask: [],
+    stopTask: 0,
+    completeTask: [],
+    deleteCurrentClock: [],
+    openTask: [],
+    locate: 0,
+  };
+  const notify = () => {
+    for (const listener of [...listeners]) listener(snapshot);
+  };
+  return {
+    calls,
+    listenerCount: () => listeners.size,
+    getSnapshot: () => snapshot,
+    /** Data change: bumps revision so the panel full-renders. */
+    push(next) {
+      snapshot = { ...snapshot, ...next, revision: (snapshot.revision || 0) + 1 };
+      notify();
+    },
+    /** Pure clock tick: same revision, only `now` moves. */
+    pushTick(now) {
+      snapshot = { ...snapshot, now };
+      notify();
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      listener(snapshot);
+      return () => { listeners.delete(listener); };
+    },
+    startTask(uid) { calls.startTask.push(uid); return Promise.resolve(); },
+    stopTask() { calls.stopTask += 1; return Promise.resolve(); },
+    completeTask(uid) { calls.completeTask.push(uid); return Promise.resolve(); },
+    deleteCurrentClock(uid) { calls.deleteCurrentClock.push(uid); return Promise.resolve(); },
+    openTask(uid, opts) { calls.openTask.push({ uid, opts }); return Promise.resolve(); },
+    locate() { calls.locate += 1; return Promise.resolve(); },
+  };
+}
+
+function makeCtx(runtime, overrides = {}) {
+  return {
+    runtime,
+    language: "en",
+    pomodoroMinutes: 45,
+    forgottenTimerMinutes: 0,
+    recentRetentionMinutes: 45,
+    ...overrides,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Fixtures                                                            */
+/* ------------------------------------------------------------------ */
+
+const NOW = new Date(2026, 7, 24, 12, 0, 0); // 2026-08-24 12:00 local
+
+function focusedSnapshot(overrides = {}) {
+  const focused = {
+    clockUid: "Journal/2026-08-24.md:5",
+    taskUid: "Journal/2026-08-24.md:3",
+    taskString: "{{TODO}} Write report 45m",
+    title: "Write report",
+    start: new Date(2026, 7, 24, 11, 30),
+    running: true,
+    status: "TODO",
+    activeKind: "focused",
+  };
+  const recent = {
+    clockUid: "Journal/2026-08-24.md:9",
+    taskUid: "Journal/2026-08-24.md:7",
+    taskString: "{{TODO}} Reply emails 20m",
+    title: "Reply emails",
+    start: new Date(2026, 7, 24, 11, 40),
+    end: new Date(2026, 7, 24, 11, 50),
+    running: false,
+    status: "TODO",
+    activeKind: "recent",
+  };
+  return {
+    revision: 1,
+    status: "ready",
+    notice: "",
+    planSnapshot: {
+      plan: { uid: "Journal/2026-08-24.md:1" },
+      tasks: [
+        { uid: "Journal/2026-08-24.md:3", string: "{{TODO}} Write report 45m", title: "Write report", plannedMinutes: 45, remainingMinutes: 20, progress: 0 },
+        { uid: "Journal/2026-08-24.md:4", string: "{{TODO}} Call standup 15m", title: "Call standup", plannedMinutes: 15, remainingMinutes: 15, progress: 0 },
+      ],
+    },
+    entries: [focused, recent],
+    dailyReview: {
+      summary: { totalCount: 3, completedCount: 1, comparedCount: 1, plannedMinutes: 45, actualMinutes: 50, varianceMinutes: 5 },
+      rows: [
+        { uid: "Journal/2026-08-24.md:3", title: "Write report", plannedMinutes: 45, status: "TODO", state: "live", actualMinutes: 30, varianceMinutes: null },
+        { uid: "Journal/2026-08-24.md:6", title: "Ship v1", plannedMinutes: 45, status: "DONE", state: "compared", actualMinutes: 50, varianceMinutes: 5 },
+        { uid: "Journal/2026-08-24.md:4", title: "Call standup", plannedMinutes: 15, status: "TODO", state: "not-started", actualMinutes: 0, varianceMinutes: null },
+      ],
+    },
+    activeWork: { focused, recent: [recent], items: [focused, recent], count: 2, windowMinutes: 45 },
+    pomodoro: null,
+    standalonePomodoro: null,
+    now: NOW,
+    ...overrides,
+  };
+}
+
+function mount(runtime, overrides = {}) {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const panel = renderExecPanel(container, makeCtx(runtime, overrides));
+  return { container, panel };
+}
+
+function findTab(container, label) {
+  return [...container.querySelectorAll(".nautilus-log-exec-tab")]
+    .find((button) => button.textContent === label);
+}
+
+/* ------------------------------------------------------------------ */
+/* Tests — Timing view                                                 */
+/* ------------------------------------------------------------------ */
+
+test("Timing view renders the focused CLOCK and recent rows", () => {
+  makeDom();
+  const runtime = makeRuntime(focusedSnapshot());
+  const { container, panel } = mount(runtime);
+
+  const rows = container.querySelectorAll(".nautilus-log-exec-row");
+  assert.equal(rows.length, 2, "focused + one recent row");
+
+  const focusedRow = container.querySelector(".nautilus-log-exec-row.is-focused");
+  assert.ok(focusedRow, "focused row carries is-focused");
+  assert.equal(focusedRow.querySelector(".nautilus-log-exec-row-title").textContent, "Write report");
+  const focusedButtons = [...focusedRow.querySelectorAll(".nautilus-log-exec-row-actions button")].map((b) => b.textContent);
+  assert.ok(focusedButtons.includes("Clock Out"), "focused row offers Clock Out");
+  assert.ok(focusedButtons.includes("Complete task"), "focused row offers Complete");
+  assert.ok(focusedButtons.includes("Delete current CLOCK"), "focused row offers Delete current CLOCK");
+  assert.match(focusedRow.querySelector(".nautilus-log-exec-row-meta").textContent, /Timing 30:00/);
+
+  const recentRow = container.querySelector(".nautilus-log-exec-row:not(.is-focused)");
+  assert.ok(recentRow, "recent row exists");
+  assert.equal(recentRow.querySelector(".nautilus-log-exec-row-title").textContent, "Reply emails");
+  assert.match(recentRow.textContent, /Recent · 35m left/);
+  assert.ok([...recentRow.querySelectorAll("button")].some((b) => b.textContent === "Clock In"), "recent row offers Clock In");
+
+  panel.destroy();
+});
+
+test("Timing view shows an empty state when no CLOCK is running", () => {
+  makeDom();
+  const runtime = makeRuntime(focusedSnapshot({
+    activeWork: { focused: null, recent: [], items: [], count: 0, windowMinutes: 45 },
+    entries: [],
+  }));
+  const { container, panel } = mount(runtime);
+
+  const empty = container.querySelector(".nautilus-log-exec-empty");
+  assert.ok(empty, "empty state present");
+  assert.equal(empty.textContent, "No active work. Open Plan to start a task.");
+  assert.equal(container.querySelectorAll(".nautilus-log-exec-row").length, 0);
+
+  panel.destroy();
+});
+
+/* ------------------------------------------------------------------ */
+/* Tests — Plan view                                                   */
+/* ------------------------------------------------------------------ */
+
+test("Plan view lists unfinished direct-child tasks", () => {
+  makeDom();
+  const runtime = makeRuntime(focusedSnapshot());
+  const { container, panel } = mount(runtime);
+
+  findTab(container, "Plan").click();
+
+  const rows = container.querySelectorAll(".nautilus-log-exec-row");
+  assert.equal(rows.length, 2, "two unfinished direct children");
+  assert.equal(container.querySelector(".nautilus-log-exec-row-title").textContent, "Write report");
+  const allButtons = [...container.querySelectorAll(".nautilus-log-exec-row-actions button")].map((b) => b.textContent);
+  assert.ok(allButtons.includes("Clock In"), "unfocused plan row offers Clock In");
+  assert.ok(allButtons.includes("Complete task"));
+  // the focused plan row offers Clock Out + Delete
+  const focusedInPlan = container.querySelector(".nautilus-log-exec-row.is-focused");
+  assert.ok(focusedInPlan, "focused task still marked when shown in Plan");
+  assert.ok([...focusedInPlan.querySelectorAll("button")].some((b) => b.textContent === "Clock Out"));
+
+  panel.destroy();
+});
+
+test("Plan view empty states", () => {
+  makeDom();
+
+  // No plan at all.
+  const runtime = makeRuntime(focusedSnapshot({ planSnapshot: null }));
+  const a = mount(runtime);
+  findTab(a.container, "Plan").click();
+  assert.equal(
+    a.container.querySelector(".nautilus-log-exec-empty").textContent,
+    "No Nautilus Log was found on today’s Daily Note.",
+  );
+  a.panel.destroy();
+
+  // A plan with no unfinished tasks.
+  const runtime2 = makeRuntime(focusedSnapshot({ planSnapshot: { plan: { uid: "x" }, tasks: [] } }));
+  const b = mount(runtime2);
+  findTab(b.container, "Plan").click();
+  assert.equal(
+    b.container.querySelector(".nautilus-log-exec-empty").textContent,
+    "The Primary Plan has no unfinished direct-child tasks.",
+  );
+  b.panel.destroy();
+});
+
+/* ------------------------------------------------------------------ */
+/* Tests — Review view                                                 */
+/* ------------------------------------------------------------------ */
+
+test("Review view renders the summary and per-row variance", () => {
+  makeDom();
+  const runtime = makeRuntime(focusedSnapshot());
+  const { container, panel } = mount(runtime);
+
+  findTab(container, "Review").click();
+
+  const summary = container.querySelector(".nautilus-log-exec-review-summary");
+  assert.ok(summary, "review summary present");
+  assert.match(summary.textContent, /Completed 1\/3/);
+  assert.match(summary.textContent, /Compared 1/);
+  assert.match(summary.textContent, /Variance \+5m/);
+
+  const rows = container.querySelectorAll(".nautilus-log-exec-review-row");
+  assert.equal(rows.length, 3);
+
+  const comparedRow = container.querySelector(".nautilus-log-exec-review-row.is-compared");
+  assert.ok(comparedRow, "compared row rendered");
+  assert.equal(comparedRow.querySelector(".nautilus-log-exec-review-title").textContent, "Ship v1");
+  assert.match(comparedRow.textContent, /\+5m/);
+  assert.ok(comparedRow.querySelector(".nautilus-log-exec-review-variance.is-over"), "positive variance is is-over");
+
+  const liveRow = container.querySelector(".nautilus-log-exec-review-row.is-live");
+  assert.ok(liveRow.querySelector("[data-review-live-actual]"), "live row exposes live actual for ticking");
+
+  const notStarted = container.querySelector(".nautilus-log-exec-review-row.is-not-started");
+  assert.match(notStarted.textContent, /Actual —/);
+
+  panel.destroy();
+});
+
+test("Review view shows an empty state when the plan has no tasks", () => {
+  makeDom();
+  const runtime = makeRuntime(focusedSnapshot({
+    dailyReview: { summary: { totalCount: 0, completedCount: 0, comparedCount: 0, plannedMinutes: 0, actualMinutes: 0, varianceMinutes: 0 }, rows: [] },
+  }));
+  const { container, panel } = mount(runtime);
+  findTab(container, "Review").click();
+  assert.equal(
+    container.querySelector(".nautilus-log-exec-empty").textContent,
+    "The Primary Plan has no direct-child tasks to review.",
+  );
+  panel.destroy();
+});
+
+/* ------------------------------------------------------------------ */
+/* Tests — forgotten-timer warning                                     */
+/* ------------------------------------------------------------------ */
+
+test("forgotten timer threshold shows a warning but never touches the CLOCK", () => {
+  makeDom();
+  const snap = focusedSnapshot();
+  snap.activeWork.focused.start = new Date(2026, 7, 24, 11, 0); // running 60 min by 12:00
+  const runtime = makeRuntime(snap);
+  const { container, panel } = mount(runtime, { forgottenTimerMinutes: 30 });
+
+  const focusedRow = container.querySelector(".nautilus-log-exec-row.is-focused");
+  assert.ok(focusedRow.classList.contains("is-forgotten"), "focused row flagged is-forgotten");
+  const warn = container.querySelector(".nautilus-log-exec-forgotten");
+  assert.ok(warn, "forgotten warning banner present");
+  assert.match(warn.textContent, /Check CLOCK/);
+  assert.match(warn.textContent, /Write report/);
+  assert.ok(focusedRow.querySelector(".nautilus-log-exec-row-meta").classList.contains("is-warning"));
+
+  // 🔴 只警告：绝不自动停止或删除。
+  assert.equal(runtime.calls.stopTask, 0, "never auto Clock Out");
+  assert.deepEqual(runtime.calls.deleteCurrentClock, [], "never auto deletes the CLOCK");
+
+  panel.destroy();
+});
+
+test("forgottenTimerMinutes = 0 disables the warning", () => {
+  makeDom();
+  const snap = focusedSnapshot();
+  snap.activeWork.focused.start = new Date(2026, 7, 24, 11, 0);
+  const runtime = makeRuntime(snap);
+  const { container, panel } = mount(runtime, { forgottenTimerMinutes: 0 });
+
+  assert.ok(!container.querySelector(".nautilus-log-exec-forgotten"), "no warning banner when disabled");
+  const focusedRow = container.querySelector(".nautilus-log-exec-row.is-focused");
+  assert.ok(!focusedRow.classList.contains("is-forgotten"), "row not flagged when disabled");
+
+  panel.destroy();
+});
+
+/* ------------------------------------------------------------------ */
+/* Tests — interactions                                                */
+/* ------------------------------------------------------------------ */
+
+test("row actions call the right runtime methods", () => {
+  makeDom();
+  const runtime = makeRuntime(focusedSnapshot());
+  const { container, panel } = mount(runtime);
+
+  const title = container.querySelector(".nautilus-log-exec-row-title");
+  title.click();
+  assert.deepEqual(
+    runtime.calls.openTask,
+    [{ uid: "Journal/2026-08-24.md:3", opts: { sidebar: false } }],
+    "clicking the title opens the task",
+  );
+
+  const clockOut = [...container.querySelectorAll(".nautilus-log-exec-row-actions button")].find((b) => b.textContent === "Clock Out");
+  clockOut.click();
+  assert.equal(runtime.calls.stopTask, 1, "Clock Out stops the current task");
+
+  const complete = [...container.querySelectorAll(".nautilus-log-exec-row-actions button")].find((b) => b.textContent === "Complete task");
+  complete.click();
+  assert.deepEqual(runtime.calls.completeTask, ["Journal/2026-08-24.md:3"]);
+
+  const identity = container.querySelector(".nautilus-log-exec-identity");
+  identity.click();
+  assert.equal(runtime.calls.locate, 1, "Locate calls runtime.locate()");
+
+  panel.destroy();
+});
+
+test("Clock In on an unfocused plan task starts that task", () => {
+  makeDom();
+  const runtime = makeRuntime(focusedSnapshot());
+  const { container, panel } = mount(runtime);
+  findTab(container, "Plan").click();
+
+  const unfocusedRow = container.querySelector(".nautilus-log-exec-row:not(.is-focused)");
+  const clockIn = [...unfocusedRow.querySelectorAll("button")].find((b) => b.textContent === "Clock In");
+  clockIn.click();
+  assert.deepEqual(runtime.calls.startTask, ["Journal/2026-08-24.md:4"]);
+  assert.equal(runtime.calls.stopTask, 0, "switching happens inside runtime.startTask, not the panel");
+
+  panel.destroy();
+});
+
+test("delete current CLOCK needs a two-click confirmation", () => {
+  makeDom();
+  const runtime = makeRuntime(focusedSnapshot());
+  const { container, panel } = mount(runtime);
+
+  const deleteBtn = [...container.querySelectorAll(".nautilus-log-exec-row-actions button")]
+    .find((b) => b.textContent === "Delete current CLOCK");
+  deleteBtn.click();
+  assert.deepEqual(runtime.calls.deleteCurrentClock, [], "first click only arms the confirmation");
+  assert.equal(deleteBtn.textContent, "Click again to delete current CLOCK");
+
+  deleteBtn.click();
+  assert.deepEqual(runtime.calls.deleteCurrentClock, ["Journal/2026-08-24.md:3"], "second click deletes the CLOCK");
+
+  panel.destroy();
+});
+
+/* ------------------------------------------------------------------ */
+/* Tests — subscription lifecycle                                      */
+/* ------------------------------------------------------------------ */
+
+test("a same-revision tick updates elapsed text without rebuilding the list", () => {
+  makeDom();
+  const runtime = makeRuntime(focusedSnapshot());
+  const { container, panel } = mount(runtime);
+
+  const rowBefore = container.querySelector(".nautilus-log-exec-row.is-focused");
+  const metaBefore = rowBefore.querySelector(".nautilus-log-exec-row-meta.is-live");
+  // Capture the string now — `metaBefore` is a live node, so reading
+  // `.textContent` after the tick would already show the updated value.
+  const metaBeforeText = metaBefore.textContent;
+
+  runtime.pushTick(new Date(2026, 7, 24, 12, 0, 30)); // 30 s later, same revision
+
+  const rowAfter = container.querySelector(".nautilus-log-exec-row.is-focused");
+  assert.equal(rowAfter, rowBefore, "same row node retained — no rebuild");
+  const metaAfterText = rowAfter.querySelector(".nautilus-log-exec-row-meta.is-live").textContent;
+  assert.match(metaAfterText, /Timing 30:30/);
+  assert.notEqual(metaAfterText, metaBeforeText, "elapsed text updated in place");
+
+  panel.destroy();
+});
+
+test("destroy() unsubscribes; later snapshots do not re-render", () => {
+  makeDom();
+  const runtime = makeRuntime(focusedSnapshot());
+  const { container, panel } = mount(runtime);
+
+  assert.equal(runtime.listenerCount(), 1, "subscribed on mount");
+
+  panel.destroy();
+  assert.equal(runtime.listenerCount(), 0, "unsubscribed on destroy");
+
+  const before = container.innerHTML;
+  runtime.push(focusedSnapshot({ revision: 999 }));
+  assert.equal(container.innerHTML, before, "no re-render after destroy");
+});
