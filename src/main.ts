@@ -10,6 +10,8 @@
 import { Plugin, MarkdownRenderChild, MarkdownRenderer, TFile, type Editor, type MarkdownPostProcessorContext } from 'obsidian';
 import { parsePlan, taskDescription } from './parser';
 import { renderSpiral } from './spiral';
+import { renderCapacityHeader } from './header';
+import { renderChartControls, type ChartControlState } from './controls';
 import { parseBlockConfig, applyOverrides, extractPlanBody } from './blockconfig';
 import TEST_NOTE from '../docs/test-note.md';
 import { NautilusLogSettingTab } from './settings';
@@ -119,6 +121,9 @@ class NautilusLogView extends MarkdownRenderChild {
 
   private sectionRetryCancelled = false;
   private spiral: { destroy(): void } | null = null;
+  private controls: { destroy(): void } | null = null;
+  /** 图表控制状态。回放/显示已完成是【纯视觉】的，不写回 Markdown。 */
+  private chartState: ChartControlState = { showDone: true, collapsed: false, playback: null };
 
   /** 缓存命中则同步返回（PDF 导出走这条）；未命中返回 null，由调用方补一次异步。 */
   private locateCached(): { text: string; lineEnd: number } | null {
@@ -206,22 +211,46 @@ class NautilusLogView extends MarkdownRenderChild {
       d.setText(`⚠ nothing scheduled — ${diag} · events ${plan.events.length} · tasks ${plan.tasks.length} · malformed ${plan.malformed.length}`);
     }
 
-    const line = root.createDiv({ cls: 'nautilus-log-line' });
-    line.setText([
-      `${copy.demand} ${logCore.formatDuration(capacity.demandMinutes)}`,
-      `${copy.available} ${logCore.formatDuration(capacity.availableMinutes)}`,
-      `${copy.events} ${logCore.formatDuration(capacity.fixedMinutes)}`,
-      `${copy.remaining} ${logCore.formatDuration(capacity.slackMinutes)}`,
-    ].join(' · '));
+    renderCapacityHeader(root, capacity, settings, nowMinutes());
+
 
     // 螺旋图。几何全部来自 vendor 的 log-core（spiralCellInnerHour /
     // hourlyGridSegments / placeLabelTracks 等），这里只负责把它挂上 DOM。
+    // 控制按钮栏（眼睛 / 播放 / 折叠）。它只改视觉状态，不碰 Markdown。
+    this.controls?.destroy();
+    this.controls = renderChartControls(
+      root,
+      this.chartState,
+      {
+        onChange: (next) => {
+          this.chartState = next;
+          void this.render();
+        },
+      },
+      settings,
+      {
+        workdayStartMinutes: schedule.startMinutes,
+        workdayEndMinutes: schedule.endMinutes,
+        nowMinutes: nowMinutes(),
+      },
+      `${this.sourcePath}:${lineOffset}`,
+    );
+
+    if (this.chartState.collapsed) {
+      this.spiral?.destroy();
+      this.spiral = null;
+      return;   // 折叠：只藏图，容量指标和计划文本仍然可见
+    }
+
     const chart = root.createDiv({ cls: 'nautilus-log-chart' });
     try {
       // 🔴 上一次的 hover 监听必须先拆，否则每次重渲染（每分钟 tick + 文件改动）
       //    都会再挂一层，很快就累积成泄漏。
       this.spiral?.destroy();
-      this.spiral = renderSpiral(chart, plan, capacity, settings, nowMinutes());
+      this.spiral = renderSpiral(chart, plan, capacity, settings, nowMinutes(), {
+        showDone: this.chartState.showDone,
+        playbackMinute: this.chartState.playback?.minute ?? null,
+      });
     } catch (err) {
       // 图挂了不该带走整个块 —— 容量数字比图更重要，必须还能看见。
       chart.remove();
@@ -230,10 +259,6 @@ class NautilusLogView extends MarkdownRenderChild {
       console.error('[Nautilus Log] renderSpiral failed', err);
     }
 
-    if (capacity.overloadMinutes > 0) {
-      const overload = root.createDiv({ cls: 'nautilus-log-overload' });
-      overload.setText(`⚠ ${copy.overload} ${logCore.formatDuration(capacity.overloadMinutes)}`);
-    }
 
     if (capacity.overflowTasks.length > 0) {
       const box = root.createDiv({ cls: 'nautilus-log-overflow' });

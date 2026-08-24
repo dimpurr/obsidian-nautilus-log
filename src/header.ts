@@ -314,12 +314,13 @@ export function renderCapacityHeader(
   const root = el("div", "nautilus-log-metrics");
   if (ariaLabel) root.setAttribute("aria-label", ariaLabel);
 
-  let summary = "";
-  try {
-    summary = core.formatCapacitySummary(capacity);
-  } catch {
-    summary = "";
-  }
+  // 🔴 不用 vendor 的 formatCapacitySummary 做 title：它【硬编码中文、没有 i18n】
+  //    （上游疏漏，2026-08-24 实测：language:'en' 下照样返回「可安排 · 事件 · 待办需求」）。
+  //    改由已经 i18n 过的 capacityMetrics 结果自行拼装。
+  const summary = ordered
+    .map((m) => (m && m.label && m.value ? `${m.label} ${m.value}` : ""))
+    .filter(Boolean)
+    .join(" · ");
   if (summary) root.title = summary;
 
   const summaryRow = el("div", "nautilus-log-metrics-summary");

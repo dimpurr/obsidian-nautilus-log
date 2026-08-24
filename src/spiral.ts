@@ -1123,12 +1123,12 @@ export function renderSpiral(
   // 窄容器里浮层会被裁切、也没地方放，所以紧凑时直接不挂 hover。
   const width = container.clientWidth || initialWidth;
   const compact = core.isCompactChartWidth(width);
-  container.toggleClass?.("nautilus-log-compact", compact);
-  if (compact) container.classList.add("nautilus-log-compact");
-  else container.classList.remove("nautilus-log-compact");
+  // 容器可能是精简的 DOM shim（测试里就是），classList/ownerDocument 都要兜住，
+  // 不能因为环境缺一个 API 就把整张图带崩。
+  container.classList?.[compact ? "add" : "remove"]("nautilus-log-compact");
 
-  if (compact) {
-    return { destroy() { /* 紧凑模式没挂任何监听 */ } };
+  if (compact || !container.ownerDocument) {
+    return { destroy() { /* 紧凑模式 / 无文档环境：没挂任何监听 */ } };
   }
 
   // ── 悬停提示 ──────────────────────────────────────────────────────────
