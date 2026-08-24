@@ -12,6 +12,8 @@ import { parsePlan, taskDescription } from './parser';
 import { renderSpiral } from './spiral';
 import { renderCapacityHeader } from './header';
 import { renderChartControls, type ChartControlState } from './controls';
+import { NAUTILUS_VIEW_TYPE, NautilusSidebarView } from './sidebar';
+import { initTimingObsidian } from './timing-obsidian';
 import { parseBlockConfig, applyOverrides, extractPlanBody } from './blockconfig';
 import TEST_NOTE from '../docs/test-note.md';
 import { NautilusLogSettingTab } from './settings';
@@ -337,6 +339,19 @@ export default class NautilusLogPlugin extends Plugin {
       });
     }
 
+    // 执行层数据适配器：vendored 的 timing-runtime 通过它读写 vault。
+    // 🔴 必须在任何执行层功能之前初始化，否则 getApp() 会抛「未初始化」。
+    initTimingObsidian({ app: this.app });
+
+    // 右侧栏视图 —— 不打开笔记也能看今天的盘。共用 renderSpiral。
+    this.registerView(NAUTILUS_VIEW_TYPE, (leaf) => new NautilusSidebarView(leaf, this.settings));
+    this.addRibbonIcon('compass', 'Open Nautilus Log', () => { void this.activateSidebar(); });
+    this.addCommand({
+      id: 'open-sidebar',
+      name: 'Open Nautilus Log sidebar / 打开侧栏',
+      callback: () => { void this.activateSidebar(); },
+    });
+
     this.addSettingTab(new NautilusLogSettingTab(this.app, this));
 
     // 勾选当前行并追加 `dHH:MM` 完成锚点。
@@ -384,6 +399,19 @@ export default class NautilusLogPlugin extends Plugin {
         (this.app as unknown as { setting: { open(): void } }).setting.open();
       },
     });
+  }
+
+  /** 打开（或聚焦）右侧栏视图。已存在就复用，不重复开。 */
+  async activateSidebar(): Promise<void> {
+    const existing = this.app.workspace.getLeavesOfType(NAUTILUS_VIEW_TYPE);
+    if (existing.length > 0) {
+      await this.app.workspace.revealLeaf(existing[0]);
+      return;
+    }
+    const leaf = this.app.workspace.getRightLeaf(false);
+    if (!leaf) return;
+    await leaf.setViewState({ type: NAUTILUS_VIEW_TYPE, active: true });
+    await this.app.workspace.revealLeaf(leaf);
   }
 
   async loadSettings(): Promise<void> {
