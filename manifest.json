@@ -1,0 +1,10 @@
+{
+  "id": "nautilus-log",
+  "name": "Nautilus Log",
+  "version": "0.0.1",
+  "minAppVersion": "1.5.0",
+  "description": "A spiral day planner with explicit time capacity. Fixed events stay fixed, flexible tasks flow into what remains, and overload never disappears from view.",
+  "author": "dimpurr",
+  "authorUrl": "https://github.com/dimpurr/obsidian-nautilus-log",
+  "isDesktopOnly": false
+}
