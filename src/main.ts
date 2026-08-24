@@ -100,11 +100,17 @@ class NautilusLogView extends MarkdownRenderChild {
     const src = this.source.replace(/\s+$/, '');
     const same = ends.filter((e) => e.body.replace(/\s+$/, '') === src);
     const pool = same.length > 0 ? same : ends;
-    // 同源块可能有多个（例如都是空块）=> 用本块在 DOM 中的出现次序消歧
-    const rendered = Array.from(
-      this.containerEl.ownerDocument.querySelectorAll('.nautilus-log-block'),
-    );
-    const ordinal = Math.max(0, rendered.indexOf(this.containerEl));
+    // 同源块可能有多个（例如多个空块）=> 用本块的出现次序消歧。
+    // 🔴 次序必须在【同源块】这个索引空间里数，不能在【全部块】里数：
+    //    两个空间不一致时会取错块（实测：笔记有 4 个空块，场景 4 是全局第 4 个
+    //    但只是第 3 个空块，按全局序号取就落到了最后一个空块＝场景 7 的位置）。
+    //    dataset 里同时带上 sourcePath —— 多篇笔记同时打开时不能互相干扰。
+    const doc = this.containerEl.ownerDocument;
+    const key = `${this.sourcePath}\u0000${src}`;
+    const peers = Array.from(
+      doc.querySelectorAll<HTMLElement>('.nautilus-log-block'),
+    ).filter((e) => e.dataset.nlKey === key);
+    const ordinal = Math.max(0, peers.indexOf(this.containerEl));
     const pick = pool[Math.min(ordinal, pool.length - 1)];
     return { text, lineEnd: pick.lineEnd };
   }
@@ -121,6 +127,8 @@ class NautilusLogView extends MarkdownRenderChild {
     const el = this.containerEl;
     el.empty();
     el.addClass('nautilus-log-block');
+    // 消歧用的键：同一篇笔记 + 同样的块内容才算同源。必须在定位之前写好。
+    el.dataset.nlKey = `${this.sourcePath}\u0000${this.source.replace(/\s+$/, '')}`;
 
     // ── 方案 5 ──────────────────────────────────────────────────────────
     // 代码块内容 = 当天配置覆盖（YAML 风格）；计划正文 = 块【之后】到第一个
