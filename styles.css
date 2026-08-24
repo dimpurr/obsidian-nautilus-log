@@ -1565,3 +1565,25 @@ button.nautilus-log-timing__plan-heading:focus-visible {
 }
 /* 方案 9：MarkdownRenderer 会包一层 <p>，去掉它带来的额外间距 */
 .nautilus-log-overflow-item > p { margin: 0; display: inline; }
+
+/* ── 悬停提示 / 紧凑模式（2026-08-24） ────────────────────────────────── */
+.nautilus-log-chart { position: relative; }
+.nautilus-log-tooltip {
+  position: absolute;
+  z-index: 30;
+  max-width: 20em;
+  padding: 0.45em 0.7em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: 0.85em;
+  line-height: 1.45;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  pointer-events: none;   /* 别挡住底下的切片，否则会 enter/leave 抖动 */
+}
+.nautilus-log-tooltip-line:first-child { font-weight: 600; }
+.nautilus-log-tooltip-line:not(:first-child) { color: var(--text-muted); }
+
+/* 紧凑模式：窄容器（侧栏）里不显示浮层，图例也收敛 */
+.nautilus-log-compact .nautilus-log-tooltip { display: none !important; }

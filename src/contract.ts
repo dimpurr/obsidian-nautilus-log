@@ -72,6 +72,18 @@ export const DEFAULT_SETTINGS: NautilusSettings = {
   urgentTrigger: "",
 };
 
+/** capacityMetrics 返回的单项。`percent`/`percentLabel` 就是上游的 `left` 百分比。 */
+export interface CapacityMetric {
+  key: string;
+  label: string;
+  value: string;
+  summaryLabel?: string;
+  percent?: string;
+  percentLabel?: string;
+  percentTone?: string;
+  tone?: string;
+}
+
 /** Shape returned by the vendored `calculateCapacity()`. Field names are the
  *  engine's, not ours. */
 export interface Capacity {
@@ -124,7 +136,20 @@ export interface LogCore {
     startHour: number; endHour: number;
     startMinutes: DayMinutes; endMinutes: DayMinutes;
   };
-  capacityMetrics(capacity: Capacity, settings: unknown): unknown;
+  /* ⚠️ 2026-08-24 二次修正：又一个「照契约猜返回值」会栽的地方。
+   *    capacityMetrics 收的是【解构对象】，不是 (capacity, settings)：
+   *      capacityMetrics({ capacity, language })
+   *        => { planned:{label,value,percent,percentLabel,percentTone,tone}, status, available, events }
+   *    传成两个位置参数不会报错，但所有数值都变成 0m / 0% —— 静默错，最难查。 */
+  capacityMetrics(args: { capacity: Capacity; language?: string }): {
+    planned: CapacityMetric;
+    status: CapacityMetric;
+    available: CapacityMetric;
+    events: CapacityMetric;
+  };
+  /* 🔴 formatCapacitySummary 收裸 capacity，且【硬编码中文、没有 i18n】
+   *    （上游疏漏）。英文界面下会冒出中文，别拿它做面向用户的文案。 */
+  formatCapacitySummary(capacity: Capacity): string;
   formatDuration(minutes: number): string;
   uiCopy(language: string): Record<string, Record<string, string>>;
   [k: string]: unknown;

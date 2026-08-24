@@ -16,6 +16,7 @@
 
 import * as logCoreModule from "./vendor/log-core";
 import { createSvg } from "./svg-util";
+import { createTooltip, type TooltipTarget } from "./tooltip";
 import type {
   Capacity,
   LineId,
@@ -28,6 +29,8 @@ import type {
 /* ------------------------------------------------------------------ */
 
 interface SpiralCore {
+  /** 窄容器判定。上游据此在侧栏里省掉 hover 浮层并折叠明细。 */
+  isCompactChartWidth(width: number): boolean;
   /** 从完成锚点反推已完成任务的历史区间。拿不到结束时刻时返回 null
    *  —— 引擎不编造未被告知的历史。 */
   historicalDoneSlice(args: {
@@ -967,23 +970,36 @@ let patternCounter = 0;
  * interactivity is wired (hover tooltips, playback, and the execution layer
  * are deliberately out of scope for this stage).
  */
+export interface SpiralOptions {
+  /** 显示已完成项。对应上游的「眼睛」按钮。 */
+  showDone?: boolean;
+  /** 回放中的时刻；给了就用它当"当前时刻"画针与流逝区。 */
+  playbackMinute?: number | null;
+}
+
+/** 供外部（main.ts）在重渲染前清理上一次的监听。 */
+export interface SpiralHandle { destroy(): void }
+
 export function renderSpiral(
   container: HTMLElement,
   plan: ParsedPlan,
   capacity: Capacity,
   settings: NautilusSettings,
   nowMinutes: number,
-): void {
+  options: SpiralOptions = {},
+): SpiralHandle {
   const s = deriveSettings(settings);
   const workdayStart = s.workdayStart;
   const workdayEnd = s.workdayEnd;
   const copy = core.uiCopy(s.language);
 
-  const timelineMinute = nowMinutes;
-  const elapsedThrough = clamp(nowMinutes, workdayStart, workdayEnd);
+  // 回放：把"当前时刻"换成回放游标。不改任何 Markdown —— 上游语义就是纯视觉。
+  const effectiveNow = options.playbackMinute ?? nowMinutes;
+  const timelineMinute = effectiveNow;
+  const elapsedThrough = clamp(effectiveNow, workdayStart, workdayEnd);
   const showElapsed = true;
   const interactive = true;
-  const showNow = nowMinutes >= workdayStart && nowMinutes < workdayEnd;
+  const showNow = effectiveNow >= workdayStart && effectiveNow < workdayEnd;
 
   // Fixed events stay visible even after they have passed; flexible work is
   // already scheduled by the engine and handed to us via `capacity`.
@@ -1017,7 +1033,8 @@ export function renderSpiral(
   // 它们要画成灰色历史切片，位置由引擎的 historicalDoneSlice 从完成锚点反推。
   // 🔴 没有锚点就拿不到结束时刻 => 返回 null => 不画。这是上游的明确立场：
   //    "does not invent history"。
-  const doneEvents: RenderEvent[] = plan.tasks
+  const showDone = options.showDone !== false;
+  const doneEvents: RenderEvent[] = (showDone ? plan.tasks : [])
     .filter((t) => t.done)
     .map((t) => {
       const slice = core.historicalDoneSlice({
@@ -1100,4 +1117,54 @@ export function renderSpiral(
 
   svg.appendChild(root);
   container.appendChild(svg);
+
+  // ── 紧凑模式 ──────────────────────────────────────────────────────────
+  // 上游 guide：「Compact sidebar charts omit hover tooltips」——
+  // 窄容器里浮层会被裁切、也没地方放，所以紧凑时直接不挂 hover。
+  const width = container.clientWidth || initialWidth;
+  const compact = core.isCompactChartWidth(width);
+  container.toggleClass?.("nautilus-log-compact", compact);
+  if (compact) container.classList.add("nautilus-log-compact");
+  else container.classList.remove("nautilus-log-compact");
+
+  if (compact) {
+    return { destroy() { /* 紧凑模式没挂任何监听 */ } };
+  }
+
+  // ── 悬停提示 ──────────────────────────────────────────────────────────
+  const tooltip = createTooltip(container);
+  const targets: TooltipTarget[] = [];
+
+  // 已渲染的切片：aria-label 已由渲染器写好，这里只取时间与文案。
+  const sliceEls = Array.from(
+    svg.querySelectorAll(".nautilus-log-event-slice-group, .nautilus-log-task-slice-group"),
+  );
+  allEvents.forEach((ev, i) => {
+    const el = sliceEls[i];
+    if (!el) return;
+    targets.push({
+      el,
+      startMinutes: ev.start,
+      endMinutes: ev.end,
+      lines: [
+        truncate(ev.text, 60),
+        `${minutesToTime(ev.start)}–${minutesToTime(ev.end)}`,
+        durationLabel(ev.end - ev.start),
+      ],
+    });
+  });
+
+  tooltip.attach(targets, {
+    centerX: center.x, centerY: center.y, radius: SNAIL_INNER_RADIUS,
+  });
+
+  return {
+    destroy() { tooltip.destroy(); },
+  };
+}
+
+/** 提示里的标题不该无限长；图例的 legendLenLimit 是给盘上用的，这里放宽一些。 */
+function truncate(text: string, max: number): string {
+  const t = text.replace(/^[-*+]\s*(\[[ xX]\]\s*)?/, "").trim();
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }

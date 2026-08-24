@@ -60,6 +60,8 @@ class NautilusLogView extends MarkdownRenderChild {
 
   onunload(): void {
     this.sectionRetryCancelled = true;
+    this.spiral?.destroy();
+    this.spiral = null;
     if (this.timer !== null) {
       window.clearInterval(this.timer);
       this.timer = null;
@@ -116,6 +118,7 @@ class NautilusLogView extends MarkdownRenderChild {
   }
 
   private sectionRetryCancelled = false;
+  private spiral: { destroy(): void } | null = null;
 
   /** 缓存命中则同步返回（PDF 导出走这条）；未命中返回 null，由调用方补一次异步。 */
   private locateCached(): { text: string; lineEnd: number } | null {
@@ -215,7 +218,10 @@ class NautilusLogView extends MarkdownRenderChild {
     // hourlyGridSegments / placeLabelTracks 等），这里只负责把它挂上 DOM。
     const chart = root.createDiv({ cls: 'nautilus-log-chart' });
     try {
-      renderSpiral(chart, plan, capacity, settings, nowMinutes());
+      // 🔴 上一次的 hover 监听必须先拆，否则每次重渲染（每分钟 tick + 文件改动）
+      //    都会再挂一层，很快就累积成泄漏。
+      this.spiral?.destroy();
+      this.spiral = renderSpiral(chart, plan, capacity, settings, nowMinutes());
     } catch (err) {
       // 图挂了不该带走整个块 —— 容量数字比图更重要，必须还能看见。
       chart.remove();
