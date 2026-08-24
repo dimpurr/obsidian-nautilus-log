@@ -1602,3 +1602,382 @@ button.nautilus-log-timing__plan-heading:focus-visible {
 .nautilus-log-toggle-btn.nautilus-log-playback-active {
   color: var(--text-accent);
 }
+
+/* ================================================================
+   Task E · execution panel — three views (src/exec-panel.ts)
+   Appended at the end of styles.css; existing rules untouched.
+   Sidebar-hosted counterpart of the topbar popover (nautilus-log-timing__*).
+   All classes are .nautilus-log-*; values reuse the shared --nl-exec-* palette.
+   ================================================================ */
+
+.nautilus-log-exec-panel {
+  --nl-exec-surface: #ffffff;
+  --nl-exec-text: #303744;
+  --nl-exec-muted: #7a8390;
+  color: var(--nl-exec-text, #303744);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  font-size: 12px;
+}
+
+/* header：Locate + 三视图 tabs */
+.nautilus-log-exec-header {
+  align-items: center;
+  border-bottom: 1px solid rgba(117, 126, 140, 0.16);
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  padding: 6px 8px;
+}
+
+.nautilus-log-exec-identity,
+.nautilus-log-exec-tab {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  box-shadow: none;
+  color: var(--nl-exec-muted, #7a8390);
+  cursor: pointer;
+  font: inherit;
+}
+
+.nautilus-log-exec-identity {
+  align-items: center;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 600;
+  gap: 5px;
+  height: 28px;
+  padding: 0 8px 0 6px;
+  white-space: nowrap;
+}
+
+.nautilus-log-exec-identity:hover,
+.nautilus-log-exec-identity:focus-visible,
+.nautilus-log-exec-tab:hover,
+.nautilus-log-exec-tab:focus-visible {
+  background: rgba(111, 120, 132, 0.08);
+  color: var(--nl-exec-text, #374151);
+  outline: none;
+}
+
+.nautilus-log-exec-header-divider {
+  align-self: center;
+  background: rgba(117, 126, 140, 0.18);
+  flex: 0 0 1px;
+  height: 20px;
+  margin: 0 8px;
+  width: 1px;
+}
+
+.nautilus-log-exec-tabs {
+  align-items: center;
+  display: flex;
+  gap: 2px;
+}
+
+.nautilus-log-exec-tab {
+  font-size: 12px;
+  font-weight: 600;
+  height: 28px;
+  padding: 0 9px;
+}
+
+.nautilus-log-exec-tab.is-active {
+  background: rgba(73, 82, 94, 0.09);
+  color: var(--nl-exec-text, #303744);
+}
+
+/* notice（runtime 推送的错误 / 提示） */
+.nautilus-log-exec-notice {
+  background: rgba(206, 129, 31, 0.08);
+  border-bottom: 1px solid rgba(206, 129, 31, 0.17);
+  color: #9c5e0b;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 8px 12px;
+}
+
+/* 视图列表 */
+.nautilus-log-exec-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px;
+}
+
+/* 任务行 */
+.nautilus-log-exec-row {
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 54px;
+  padding: 7px 6px 7px 10px;
+}
+
+.nautilus-log-exec-row:hover {
+  background: rgba(111, 120, 132, 0.055);
+}
+
+.nautilus-log-exec-row.is-focused {
+  background: rgba(20, 145, 190, 0.07);
+  border-color: rgba(20, 145, 190, 0.2);
+}
+
+.nautilus-log-exec-row.is-forgotten {
+  background: rgba(206, 129, 31, 0.075);
+  border-color: rgba(206, 129, 31, 0.3);
+}
+
+.nautilus-log-exec-row-copy {
+  min-width: 0;
+}
+
+.nautilus-log-exec-row-title {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--nl-exec-text, #303744);
+  cursor: pointer;
+  display: block;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow: hidden;
+  padding: 0;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
+}
+
+.nautilus-log-exec-row-title:hover,
+.nautilus-log-exec-row-title:focus-visible {
+  color: var(--nautilus-log-page-link, #137cbd);
+  outline: none;
+}
+
+.nautilus-log-exec-row-meta {
+  color: #8a929f;
+  font-size: 11px;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nautilus-log-exec-row-meta.is-warning {
+  color: #ad690f;
+  font-weight: 600;
+}
+
+.nautilus-log-exec-row-actions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.nautilus-log-exec-action {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  box-shadow: none;
+  color: var(--nl-exec-muted, #7a8390);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  height: 26px;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.nautilus-log-exec-action:hover,
+.nautilus-log-exec-action:focus-visible {
+  background: rgba(111, 120, 132, 0.1);
+  color: var(--nl-exec-text, #374151);
+  outline: none;
+}
+
+.nautilus-log-exec-action:disabled {
+  cursor: default;
+  opacity: 0.38;
+}
+
+.nautilus-log-exec-action.is-complete:hover,
+.nautilus-log-exec-action.is-complete:focus-visible {
+  background: rgba(20, 145, 190, 0.1);
+  color: #087ca9;
+}
+
+.nautilus-log-exec-action.is-delete-clock:hover,
+.nautilus-log-exec-action.is-delete-clock:focus-visible,
+.nautilus-log-exec-action.is-delete-clock.is-confirming {
+  background: rgba(209, 67, 67, 0.1);
+  color: #c73737;
+}
+
+/* 忘关计时器警告：只提示，绝不自动操作 */
+.nautilus-log-exec-forgotten {
+  background: rgba(206, 129, 31, 0.08);
+  border-left: 3px solid #d9822b;
+  border-radius: 3px;
+  color: #9c5e0b;
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 6px 2px 2px;
+  padding: 7px 10px;
+}
+
+/* 空态 */
+.nautilus-log-exec-empty {
+  color: #858e9b;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 24px 18px;
+  text-align: center;
+}
+
+/* Review：摘要 + 行 */
+.nautilus-log-exec-review-summary {
+  border-bottom: 1px solid rgba(117, 126, 140, 0.14);
+  padding: 10px 14px 9px;
+}
+
+.nautilus-log-exec-review-counts,
+.nautilus-log-exec-review-totals {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.nautilus-log-exec-review-counts {
+  color: #7f8895;
+  font-size: 11px;
+  gap: 16px;
+}
+
+.nautilus-log-exec-review-count strong,
+.nautilus-log-exec-review-total strong {
+  color: var(--nl-exec-text, #303744);
+  font-weight: 600;
+}
+
+.nautilus-log-exec-review-totals {
+  color: #8a929f;
+  font-size: 11px;
+  gap: 6px 15px;
+  margin-top: 5px;
+}
+
+.nautilus-log-exec-review-total.is-over strong,
+.nautilus-log-exec-review-variance.is-over {
+  color: #ad690f;
+}
+
+.nautilus-log-exec-review-row {
+  border-bottom: 1px solid rgba(117, 126, 140, 0.1);
+  min-width: 0;
+  padding: 9px 10px;
+}
+
+.nautilus-log-exec-review-row:last-child {
+  border-bottom: 0;
+}
+
+.nautilus-log-exec-review-row:hover {
+  background: rgba(111, 120, 132, 0.045);
+}
+
+.nautilus-log-exec-review-row-heading {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.nautilus-log-exec-review-title {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--nl-exec-text, #303744);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nautilus-log-exec-review-title:hover,
+.nautilus-log-exec-review-title:focus-visible {
+  color: var(--nautilus-log-page-link, #137cbd);
+  outline: none;
+}
+
+.nautilus-log-exec-review-state {
+  background: rgba(111, 120, 132, 0.08);
+  border-radius: 999px;
+  color: #858e9b;
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 18px;
+  padding: 0 7px;
+}
+
+.nautilus-log-exec-review-row.is-live .nautilus-log-exec-review-state {
+  background: rgba(20, 145, 190, 0.1);
+  color: #087ca9;
+}
+
+.nautilus-log-exec-review-row-metrics {
+  color: #8a929f;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 11px;
+  gap: 4px 14px;
+  margin-top: 4px;
+}
+
+.nautilus-log-exec-review-variance {
+  color: #68717e;
+  font-weight: 600;
+}
+
+/* 暗色主题 */
+.theme-dark .nautilus-log-exec-panel,
+.dark .nautilus-log-exec-panel {
+  --nl-exec-surface: #242a31;
+  --nl-exec-text: #e4e8ee;
+  --nl-exec-muted: #a0a8b4;
+}
+
+.theme-dark .nautilus-log-exec-review-row.is-live .nautilus-log-exec-review-state,
+.dark .nautilus-log-exec-review-row.is-live .nautilus-log-exec-review-state {
+  color: #66c7e8;
+}
+
+.theme-dark .nautilus-log-exec-review-total.is-over strong,
+.theme-dark .nautilus-log-exec-review-variance.is-over,
+.theme-dark .nautilus-log-exec-row-meta.is-warning,
+.theme-dark .nautilus-log-exec-forgotten,
+.dark .nautilus-log-exec-review-total.is-over strong,
+.dark .nautilus-log-exec-review-variance.is-over,
+.dark .nautilus-log-exec-row-meta.is-warning,
+.dark .nautilus-log-exec-forgotten {
+  color: #d89a46;
+}
