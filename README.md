@@ -9,8 +9,9 @@ into the time that remains, and overload never disappears from view.
 **A port of [Nautilus Log for Roam Research](https://github.com/404KSG/roam-nautilus-log)**
 — see [Credits](#credits) for the full lineage.
 
-> ⚠️ **Status: early development.** Nothing is installable yet. The scheduling
-> engine is being ported first; the spiral renderer follows.
+> ⚠️ **Status: early development.** Not yet packaged for distribution. The
+> scheduling engine, spiral renderer, capacity header, chart controls, sidebar
+> view, and the optional execution layer are implemented.
 
 ## What it gives you
 
@@ -30,8 +31,9 @@ fill suitable gaps from the current moment. Tasks that cannot fit appear in
 ## Plan format
 
 Unlike the Roam original — where the component reads its child blocks — this port
-keeps the plan **inside the code block**, because Obsidian code blocks have
-siblings rather than children:
+keeps the plan **as ordinary Markdown below the code block**, because Obsidian
+code blocks have siblings rather than children. The block itself holds the
+per-day overrides:
 
 ````markdown
 ```nautilus
@@ -90,16 +92,57 @@ Events read best as list items too, so they line up with tasks:
 Bare lines (`08:30-09:30 Morning routine`) still parse, but mixing the two looks
 inconsistent once rendered.
 
+## Execution layer
+
+The optional **execution layer** records how the plan actually went. It is **off by
+default**: the setting tab keeps its four sub-settings hidden until you turn on
+**Actual time tracking**.
+
+When enabled, the first ```nautilus block on today's Daily Note becomes the
+**Primary Plan**, and the execution panel offers three views:
+
+| View | Purpose |
+| --- | --- |
+| Timing | The current Timing Line and recently closed tasks |
+| Plan | Unfinished direct-child tasks from the Primary Plan |
+| Review | Today's Planned vs Actual |
+
+Time is written into your note next to the task as Org-style CLOCK lines under a
+`LOGBOOK::` drawer:
+
+```markdown
+- [ ] Write report 45m
+    - LOGBOOK::
+        - CLOCK: [2026-08-24 Mon 10:00]--[2026-08-24 Mon 10:18] => 0:18
+```
+
+- **Only an unfinished task can own the Timing Line**, and only one CLOCK runs at a
+  time — switching tasks closes the previous CLOCK and opens the next at the same
+  instant.
+- With **Timing line in sidebar** on, Clock In also fronts the active task in the
+  right sidebar.
+- **Recent** keeps the last 45 minutes of closed work (Recent retention minutes;
+  `0` disables).
+- The **Pomodoro threshold** (45 min) changes only the live signal when reached —
+  it never stops work. With no task CLOCK active, the panel header starts a
+  standalone count-up POMO that writes nothing and touches neither Actual, Planned,
+  Review, nor the spiral; starting a task CLOCK clears it, because CLOCK always has
+  priority.
+- The **forgotten-timer warning** (120 min) flags a CLOCK left running that long.
+  It warns — it never stops or deletes a CLOCK. `0` disables it.
+- Actual time is never capped at Planned. Without an explicit completion anchor
+  (`dHH:MM`) or an Actual end, Nautilus Log does not invent history.
+
 ## Differences from the Roam original
 
 | | Roam original | This port |
 |---|---|---|
 | Component | `{{[[roam/render]]:((uid))}}` | ` ```nautilus ` code block |
-| Plan source | child blocks | code block contents |
-| Task identity | `:block/uid` | `filepath:line` (`^blockid` only when needed) |
+| Plan source | child blocks | Markdown below the block (block holds per-day overrides) |
+| Task identity | `:block/uid` | `filepath:line` |
 | Reactivity | `roam.datascript.reactive` | `metadataCache` events |
 | Renderer | ClojureScript / Reagent (SCI) | TypeScript / SVG |
-| Panel mount | DOM-scraped Roam topbar | `addStatusBarItem()` |
+| Panel mount | DOM-scraped Roam topbar | Obsidian right-sidebar ItemView (`nautilus-log-view`) |
 | iCal subscriptions | dropped upstream in gen 3 | not planned |
 
 The scheduling and capacity engine is reused **unchanged** from the Roam version.

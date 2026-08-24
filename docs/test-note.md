@@ -155,3 +155,109 @@ end: 23
 
 💡 不用手敲锚点：把光标放在任务行，`Cmd+P` → **勾选并打完成时间戳**
 （默认没有快捷键，可在 设置 → 快捷键 里自己绑）。
+
+---
+
+## 12. 执行层：总开关（默认关，开启后才出现 4 项执行层设置）
+
+设置 → **Actual time tracking** 默认关闭。关闭时设置页只有前 6 项基础设置；
+打开后出现 4 项执行层设置：
+
+- Timing line in sidebar（默认开）
+- Pomodoro minutes（默认 45）
+- Recent retention minutes（默认 45）
+- Forgotten timer warning minutes（默认 120）
+
+预期：开关来回切换时，下面 4 项随之出现 / 消失。
+
+---
+
+## 13. 首次 Clock In 自动建 LOGBOOK 抽屉，写入未闭合 CLOCK
+
+```naut
+```
+- [ ] 写周报 45m
+- [ ] 回邮件 30m
+
+把光标放在「写周报」，在计划上下文 / 执行面板 **Clock In**。
+
+预期：
+- 任务行下方自动出现缩进的 `- LOGBOOK::` 抽屉（第一次没有也会自动建）
+- 抽屉里写入一条**未闭合** CLOCK：`- CLOCK: [YYYY-MM-DD 星期 HH:MM]`（只有开始戳）
+- 任务行仍是 `- [ ]`，其它行不受影响
+- 之后对第二条任务 Clock In，Timing Line 会切换过去（见场景 16）
+
+---
+
+## 14. Clock Out 补上结束时刻与时长
+
+接场景 13，对运行中的 CLOCK **Clock Out**。
+
+预期：该行变成
+
+```markdown
+- CLOCK: [2026-08-24 Mon 10:00]--[2026-08-24 Mon 10:18] => 0:18
+```
+
+格式 `[YYYY-MM-DD 星期 HH:MM]--[...] => M:MM`，缩进与列表标记原样保留
+（`- CLOCK: …` 不能被写成裸 `CLOCK: …`，否则会破坏列表结构）。
+
+---
+
+## 15. 只有未完成任务能拥有 Timing Line
+
+```naut
+```
+- [x] 已完成的任务 40m d10:00
+- [ ] 未完成的任务 30m
+
+对已完成那条 Clock In。
+
+预期：操作被拒绝（报错 / 不落 CLOCK），Timing Line 不落在已完成任务上。
+
+---
+
+## 16. 同一时刻只有一个 CLOCK
+
+```naut
+```
+- [ ] 任务 A 45m
+- [ ] 任务 B 30m
+
+先 Clock In 任务 A，等一分钟，再 Clock In 任务 B。
+
+预期：
+- 任务 A 的 CLOCK 自动闭合（结束时刻 = B 开始的同一瞬间）
+- 任务 B 开一条新的未闭合 CLOCK
+- 文件里**同时只有一条**未闭合 CLOCK
+
+---
+
+## 17. 独立番茄钟：不写块，任务 CLOCK 永远优先
+
+不 Clock In 任何任务，在面板表头点 stopwatch 启动独立 POMO。
+
+预期：
+- 表头出现正计时（POMO），随时间增长
+- 打开笔记：**没有任何新块**被写入
+- Plan / Actual / Review / 螺旋都不受影响
+
+随后对某个任务 Clock In。
+
+预期：独立 POMO 立即消失，被任务 CLOCK 取代——CLOCK 永远优先。
+
+---
+
+## 18. 忘关警告：只警告，不停止不删除
+
+把 **Forgotten timer warning minutes** 临时调小（比如 1），Clock In 一个任务后
+不动它，等超过阈值。
+
+预期：
+- 执行层出现「Check CLOCK」警告样式
+- CLOCK **仍在运行**——不会被自动停止，也不会被删除
+- 恢复 `0` 即关闭警告
+
+💡 番茄钟阈值（Pomodoro minutes）**没有** `0 = off` 的语义：滑到 0 会被当作
+未设置、回落到 45。只有 Recent retention 与 Forgotten timer warning 的 `0`
+才是真关闭。
