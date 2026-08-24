@@ -1587,3 +1587,18 @@ button.nautilus-log-timing__plan-heading:focus-visible {
 
 /* 紧凑模式：窄容器（侧栏）里不显示浮层，图例也收敛 */
 .nautilus-log-compact .nautilus-log-tooltip { display: none !important; }
+
+/* ================================================================
+   Task C · chart control buttons (src/controls.ts)
+   Appended at the end of styles.css; existing rules untouched.
+   ================================================================ */
+
+/* 眼睛开启「显示已完成」时按钮进入活动态，用强调色标出 */
+.nautilus-log-toggle-btn--active {
+  color: var(--text-accent);
+}
+
+/* 回放进行中：播放按钮变为「停止」，同样用强调色标出 */
+.nautilus-log-toggle-btn.nautilus-log-playback-active {
+  color: var(--text-accent);
+}
