@@ -3,3 +3,6 @@ main.js
 *.js.map
 data.json
 .DS_Store
+
+# 测试用 esbuild 中间产物（各测试文件自行生成/清理）
+test/.*.cjs
