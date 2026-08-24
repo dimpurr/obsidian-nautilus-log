@@ -77,7 +77,12 @@ export function taskDescription(line: string, descLength: number): string {
     .replace(LIST_MARKER_RE, '')
     .replace(DONE_AT_RE, '')
     .trim();
-  return logCore.truncateTextToWidth({ text: description, maxWidth: descLength });
+  // 🔴 maxWidth 非法（0 / NaN / undefined）时 truncateTextToWidth 会返回单个 "…"
+  //    —— 正文整个丢掉，界面上只剩省略号，且【不报错】。
+  //    settings 若来自旧版 data.json 或被覆盖成非法值就会这样，必须兜住。
+  const width = Number(descLength);
+  if (!Number.isFinite(width) || width <= 0) return description;
+  return logCore.truncateTextToWidth({ text: description, maxWidth: width });
 }
 
 function lineUid(sourcePath: string, lineIndex: number): LineId {

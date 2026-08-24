@@ -136,3 +136,18 @@ test('overnight window 21:00-02:00 normalizes end to 1560, not 120', () => {
   assert.equal(schedule.startMinutes, 1260);
   assert.equal(schedule.endMinutes, 1560);
 });
+
+test('🔴 descLength 非法时不得吞掉正文（只剩 "…"）', () => {
+  // truncateTextToWidth 在 maxWidth 为 0/NaN/undefined 时返回单个 "…"，
+  // 且不报错 —— 界面上表现为 `· ... 30m`，正文整个消失。
+  for (const w of [0, NaN, undefined, -5]) {
+    const out = parser.taskDescription('- [ ] Nautilus Log 插件完善 30m', w);
+    assert.ok(out.length > 1 && out !== '…', `descLength=${w} 时正文被吞: ${out}`);
+    assert.match(out, /Nautilus Log/);
+  }
+});
+
+test('descLength 正常时照常截断', () => {
+  assert.equal(parser.taskDescription('- [ ] Nautilus Log 插件完善 30m', 22), 'Nautilus Log 插件完善');
+  assert.match(parser.taskDescription('- [ ] 办理 EE 路由器 final bill / 研究新家网络', 22), /…$/);
+});
