@@ -503,3 +503,174 @@ test("destroy() unsubscribes; later snapshots do not re-render", () => {
   runtime.push(focusedSnapshot({ revision: 999 }));
   assert.equal(container.innerHTML, before, "no re-render after destroy");
 });
+
+/* ------------------------------------------------------------------ */
+/* Tests — Plan sections / capacity strip / duration fallback          */
+/*                                                                     */
+/* These cover what the hand-written panel silently dropped when the   */
+/* vendored `timing-topbar.js` was re-implemented instead of reused    */
+/* (PORTING-DECISIONS.md §D3, parity audit §P1-2). The data comes from */
+/* `planSnapshot.execution`, which the vendored runtime has always     */
+/* produced and the panel never read.                                  */
+/* ------------------------------------------------------------------ */
+
+/** Snapshot whose planSnapshot carries the runtime's execution projection. */
+function scheduledSnapshot(overrides = {}) {
+  const base = focusedSnapshot();
+  const write = { ...base.planSnapshot.tasks[0], start: 12 * 60, end: 12 * 60 + 45 };
+  const standup = { ...base.planSnapshot.tasks[1] };
+  return {
+    ...base,
+    planSnapshot: {
+      ...base.planSnapshot,
+      execution: {
+        scheduledTasks: [write],
+        overflowTasks: [standup],
+        // capacityMetrics inputs — capacitySummary reads these three groups.
+        availableMinutes: 300,
+        totalAvailableMinutes: 600,
+        demandMinutes: 60,
+        fixedMinutes: 0,
+        totalFixedMinutes: 0,
+        overloadMinutes: 0,
+        unplacedMinutes: 0,
+      },
+    },
+    ...overrides,
+  };
+}
+
+test("Plan splits into Scheduled / Unscheduled sections, each with a count", () => {
+  makeDom();
+  const runtime = makeRuntime(scheduledSnapshot());
+  const { container, panel } = mount(runtime);
+  findTab(container, "Plan").click();
+
+  const headings = [...container.querySelectorAll(".nautilus-log-exec-plan-label")]
+    .map((n) => n.textContent);
+  assert.deepEqual(headings, ["Scheduled today · 1", "▸ Unscheduled today · 1"]);
+
+  // Unscheduled starts collapsed: only the scheduled row is rendered.
+  const rows = container.querySelectorAll(".nautilus-log-exec-row");
+  assert.equal(rows.length, 1, "collapsed Unscheduled contributes no rows");
+  assert.ok(rows[0].classList.contains("is-scheduled"));
+
+  const disclosure = container.querySelector(".nautilus-log-exec-plan-heading.is-collapsible");
+  assert.equal(disclosure.getAttribute("aria-expanded"), "false");
+  disclosure.click();
+  assert.equal(
+    container.querySelector(".nautilus-log-exec-plan-heading.is-collapsible").getAttribute("aria-expanded"),
+    "true",
+  );
+  const expanded = container.querySelectorAll(".nautilus-log-exec-row");
+  assert.equal(expanded.length, 2, "expanding Unscheduled reveals its row");
+  assert.ok([...expanded].some((r) => r.classList.contains("is-unscheduled")));
+
+  panel.destroy();
+});
+
+test("scheduled rows carry the Today HH:MM–HH:MM · Remaining/Planned meta", () => {
+  makeDom();
+  const runtime = makeRuntime(scheduledSnapshot());
+  const { container, panel } = mount(runtime);
+  findTab(container, "Plan").click();
+
+  const meta = container.querySelector(".nautilus-log-exec-row.is-scheduled .nautilus-log-exec-row-meta");
+  // remainingMinutes 20 < plannedMinutes 45 => both halves are shown.
+  assert.equal(meta.textContent, "Today 12:00–12:45 · Remaining 20m · Planned 45m");
+  // The focused task is also the scheduled one: its meta must NOT be the
+  // stopwatch, and must not be claimed by the per-second live updater.
+  assert.equal(meta.classList.contains("is-live"), false);
+
+  const unscheduledMeta = () => container
+    .querySelector(".nautilus-log-exec-row.is-unscheduled .nautilus-log-exec-row-meta").textContent;
+  container.querySelector(".nautilus-log-exec-plan-heading.is-collapsible").click();
+  assert.equal(unscheduledMeta(), "Unscheduled today · Planned 15m");
+
+  panel.destroy();
+});
+
+test("capacity strip is present on all three tabs", () => {
+  makeDom();
+  const runtime = makeRuntime(scheduledSnapshot());
+  const { container, panel } = mount(runtime);
+
+  const stripText = () => {
+    const strip = container.querySelector(".nautilus-log-exec-capacity");
+    assert.ok(strip, "capacity strip rendered");
+    return strip.textContent;
+  };
+  // planned = demandMinutes, status = free (availableMinutes - demand),
+  // left = free / totalAvailableMinutes.
+  assert.equal(stripText(), "1h planned · 4h free · 40% left");
+  findTab(container, "Plan").click();
+  assert.equal(stripText(), "1h planned · 4h free · 40% left");
+  findTab(container, "Review").click();
+  assert.equal(stripText(), "1h planned · 4h free · 40% left");
+
+  panel.destroy();
+});
+
+test("no execution projection => no capacity strip, Plan stays flat", () => {
+  makeDom();
+  const runtime = makeRuntime(focusedSnapshot()); // no planSnapshot.execution
+  const { container, panel } = mount(runtime);
+  assert.equal(container.querySelector(".nautilus-log-exec-capacity"), null);
+  findTab(container, "Plan").click();
+  assert.equal(container.querySelectorAll(".nautilus-log-exec-plan-section").length, 0);
+  assert.equal(container.querySelectorAll(".nautilus-log-exec-row").length, 2);
+  panel.destroy();
+});
+
+test("untimed tasks fall back to ctx.todoDuration, not a hard-coded 15", () => {
+  makeDom();
+  const focused = {
+    clockUid: "Journal/2026-08-24.md:5",
+    taskUid: "Journal/2026-08-24.md:3",
+    taskString: "{{TODO}} Untimed chore", // no duration token
+    title: "Untimed chore",
+    start: new Date(2026, 7, 24, 11, 30),
+    running: true,
+    status: "TODO",
+  };
+  const snapshot = focusedSnapshot();
+  const runtime = makeRuntime({
+    ...snapshot,
+    entries: [focused],
+    activeWork: { focused, recent: [], items: [focused], count: 1, windowMinutes: 45 },
+  });
+  const { container, panel } = mount(runtime, { todoDuration: 30 });
+
+  const row = container.querySelector(".nautilus-log-exec-row.is-focused");
+  assert.equal(row.dataset.plannedMinutes, "30", "reads todo-duration from the context");
+  assert.match(row.querySelector(".nautilus-log-exec-row-meta").textContent, /Planned 30m/);
+
+  panel.destroy();
+});
+
+test("a running task's progress reduces its remaining minutes (d50%)", () => {
+  makeDom();
+  const focused = {
+    clockUid: "Journal/2026-08-24.md:5",
+    taskUid: "Journal/2026-08-24.md:3",
+    taskString: "{{TODO}} Write report 45m d50%",
+    title: "Write report",
+    start: new Date(2026, 7, 24, 11, 30),
+    running: true,
+    status: "TODO",
+  };
+  const snapshot = focusedSnapshot();
+  const runtime = makeRuntime({
+    ...snapshot,
+    entries: [focused],
+    activeWork: { focused, recent: [], items: [focused], count: 1, windowMinutes: 45 },
+  });
+  const { container, panel } = mount(runtime);
+
+  const row = container.querySelector(".nautilus-log-exec-row.is-focused");
+  assert.equal(row.dataset.plannedMinutes, "45");
+  // 45m at 50% done => 23m remaining (timing-core.js:352 rounding), never 0.
+  assert.equal(row.dataset.remainingMinutes, "23");
+
+  panel.destroy();
+});
