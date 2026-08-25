@@ -672,12 +672,24 @@ export function readPrimaryPlan(date = new Date(), fallbackMinutes = 15): Primar
   const { body, startLine } = extractPlanBody(lines.join('\n'), fenceClose);
   const planUid = `${path}:${fenceClose}`;
   const bodyLines = body.length ? body.split('\n') : [];
-  const rows: PlanRow[] = bodyLines.map((raw, k) => ({
-    uid: `${path}:${startLine + k}`,
-    string: normalizeTaskString(raw),
-    order: k,
-    parentUid: planUid,
-  }));
+  // 🔴 `parentUid` 必须按【缩进】还原层级，不能一律填 planUid。
+  //    上游 projectPlan / projectReviewTasks / projectFixedEvents 三处都靠
+  //    `row.parentUid === planUid` 只取【直接子级】（文案就叫 direct-child）。
+  //    Roam 里 block 自带真实 parentUid，过滤天然成立；这边把正文拍平的话
+  //    过滤恒为真 => 嵌套子步骤会冒进 Plan/Review 面板，还被套上 15m 默认
+  //    预算，而容量条根本没算它们 —— 两个数字自相矛盾。螺旋图那侧
+  //    （parser.ts 的 baseIndent）早就跳过子项了，执行层必须跟上。
+  const uids = bodyLines.map((_, k) => `${path}:${startLine + k}`);
+  const indents = bodyLines.map((raw) => leadingSpaces(raw));
+  const rows: PlanRow[] = bodyLines.map((raw, k) => {
+    // 父 = 往前最近的一行【缩进更小】的非空行；找不到就是计划块本身。
+    let parentUid = planUid;
+    for (let j = k - 1; j >= 0; j -= 1) {
+      if (!bodyLines[j].trim()) continue;
+      if (indents[j] < indents[k]) { parentUid = uids[j]; break; }
+    }
+    return { uid: uids[k], string: normalizeTaskString(raw), order: k, parentUid };
+  });
   return {
     pageTitle,
     pageUid: path,
