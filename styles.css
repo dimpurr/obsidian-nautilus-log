@@ -775,7 +775,14 @@
   }
 }
 
+/* P1-3：进度网点叠层（上游 dot-pattern）。纯装饰 —— 命中测试仍归切片本体，
+ * 否则半透明网点会抢走 hover。 */
+.nautilus-log-slice-progress {
+  pointer-events: none;
+}
+
 .nautilus-log-playback-active .nautilus-log-slice,
+.nautilus-log-playback-active .nautilus-log-slice-progress,
 .nautilus-log-playback-active .nautilus-log-slice-group text,
 .nautilus-log-playback-active .nautilus-log-link-line {
   opacity: 0;

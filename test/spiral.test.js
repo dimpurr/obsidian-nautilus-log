@@ -22,10 +22,30 @@ const esbuild = require("esbuild");
 /* Minimal DOM shim                                                    */
 /* ------------------------------------------------------------------ */
 
+/* 🔴 style 夹具必须和真实 CSSStyleDeclaration 一样【不宽容】：
+ *    自定义属性（`--pb-delay`）只能经 setProperty 设置，直接赋值静默无效。
+ *    用普通对象当 style 会让 `style['--pb-delay']=x` 看起来成功 ——
+ *    正是「夹具比现实更理想 => 真机才炸」那一类（PORTING-DECISIONS §8）。 */
+function makeStyleShim() {
+  const store = {};
+  const setProperty = (name, value) => { store[name] = String(value); };
+  return new Proxy(store, {
+    set(target, key, value) {
+      if (typeof key === "string" && key.startsWith("--")) return true;   // 静默丢弃
+      target[key] = String(value);
+      return true;
+    },
+    get(target, key) {
+      if (key === "setProperty") return setProperty;
+      return target[key];
+    },
+  });
+}
+
 function makeElement(tag) {
   const attrs = {};
   const children = [];
-  const style = {};
+  const style = makeStyleShim();
   return {
     nodeType: 1,
     tagName: tag,
@@ -113,7 +133,7 @@ new Function("module", "exports", "require", result.outputFiles[0].text)(
   moduleShim.exports,
   require,
 );
-const { renderSpiral } = moduleShim.exports;
+const { renderSpiral, TOOLTIP_ANCHOR_RADIUS } = moduleShim.exports;
 
 /* ------------------------------------------------------------------ */
 /* Fixtures                                                            */
@@ -141,7 +161,8 @@ const capacity = {
   totalFixedMinutes: 0,
   burningBucket: null,
   scheduledTasks: [
-    { uid: "tk-1", string: "Write report", duration: 60, done: false, start: 540, end: 600 },
+    // 原始整行 markdown（复选框 + 时长 token）—— P1-1 要求盘上只显示清洗后的正文。
+    { uid: "tk-1", string: "- [ ] Write report 60m", duration: 60, done: false, start: 540, end: 600 },
     { uid: "tk-2", string: "Read", duration: 30, done: false, start: 600, end: 630 },
     { uid: "tk-3", string: "Email", duration: 45, done: false, start: 660, end: 705 },
   ],
@@ -172,19 +193,144 @@ test("renderSpiral produces an <svg> with one group per event and task", () => {
   assert.match(html, /<svg/, "container should contain an <svg>");
   assert.match(html, /nautilus-log-svg/, "svg should carry the .nautilus-log-svg class");
 
-  const eventSlices = (html.match(/class="nautilus-log-event-slice-group/g) || []).length;
-  const taskSlices = (html.match(/class="nautilus-log-task-slice-group/g) || []).length;
+  // P1-8：上游对事件与任务【用同一个类名】(component.cljs:1080)。
+  const groups = (html.match(/class="nautilus-log-event-slice-group/g) || []).length;
+  assert.strictEqual(
+    groups,
+    plan.events.length + capacity.scheduledTasks.length,
+    "每个事件 / 每个已排程任务各一个切片组",
+  );
+});
 
-  assert.strictEqual(
-    eventSlices,
-    plan.events.length,
-    "event slice groups should equal the number of fixed events",
-  );
-  assert.strictEqual(
-    taskSlices,
-    capacity.scheduledTasks.length,
-    "task slice groups should equal the number of scheduled tasks",
-  );
+/* ------------------------------------------------------------------ */
+/* P1-1 盘上标签必须是清洗后的文本                                     */
+/* ------------------------------------------------------------------ */
+
+test("P1-1 引线标签用清洗后的描述，不是整行 markdown", () => {
+  globalThis.document = documentShim;
+  const container = makeContainer();
+  renderSpiral(container, plan, capacity, settings, 600);
+  const html = container.innerHTML;
+
+  assert.match(html, />Write report</,
+    "标签应是 `Write report`（复选框与时长 token 都已剥掉）");
+  assert.ok(!/Write report 60m/.test(html),
+    "时长 token 不该出现在盘上");
+  assert.ok(!/\[ \]/.test(html),
+    "复选框标记不该出现在盘上 —— 这正是截图里那条 `- [x] …`");
+});
+
+/* ------------------------------------------------------------------ */
+/* P1-3 进度网点叠层                                                   */
+/* ------------------------------------------------------------------ */
+
+test("P1-3 progress>0 的任务叠一层网点，=0 的不叠", () => {
+  globalThis.document = documentShim;
+  const withProgress = {
+    ...capacity,
+    scheduledTasks: [
+      { uid: "p-1", string: "- [ ] Half done 60m", duration: 60, done: false,
+        progress: 50, start: 540, end: 600 },
+      { uid: "p-2", string: "- [ ] Untouched 30m", duration: 30, done: false,
+        start: 600, end: 630 },
+    ],
+  };
+  const container = makeContainer();
+  renderSpiral(container, { events: [], tasks: [], malformed: [] }, withProgress, settings, 600);
+  const html = container.innerHTML;
+
+  assert.match(html, /<pattern id="nautilus-log-dot-pattern"/,
+    "网点图案的 <defs> 必须发出来，否则 url(#…) 解析不到");
+  const dots = (html.match(/nautilus-log-slice-progress/g) || []).length;
+  assert.strictEqual(dots, 1, "只有 progress>0 的那一条该叠网点");
+  assert.match(html, /fill="url\(#nautilus-log-dot-pattern\)"/,
+    "叠层必须用网点图案填充");
+});
+
+/* ------------------------------------------------------------------ */
+/* P1-5 回放逐片动画                                                   */
+/* ------------------------------------------------------------------ */
+
+test("P1-5① playback-active 挂在 <svg> 上（不是按钮）", () => {
+  globalThis.document = documentShim;
+  const idle = makeContainer();
+  renderSpiral(idle, plan, capacity, settings, 600);
+  assert.ok(!/nautilus-log-playback-active/.test(idle.innerHTML),
+    "没在回放时不该有这个类");
+
+  const playing = makeContainer();
+  renderSpiral(playing, plan, capacity, settings, 600, { playbackMinute: 700 });
+  assert.match(playing.innerHTML, /class="nautilus-log-svg nautilus-log-playback-active"/,
+    "styles.css:778 要求它是 .nautilus-log-slice 的【祖先】—— 只能在 <svg> 上");
+});
+
+test("P1-5② 每个切片带 --pb-delay（起始分钟 / 1440 * 6 秒）", () => {
+  globalThis.document = documentShim;
+  const container = makeContainer();
+  renderSpiral(container, plan, capacity, settings, 600, { playbackMinute: 700 });
+  const html = container.innerHTML;
+  // tk-1 起于 540 => 540/1440*6 = 2.25s。三处都要有（上游 component.cljs:861/872/882），
+  // 因为 styles.css:778-780 分别对 .nautilus-log-slice / -slice-group text / -link-line 生效。
+  assert.match(html, /<path[^>]*class="nautilus-log-slice"[^>]*style="[^"]*--pb-delay:2\.25s/,
+    "切片本体的 animation-delay 恒为 0 就没有「逐片亮起」，只是一起淡入");
+  assert.match(html, /<g class="nautilus-log-slice-group" style="--pb-delay:2\.25s"/,
+    "引线与标签也要错峰，否则文字先于切片全部出现");
+  // ev-1 起于 480 => 2s
+  assert.match(html, /--pb-delay:2s/, "不同起始时间必须给出不同的延迟");
+});
+
+/* ------------------------------------------------------------------ */
+/* P1-8 类名对齐 / 紧凑模式 a11y / 盘心第一行                          */
+/* ------------------------------------------------------------------ */
+
+test("P1-8 任务切片不再用自造类名，且宽容器下带 --interactive", () => {
+  globalThis.document = documentShim;
+  const container = makeContainer();
+  renderSpiral(container, plan, capacity, settings, 600);
+  const html = container.innerHTML;
+  assert.ok(!/nautilus-log-task-slice-group/.test(html),
+    "styles.css 里这个名字 0 条规则 —— 任务切片的 hover/focus 高亮会全部落空");
+  assert.match(html, /nautilus-log-event-slice-group--interactive/,
+    "hover 可用时上游加 --interactive（component.cljs:1081）");
+});
+
+test("P1-8 紧凑模式不挂 tabindex/role（没有浮层可显示）", () => {
+  globalThis.document = documentShim;
+  const container = makeContainer();
+  container.clientWidth = 360;   // <= 520 => isCompactChartWidth
+  renderSpiral(container, plan, capacity, settings, 600);
+  const html = container.innerHTML;
+  assert.ok(!/nautilus-log-event-slice-group--interactive/.test(html),
+    "紧凑时 hover 被关掉，不该再宣称 interactive");
+  assert.ok(!/<g class="nautilus-log-event-slice-group[^"]*"[^>]*tabindex/.test(html),
+    "无条件 tabindex 会给键盘用户留一串停不下来的空焦点");
+});
+
+test("P1-8 盘心第一行是页名（逗号切两段、每段截 16 字）", () => {
+  globalThis.document = documentShim;
+  const blank = makeContainer();
+  renderSpiral(blank, plan, capacity, settings, 600);
+  assert.match(blank.innerHTML, /nautilus-log-center-date/, "盘心分组仍在");
+
+  const named = makeContainer();
+  renderSpiral(named, plan, capacity, settings, 600, { pageTitle: "2026-08-25" });
+  assert.match(named.innerHTML, />2026-08-25</, "页名必须真的画出来（原先恒为空串）");
+
+  const long = makeContainer();
+  renderSpiral(long, plan, capacity, settings, 600,
+    { pageTitle: "0123456789ABCDEFGH,second" });
+  assert.match(long.innerHTML, />0123456789ABCDEF</,
+    "上游 len-central-legend = 16，且只取逗号前的第一段");
+  assert.ok(!/second/.test(long.innerHTML), "逗号后的第二段不进第一行");
+});
+
+/* ------------------------------------------------------------------ */
+/* P1-9① tooltip 锚点半径                                             */
+/* ------------------------------------------------------------------ */
+
+test("P1-9① hover 锚点半径 = 8 + 最大外径，不是内圈 50", () => {
+  assert.strictEqual(TOOLTIP_ANCHOR_RADIUS, 158,
+    "上游 component.cljs:427 传 (+ 8 max-outer-radius)；传内圈 50 会把提示锚在盘面【内部】");
 });
 
 test("renderSpiral still emits an <svg> for an empty plan", () => {

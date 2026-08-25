@@ -64,6 +64,14 @@ export function setStyle(
 ): void {
   const style = (el as AnyElement).style;
   for (const [property, value] of Object.entries(styles)) {
+    // 🔴 P1-5②：自定义属性（`--pb-delay`）【只能】走 setProperty。
+    //    真实 CSSStyleDeclaration 上 `style['--x'] = v` 是静默无效的 —— 不报错、
+    //    读回来还是空，正是「测试夹具比现实更宽容」那一类：测试里的 style 是
+    //    普通对象，赋值当然成功，于是回放动画在真机上永远不动。
+    if (property.startsWith("--") && typeof style?.setProperty === "function") {
+      style.setProperty(property, String(value));
+      continue;
+    }
     (style as unknown as Record<string, unknown>)[property] = String(value);
   }
 }

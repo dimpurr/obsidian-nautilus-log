@@ -17,6 +17,10 @@
 import * as logCoreModule from "./vendor/log-core";
 import { createSvg } from "./svg-util";
 import { createTooltip, type TooltipTarget } from "./tooltip";
+// P1-1：盘上标签必须用【清洗后】的文本，不能是整行原始 markdown。
+// 上游的清洗链是 parse-URLs + parse-rest（component.cljs:638-665），切片只用
+// 清洗结果 `:description`。本移植的等价物是 parser.ts 的 taskDescription()。
+import { taskDescription } from "./parser";
 import type { DayState } from "./daystate";
 import type {
   Capacity,
@@ -130,6 +134,11 @@ const SNAIL_BLUEPRINT_OUTER_RADII: number[] = [
   68, 66, 64, 62,
 ];
 const SNAIL_INNER_RADIUS = 50 * SNAIL_SCALER;
+/* P1-9①：hover 浮层的锚点半径。上游 component.cljs:427 传的是
+ * `8 + 最大外径`（= 158），即把锚点放到盘【外】8px；传内圈 50 会让锚点落在
+ * 盘面内部，提示直接盖在切片上。 */
+export const TOOLTIP_ANCHOR_RADIUS =
+  8 + Math.max(...SNAIL_BLUEPRINT_OUTER_RADII) * SNAIL_SCALER;
 
 /* Colors are CSS custom properties so W2 owns the palette. */
 const SPIRAL_TEMPLATE_COLOR = "var(--nautilus-log-spiral)";
@@ -283,6 +292,36 @@ function durationLabel(minutes: number): string {
     `${Math.max(0, Math.floor(minutes || 0))}m`;
 }
 
+/* P1-1：把一行原始 markdown 变成盘上要显示的描述。
+ * 🔴 第二参传 0 是【有意的】—— taskDescription 的 descLength 语义是【字符数】
+ *    (parser.ts:97 那段注释)，而这里的截断由 renderSlice 用像素宽度另做一次
+ *    (legendLenLimit * FONT_SIZE / RECT_WIDTH_COEF)。传 descLength 会截两遍、
+ *    产出 "标题……"。0（<=0）在 parser 里就是「只清洗、不截断」。 */
+function cleanLabel(line: string): string {
+  return taskDescription(line, 0) || line;
+}
+
+/* P1-5②：逐片入场的错峰延迟。上游 component.cljs:861/872/882 三处都设，
+ * 公式一样：切片起始分钟 / 1440 * 6 秒。styles.css:783 的 animation-delay
+ * 读的就是它 —— 不设 => 恒为 0 => 所有切片同时出现 = 没有回放动画。 */
+function playbackDelay(startMinute: number | undefined): string {
+  return `${((startMinute || 0) / 1440) * 6}s`;
+}
+
+/* P1-3：已完成比例的网点叠层（上游 component.cljs:855-866 的 dot-pattern）。
+ * 上游把 <defs> 塞进每个切片里、id 固定为 "dot-pattern"；这里只在 <svg> 根发一次。
+ * 同一页多张图会出现同 id，但内容逐字相同、url(#id) 取文档首个 —— 无影响。 */
+const DOT_PATTERN_ID = "nautilus-log-dot-pattern";
+
+function dotPatternDefs(): Element {
+  return createSvg("defs", {},
+    createSvg("pattern", {
+      id: DOT_PATTERN_ID, width: "4", height: "4", patternUnits: "userSpaceOnUse",
+    },
+      createSvg("circle", { r: "0.5", cx: "1", cy: "1", fill: "gray" }),
+      createSvg("circle", { r: "0.5", cx: "5", cy: "5", fill: "gray" })));
+}
+
 /* ------------------------------------------------------------------ */
 /* Render-ready rows.                                                  */
 /* ------------------------------------------------------------------ */
@@ -407,6 +446,8 @@ interface SliceOptions {
   taskEndMin?: number;
   past?: boolean;
   timestamp?: string;
+  /** P1-3：0-100。>0 时在切片上叠一层网点（上游 non-zero-progress?）。 */
+  progress?: number;
 }
 
 function renderSlice(opts: SliceOptions): Element {
@@ -416,6 +457,8 @@ function renderSlice(opts: SliceOptions): Element {
     text, strokeDasharray, fontWeight, done,
     taskStartMin, taskEndMin, past, timestamp,
   } = opts;
+  const progress = opts.progress || 0;
+  const pbDelay = playbackDelay(taskStartMin);
 
   const startRadians = angleToRad(startAngle);
   const endRadians = angleToRad(endAngle);
@@ -475,16 +518,30 @@ function renderSlice(opts: SliceOptions): Element {
 
   const group = createSvg("g", past ? { class: "nautilus-log-grid-past" } : {});
 
+  // P1-3：网点叠层在实体切片【之前】—— 与上游一致（component.cljs:862 在 868 之上）。
+  if (progress > 0) {
+    group.appendChild(createSvg("path", {
+      d: path,
+      class: "nautilus-log-slice-progress",
+      style: { "--pb-delay": pbDelay },
+      fill: `url(#${DOT_PATTERN_ID})`,
+    }));
+  }
+
   group.appendChild(createSvg("path", {
     d: path,
     class: "nautilus-log-slice",
+    style: { "--pb-delay": pbDelay },   // P1-5②
     "stroke-dasharray": resolvedDash,
     fill: resolvedBg,
     stroke: resolvedBorder,
   }));
 
   if (text) {
-    const legendGroup = createSvg("g", { class: "nautilus-log-slice-group" });
+    const legendGroup = createSvg("g", {
+      class: "nautilus-log-slice-group",
+      style: { "--pb-delay": pbDelay },   // P1-5②（上游 component.cljs:882）
+    });
     legendGroup.appendChild(createSvg("title", {}, text));
 
     const kneeX = legendRect?.connectorKneeX ?? (legendLineStartX + textX) / 2;
@@ -725,20 +782,51 @@ function snailBlueprintComponent(
   return group;
 }
 
+/* P1-8：上游 `split-and-trim`（component.cljs:1212）：按第一个逗号切两段，
+ * 每段截到 len-central-legend = 16 字。盘心只显示第一段。 */
+const CENTRAL_LEGEND_LEN = 16;
+
+function centralFirstRow(pageTitle: string): string {
+  const first = String(pageTitle ?? "").split(",", 1)[0] ?? "";
+  return first.slice(0, CENTRAL_LEGEND_LEN);
+}
+
+/** 宿主没传页名时的兜底：main.ts 在块容器上写了
+ *  `data-nl-key = "<路径>\0<块内容>"`，从中取笔记名。取不到就空串
+ *  （侧栏视图目前就走这条 —— 由宿主传 pageTitle 才会有值）。 */
+function resolvePageTitle(container: HTMLElement, explicit?: string): string {
+  if (typeof explicit === "string" && explicit.length > 0) return explicit;
+  try {
+    let node: Element | null = container as unknown as Element;
+    for (let hops = 0; node && hops < 6; hops += 1) {
+      const key = (node as HTMLElement).dataset?.nlKey;
+      if (typeof key === "string" && key.length > 0) {
+        const path = key.split("\u0000")[0];
+        return (path.split("/").pop() || "").replace(/\.md$/i, "");
+      }
+      node = node.parentElement;
+    }
+  } catch {
+    // DOM shim / 无父链：盘心第一行留空，不该因此把整张图带崩。
+  }
+  return "";
+}
+
 function centralLabelComponent(
   center: Point,
   centerNowLabel: string | null,
+  firstRow = "",
 ): Element {
   const common = { x: center.x, "text-anchor": "middle", "dominant-baseline": "central" };
   const group = createSvg("g", { class: "nautilus-log-center-date" });
-  // First row is the page title / date (rendered by the panel host, if any).
+  // P1-8：第一行 = 页名 / 日期（上游 component.cljs:1003 的 first-row）。
   group.appendChild(createSvg("text", {
     ...common,
     y: center.y - 2,
     fill: "var(--nautilus-log-text-main)",
     "font-weight": "bold",
     "font-size": FONT_SIZE * 0.85,
-  }, ""));
+  }, firstRow));
   if (centerNowLabel) {
     group.appendChild(createSvg("text", {
       ...common,
@@ -844,9 +932,10 @@ function eventSliceComponent(
   settings: RendererSettings,
   conflict: boolean,
   copy: Record<string, Record<string, string>>,
+  hoverEnabled: boolean,
 ): Element {
   const params = calculateSliceParams(event, elapsedPage, interactive, timelineMinute, settings);
-  const { bgColor, legendColor, done, meeting, current, pastStatus } = params;
+  const { bgColor, legendColor, done, meeting, current, pastStatus, progress } = params;
   const startMin = event.start;
   const endMin = event.end;
 
@@ -865,9 +954,12 @@ function eventSliceComponent(
   const timeRange = `${minutesToTime(startMin)}–${minutesToTime(endMin)}`;
   const ariaLabel = `${event.text}. ${kindLabel}. ${timeRange}. ${durationLabel(endMin - startMin)}`;
 
-  let groupClass = meeting
-    ? "nautilus-log-event-slice-group"
-    : "nautilus-log-task-slice-group";
+  // P1-8：上游对【事件与任务一视同仁】都叫 nautilus-log-event-slice-group
+  // （component.cljs:1080），hover 可用时再加 `--interactive`。原先任务用的
+  // 自造名 nautilus-log-task-slice-group 在 styles.css 里 0 条规则 ⇒ 任务切片
+  // 的 hover/focus 高亮、描边全都白写了。
+  let groupClass = "nautilus-log-event-slice-group";
+  if (hoverEnabled) groupClass += " nautilus-log-event-slice-group--interactive";
   if (pastStatus === "completed") groupClass += " nautilus-log-past--completed";
   else if (pastStatus === "event") groupClass += " nautilus-log-past--event";
   if (conflict) groupClass += " nautilus-log-event-conflict";
@@ -876,11 +968,15 @@ function eventSliceComponent(
   const attrs: Record<string, string | number> = {
     class: groupClass,
     "data-past-status": pastStatus ?? "",
-    "aria-label": ariaLabel,
-    role: "img",
-    tabindex: 0,
-    focusable: "true",
   };
+  // P1-8：紧凑模式下上游【不挂】tabindex/role/aria-label —— 那时没有浮层可显示，
+  // 无条件可聚焦只会给键盘用户平添一串停不下来的空焦点（component.cljs:1092-1098）。
+  if (hoverEnabled) {
+    attrs["aria-label"] = ariaLabel;
+    attrs.role = "img";
+    attrs.tabindex = 0;
+    attrs.focusable = "true";
+  }
   if (current) attrs["aria-current"] = "true";
 
   const group = createSvg("g", attrs);
@@ -904,6 +1000,7 @@ function eventSliceComponent(
       legendRect: segIndex === 0 ? legendRect : null,
       taskStartMin: startMin,
       taskEndMin: endMin,
+      progress,   // P1-3
     }));
   }
   return group;
@@ -921,6 +1018,7 @@ function eventsToSlices(
   center: Point,
   settings: RendererSettings,
   copy: Record<string, Record<string, string>>,
+  hoverEnabled: boolean,
   initRects: LegendRect[] = [],
 ): { group: Element; rects: LegendRect[] } {
   const visible = events.filter((e) => e.freetime !== true);
@@ -957,6 +1055,7 @@ function eventsToSlices(
       settings,
       conflictUids.has(event.uid),
       copy,
+      hoverEnabled,
     ));
   }
 
@@ -1064,6 +1163,11 @@ export interface SpiralOptions {
   /** 笔记日期与今天的关系。缺省即按"今天"处理（向后兼容）。
    *  🔴 看昨天不该画红针、看明天不该画斜纹 —— 全由它决定，别自己判。 */
   dayState?: DayState;
+  /** P1-8：盘心第一行 —— 上游放的是【页名】（Roam 日记页标题，
+   *  component.cljs:1354 `(split-and-trim page-title len-central-legend)`：
+   *  按第一个逗号切两段、每段截 16 字）。本移植的等价物是笔记名。
+   *  宿主不传时退化到从块容器的 data-nl-key 里取笔记名（见 resolvePageTitle）。 */
+  pageTitle?: string;
 }
 
 /** 供外部（main.ts）在重渲染前清理上一次的监听。 */
@@ -1102,7 +1206,7 @@ export function renderSpiral(
     .filter((e) => e.end > workdayStart && e.start < workdayEnd)
     .map((e) => ({
       uid: e.uid,
-      text: e.string,
+      text: cleanLabel(e.string),   // P1-1
       start: Math.max(workdayStart, e.start),
       end: Math.min(workdayEnd, e.end),
       done: e.done,
@@ -1114,7 +1218,7 @@ export function renderSpiral(
 
   const taskEvents: RenderEvent[] = capacity.scheduledTasks.map((t) => ({
     uid: t.uid,
-    text: t.string,
+    text: cleanLabel(t.string),   // P1-1
     start: t.start,
     end: t.end,
     done: t.done || false,
@@ -1141,13 +1245,13 @@ export function renderSpiral(
       if (!slice) return null;
       return {
         uid: t.uid,
-        text: t.string,
+        text: cleanLabel(t.string),   // P1-1
         start: Math.max(workdayStart, slice.start),
         end: Math.min(workdayEnd, slice.end),
         done: true,
         meeting: false,
         todo: true,
-        progress: 0,
+        progress: t.progress || 0,   // P1-3（parser 未填时为 0）
       } as RenderEvent;
     })
     .filter((e): e is RenderEvent => e !== null && e.start < e.end);
@@ -1176,6 +1280,12 @@ export function renderSpiral(
     eventsToNewDimensions(allEvents, initialCenter, s);
   const center = { x: centerX, y: centerY };
 
+  // 🔴 紧凑判定必须【在渲染切片之前】—— 它决定切片要不要带 `--interactive`
+  //    与 tabindex（P1-8）。上游同样在 show-events 顶部就算好
+  //    `hover-enabled? (not compact?)`（component.cljs:1310）。
+  const compact = core.isCompactChartWidth(container.clientWidth || initialWidth);
+  const hoverEnabled = !compact;
+
   const { group: sliceGroups } = eventsToSlices(
     allEvents,
     showElapsed,
@@ -1184,6 +1294,7 @@ export function renderSpiral(
     center,
     s,
     copy,
+    hoverEnabled,
     [],
   );
 
@@ -1191,13 +1302,17 @@ export function renderSpiral(
     viewBox: `0 0 ${suggestedWidth} ${suggestedHeight}`,
     width: "100%",
     xmlns: "http://www.w3.org/2000/svg",
-    class: "nautilus-log-svg",
+    // P1-5①：`playback-active` 必须落在 <svg> 上（上游 component.cljs:1320）。
+    // styles.css:778 的选择器要求它是 .nautilus-log-slice 的【祖先】——
+    // 挂在按钮上时按钮自己变个样，盘上一片都不会逐个亮起。
+    class: `nautilus-log-svg${options.playbackMinute != null ? " nautilus-log-playback-active" : ""}`,
     "font-family": FONT_FAMILY,
     "font-size": FONT_SIZE,
     style: { "max-width": `${suggestedWidth}px` },
   });
 
   const root = createSvg("g");
+  root.appendChild(dotPatternDefs());   // P1-3
   if (showElapsed) {
     root.appendChild(pastTimeOverlay(center, s, SNAIL_INNER_RADIUS, elapsedThrough));
   }
@@ -1230,7 +1345,11 @@ export function renderSpiral(
       `${copy.capacity?.now || "Current time"} ${minutesToTime(timelineMinute)}`,
     ));
   }
-  root.appendChild(centralLabelComponent(center, showNow ? minutesToTime(timelineMinute) : null));
+  root.appendChild(centralLabelComponent(
+    center,
+    showNow ? minutesToTime(timelineMinute) : null,
+    centralFirstRow(resolvePageTitle(container, options.pageTitle)),   // P1-8
+  ));
 
   svg.appendChild(root);
   container.appendChild(svg);
@@ -1238,8 +1357,6 @@ export function renderSpiral(
   // ── 紧凑模式 ──────────────────────────────────────────────────────────
   // 上游 guide：「Compact sidebar charts omit hover tooltips」——
   // 窄容器里浮层会被裁切、也没地方放，所以紧凑时直接不挂 hover。
-  const width = container.clientWidth || initialWidth;
-  const compact = core.isCompactChartWidth(width);
   // 容器可能是精简的 DOM shim（测试里就是），classList/ownerDocument 都要兜住，
   // 不能因为环境缺一个 API 就把整张图带崩。
   container.classList?.[compact ? "add" : "remove"]("nautilus-log-compact");
@@ -1254,7 +1371,7 @@ export function renderSpiral(
 
   // 已渲染的切片：aria-label 已由渲染器写好，这里只取时间与文案。
   const sliceEls = Array.from(
-    svg.querySelectorAll(".nautilus-log-event-slice-group, .nautilus-log-task-slice-group"),
+    svg.querySelectorAll(".nautilus-log-event-slice-group"),
   );
   allEvents.forEach((ev, i) => {
     const el = sliceEls[i];
@@ -1288,7 +1405,7 @@ export function renderSpiral(
   }
 
   tooltip.attach(targets, {
-    centerX: center.x, centerY: center.y, radius: SNAIL_INNER_RADIUS,
+    centerX: center.x, centerY: center.y, radius: TOOLTIP_ANCHOR_RADIUS,   // P1-9①
   });
 
   return {
