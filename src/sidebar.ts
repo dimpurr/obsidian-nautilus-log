@@ -20,6 +20,7 @@
 import { ItemView, TFile, type App, type WorkspaceLeaf } from 'obsidian';
 import { renderSpiral, type SpiralHandle } from './spiral';
 import { renderCapacityHeader } from './header';
+import { renderCompactOverview, renderOverflowPanel, renderWarningPanel } from './compact';
 import { parsePlan } from './parser';
 import { parseBlockConfig, applyOverrides, extractPlanBody } from './blockconfig';
 import type { Capacity, NautilusSettings } from './contract';
@@ -30,6 +31,7 @@ import type { ExecViewContext } from './timing-contract';
 import { localCopy } from './settings';
 
 const logCore = require('./vendor/log-core') as {
+  uiCopy(language: string): unknown;
   calculateCapacity(args: {
     startMinutes: number;
     endMinutes: number;
@@ -350,6 +352,13 @@ export class NautilusSidebarView extends ItemView {
     }
 
     renderCapacityHeader(root, capacity, settings, nowMinutes());
+    // 🔴 侧栏几乎总是落在 @container (max-width:520px) 里，那套规则会把完整
+    //    头部藏起来、改显紧凑概览。只接 main.ts 不接这里 => 侧栏什么都没有。
+    const uiCopy = logCore.uiCopy(settings.language) as never;
+    renderCompactOverview(root, capacity, settings, nowMinutes(), uiCopy);
+
+    renderOverflowPanel(root, capacity, uiCopy);
+    renderWarningPanel(root, parsed, uiCopy);
 
     const chart = root.createDiv({ cls: 'nautilus-log-chart' });
     try {
@@ -359,6 +368,8 @@ export class NautilusSidebarView extends ItemView {
       // 侧栏总是看今天，但仍显式解析 —— 万一 Primary Plan 落在别的日期
       // （例如跨午夜窗口把昨天的计划算作 today），也能走对分支。
       this.spiral = renderSpiral(chart, parsed, capacity, settings, nowMinutes(), {
+        // P0-4：同 main.ts —— 侧栏也要拿到 CLOCK 记录。
+        clockEntries: this.getExecContext()?.runtime?.getSnapshot?.()?.entries ?? [],
         dayState: resolveDayState({
           sourcePath: plan.path,
           startMinutes: schedule.startMinutes,

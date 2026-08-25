@@ -76,6 +76,17 @@ const documentShim = {
   createElementNS(_ns, tag) {
     return makeElement(tag);
   },
+  // 🔴 真实 document 两个都有。紧凑列表（compact.ts）走的是 createElement，
+  //    早期 shim 只给了 createElementNS —— 又一次「夹具比现实更窄」，
+  //    接线时整片 spiral 测试直接炸。见 PORTING-DECISIONS.md §8。
+  createElement(tag) {
+    const el = makeElement(tag);
+    // log-core 的 truncateTextToWidth 会 `createElement('canvas').getContext('2d')`。
+    // 真实浏览器里拿得到 2d 上下文（按像素量），Node 里拿不到 —— 返回 null 让它
+    // 退到 fallbackTextWidth（按字符量）。缺这个方法会直接抛。
+    if (tag === "canvas") el.getContext = () => null;
+    return el;
+  },
   createTextNode(text) {
     return makeText(text);
   },
@@ -429,4 +440,42 @@ test("空闲时段：未来的日子整天都算空着", () => {
   const labels = slotLabels(container.innerHTML);
   assert.ok(/^Available slot 05:00–08:00/.test(labels[0]),
     "看明天时不裁到「此刻」，第一段空档应从工作日起点算起");
+});
+
+/* ------------------------------------------------------------------ */
+/* P0-4 已完成任务的「实际耗时」切片 · P0-5 排程起点与容量起点分开     */
+/* ------------------------------------------------------------------ */
+
+test("P0-4 没有 dHH:MM 锚点但打过卡的已完成任务，仍能用 CLOCK 画出来", () => {
+  globalThis.document = documentShim;
+  const container = makeContainer();
+  const donePlan = {
+    events: [],
+    // 🔴 没有 doneAt —— 早期实现会 return null 直接不画
+    tasks: [{ uid: "tk-done", string: "{{DONE}} 写周报 60m", duration: 60, done: true }],
+    malformed: [],
+  };
+  const base = new Date(); base.setHours(0, 0, 0, 0);
+  const ms = (min) => base.getTime() + min * 60000;
+  renderSpiral(container, donePlan, { ...capacity, scheduledTasks: [] }, settings, 700, {
+    clockEntries: [
+      { taskUid: "tk-done", start: ms(600), end: ms(645), running: false },
+    ],
+  });
+  assert.match(container.innerHTML, /nautilus-log-event-slice-group/,
+    "有完整 CLOCK 记录就该画出历史切片，不该因为缺 dHH:MM 而消失");
+});
+
+test("P0-4 没有 CLOCK 记录时退回纯估计值（不炸、不编造）", () => {
+  globalThis.document = documentShim;
+  const container = makeContainer();
+  const donePlan = {
+    events: [],
+    tasks: [{ uid: "tk-done", string: "{{DONE}} 写周报 60m", duration: 60, done: true }],
+    malformed: [],
+  };
+  // 不传 clockEntries：引擎「不编造历史」，没锚点就不画 —— 这是上游立场
+  renderSpiral(container, donePlan, { ...capacity, scheduledTasks: [] }, settings, 700, {});
+  assert.doesNotMatch(container.innerHTML, /nautilus-log-event-slice-group/,
+    "既无锚点又无 CLOCK 时不画，是上游的明确立场（does not invent history）");
 });

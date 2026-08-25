@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-    "test": "node --test test/*.test.js test/vendor/*.test.js"
+    "test": "node scripts/audit-detectors.mjs && node --test test/*.test.js test/vendor/*.test.js",
+    "audit": "node scripts/audit-detectors.mjs"
   },
   "keywords": [
     "obsidian",

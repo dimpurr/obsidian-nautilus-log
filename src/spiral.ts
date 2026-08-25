@@ -17,6 +17,7 @@
 import * as logCoreModule from "./vendor/log-core";
 import { createSvg } from "./svg-util";
 import { createTooltip, type TooltipTarget } from "./tooltip";
+import { renderCompactEventList } from "./compact";
 // P1-1：盘上标签必须用【清洗后】的文本，不能是整行原始 markdown。
 // 上游的清洗链是 parse-URLs + parse-rest（component.cljs:638-665），切片只用
 // 清洗结果 `:description`。本移植的等价物是 parser.ts 的 taskDescription()。
@@ -36,6 +37,13 @@ import type {
 interface SpiralCore {
   /** 窄容器判定。上游据此在侧栏里省掉 hover 浮层并折叠明细。 */
   isCompactChartWidth(width: number): boolean;
+  /** 把当天已闭合的 CLOCK 段聚成一个「实际耗时」摘要。见 SpiralOptions.clockEntries。 */
+  completedTaskClockSummary(args: {
+    taskUid: string;
+    entries: unknown[];
+    dayStartMs: number;
+    dayEndMs: number;
+  }): { actualMinutes: number; sessionCount: number; latestEndMinutes: number | null };
   /** 从完成锚点反推已完成任务的历史区间。拿不到结束时刻时返回 null
    *  —— 引擎不编造未被告知的历史。 */
   historicalDoneSlice(args: {
@@ -1158,6 +1166,13 @@ let patternCounter = 0;
 export interface SpiralOptions {
   /** 显示已完成项。对应上游的「眼睛」按钮。 */
   showDone?: boolean;
+  /** 今天的 CLOCK 记录（执行层的 entries）。
+   *  🔴 P0-4：没有它，已完成任务的切片长度永远是【估计值】，而且
+   *  **没打 `dHH:MM` 锚点但打过卡的任务在盘上根本画不出来** ——
+   *  上游用 `completedTaskClockSummary` 把当天的 CLOCK 段聚成 Actual
+   *  再喂给 `historicalDoneSlice`（component.cljs:679-693）。
+   *  执行层关闭 / 拿不到时省略即可，行为退回纯估计值。 */
+  clockEntries?: { taskUid?: string; start?: unknown; end?: unknown; running?: boolean }[];
   /** 回放中的时刻；给了就用它当"当前时刻"画针与流逝区。 */
   playbackMinute?: number | null;
   /** 笔记日期与今天的关系。缺省即按"今天"处理（向后兼容）。
@@ -1233,14 +1248,39 @@ export function renderSpiral(
   // 🔴 没有锚点就拿不到结束时刻 => 返回 null => 不画。这是上游的明确立场：
   //    "does not invent history"。
   const showDone = options.showDone !== false;
+  // 当天窗口的绝对毫秒 —— completedTaskClockSummary 要的是时间戳不是分钟。
+  const clockEntries = options.clockEntries || [];
+  const dayAnchor = ds?.timelineMinutes ?? nowMinutes;
+  const summaryCache = new Map<string, ReturnType<SpiralCore['completedTaskClockSummary']> | null>();
+  const clockSummaryFor = (uid: string) => {
+    if (!clockEntries.length) return null;
+    if (summaryCache.has(uid)) return summaryCache.get(uid) ?? null;
+    const midnight = new Date();
+    midnight.setHours(0, 0, 0, 0);
+    const base = midnight.getTime();
+    void dayAnchor;
+    const out = core.completedTaskClockSummary({
+      taskUid: uid,
+      entries: clockEntries,
+      dayStartMs: base + workdayStart * 60000,
+      dayEndMs: base + workdayEnd * 60000,
+    });
+    summaryCache.set(uid, out);
+    return out;
+  };
   const doneEvents: RenderEvent[] = (showDone ? plan.tasks : [])
     .filter((t) => t.done)
     .map((t) => {
+      // P0-4：有 CLOCK 记录就用实际耗时，并在缺 `dHH:MM` 锚点时用
+      //   最后一段 CLOCK 的结束时刻兜底（上游 `:done-at (or done-at last-clock-end)`）。
+      const summary = clockSummaryFor(t.uid);
       const slice = core.historicalDoneSlice({
         done: true,
         doneAt: t.doneAt,
         duration: t.duration,
         defaultDuration: s.defaultDuration,
+        ...(summary && summary.actualMinutes > 0 ? { actualDuration: summary.actualMinutes } : {}),
+        ...(summary && summary.latestEndMinutes !== null ? { lastClockEnd: summary.latestEndMinutes } : {}),
       });
       if (!slice) return null;
       return {
@@ -1353,6 +1393,10 @@ export function renderSpiral(
 
   svg.appendChild(root);
   container.appendChild(svg);
+  // 紧凑日程清单：无条件渲染，显示与否交给 styles.css 的 @container 查询
+  //   （同上游 component.cljs:1221）。🔴 少了它，窄容器下 slice-group 被
+  //   CSS 隐藏、hover 又被关掉 => 侧栏里读不出任何精确时间。
+  renderCompactEventList(container, allEvents, copy as unknown as Parameters<typeof renderCompactEventList>[2]);
 
   // ── 紧凑模式 ──────────────────────────────────────────────────────────
   // 上游 guide：「Compact sidebar charts omit hover tooltips」——

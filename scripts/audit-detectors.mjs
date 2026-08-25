@@ -101,7 +101,11 @@ function unreachableExports() {
     // 可达 = 我们直接调 || 别的 vendor 文件调（那条链的入口另有检测器管）
     const others = vendors.filter((v) => v.path !== path).map((v) => v.text).join('\n');
     for (const n of names) {
-      const re = new RegExp(`[.\\b]${n}\\s*\\(|\\b${n}\\s*\\(`, 'm');
+      // SCREAMING_CASE 是【常量】不是函数 —— 按「有没有调用点」判会全体误报。
+      const isConst = /^[A-Z][A-Z0-9_]*$/.test(n);
+      const re = isConst
+        ? new RegExp(`\\b${n}\\b`, 'm')
+        : new RegExp(`[.\\b]${n}\\s*\\(|\\b${n}\\s*\\(`, 'm');
       if (re.test(own) || re.test(others)) continue;
       out.push(`${path.replace('src/vendor/', '')}:${n}`);
     }

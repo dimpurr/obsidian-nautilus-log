@@ -1,0 +1,34 @@
+{
+  "orphanCss": [
+    "nautilus-log-burning-summary",
+    "nautilus-log-hover-tooltip",
+    "nautilus-log-hover-tooltip--positioned",
+    "nautilus-log-hover-tooltip-meta",
+    "nautilus-log-hover-tooltip-title",
+    "nautilus-log-timing__located",
+    "nautilus-log-timing__mode-separator",
+    "nautilus-log-visual"
+  ],
+  "orphanCopy": [],
+  "unreachableExports": [
+    "log-core.js:END_HOURS",
+    "log-core.js:START_HOURS",
+    "log-core.js:resolveRendererSettings",
+    "timing-core.js:ACTIVE_WORK_WINDOW_MINUTES",
+    "timing-core.js:FORGOTTEN_CLOCK_MINUTES",
+    "timing-core.js:actualMinutesToday",
+    "timing-core.js:resolveBlockReferences",
+    "timing-core.js:resolveTaskInstance",
+    "timing-core.js:selectPrimaryPlan"
+  ],
+  "unmappedSettingKeys": [],
+  "__why": {
+    "nautilus-log-hover-tooltip*": "上游 tooltip 结构；本移植用自己的 .nautilus-log-tooltip 替代（形态更简单）",
+    "nautilus-log-timing__located": "上游 openPrimaryPlan 的定位高亮闪烁，尚未移植（audit 记录在案）",
+    "nautilus-log-timing__mode-separator / burning-summary / visual": "上游 topbar/header 结构，本移植无对应 DOM（见 §D3）",
+    "resolveTaskInstance / resolveBlockReferences": "§D10 有意不接线 —— Roam 块引用模型",
+    "selectPrimaryPlan": "§D4 用代码块围栏定位替代",
+    "resolveRendererSettings": "§D4 renderer 位置参数被代码块内配置替代",
+    "actualMinutesToday": "待评估：可能可以用在 Review/状态栏（未登记为有意不做）"
+  }
+}

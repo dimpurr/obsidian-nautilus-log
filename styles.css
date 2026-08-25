@@ -1571,7 +1571,9 @@ button.nautilus-log-timing__plan-heading:focus-visible {
   word-break: break-word;
 }
 /* 方案 9：MarkdownRenderer 会包一层 <p>，去掉它带来的额外间距 */
-.nautilus-log-overflow-item > p { margin: 0; display: inline; }
+/* 溢出面板已换成上游的 <details> + <ol>/<li>（见 compact.ts）；
+ * MarkdownRenderer 塞进 <li> 的段落同样要压平。 */
+.nautilus-log-overflow-panel li > p { margin: 0; display: inline; }
 
 /* ── 悬停提示 / 紧凑模式（2026-08-24） ────────────────────────────────── */
 .nautilus-log-chart { position: relative; }
@@ -1990,6 +1992,79 @@ button.nautilus-log-timing__plan-heading:focus-visible {
 }
 
 /* 溢出列表：项目符号在 DOM 层，正文走 MarkdownRenderer（链接/标签可点） */
-.nautilus-log-overflow-bullet { color: var(--text-faint); }
-.nautilus-log-overflow-text { display: inline; }
-.nautilus-log-overflow-text > p { margin: 0; display: inline; }
+/* 🔴 .nautilus-log-overflow-{bullet,item,text} 三条已随旧溢出面板一起删除：
+ * 新面板用 <ol>/<li>，项目符号是原生的，不再需要 DOM 层的 `· ` span。
+ * （检测器 §7 立刻抓到了这三个孤儿类，是它第一次拦下真实回归。） */
+
+/* ── 执行层：容量条 + Plan 分节 ─────────────────────────────────────────
+ * 这几个类是本移植补回上游 topbar 丢失功能时新发射的（见
+ * docs/PORTING-DECISIONS.md §D3）。上游对应结构在 Roam 里走
+ * .nautilus-log-timing__* 命名，本移植的执行区统一用 -exec- 前缀，
+ * 故不能直接复用上游规则。 */
+
+.nautilus-log-exec-capacity {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 2px 0 6px;
+  font-size: 11px;
+  color: var(--nautilus-log-text-sub);
+  border-bottom: 1px solid var(--nautilus-log-line);
+  margin-bottom: 6px;
+}
+
+.nautilus-log-exec-capacity-metric {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.nautilus-log-exec-capacity-part {
+  color: var(--nautilus-log-text-main);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.nautilus-log-exec-capacity-metric[data-tone="warning"] .nautilus-log-exec-capacity-part {
+  color: var(--nautilus-log-warning);
+}
+.nautilus-log-exec-capacity-metric[data-tone="event"] .nautilus-log-exec-capacity-part {
+  color: var(--nautilus-log-event);
+}
+
+.nautilus-log-exec-plan-section + .nautilus-log-exec-plan-section {
+  margin-top: 8px;
+}
+
+/* 折叠头。Unscheduled 一节可点，用 ▾/▸ 文本标记 —— Obsidian 没有上游
+ * 依赖的 Blueprint bp3-icon 字体面。 */
+.nautilus-log-exec-plan-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 2px;
+  background: none;
+  border: none;
+  text-align: left;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--nautilus-log-text-sub);
+  cursor: default;
+}
+
+button.nautilus-log-exec-plan-heading { cursor: pointer; }
+button.nautilus-log-exec-plan-heading:hover { color: var(--nautilus-log-text-main); }
+
+.nautilus-log-exec-plan-label {
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+/* Review 行里的 Planned / Actual 两个数值 —— 此前也没有规则。 */
+.nautilus-log-exec-review-planned,
+.nautilus-log-exec-review-actual {
+  font-variant-numeric: tabular-nums;
+}
+.nautilus-log-exec-review-actual { color: var(--nautilus-log-text-main); }

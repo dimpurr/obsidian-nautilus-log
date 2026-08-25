@@ -153,7 +153,10 @@ export interface LogCore {
     nowMinutes: DayMinutes;
     tasks?: FlexTask[];
     fixedEvents?: FixedEvent[];
-  }): { scheduledTasks: unknown[]; overflowTasks: FlexTask[] };
+    // 🔴 2026-08-25 收紧：`scheduledTasks` 原本写成 unknown[]，因为当初本移植
+    //    从不直接调这个函数（只用 calculateCapacity 内部算好的那份）。P0-5 之后
+    //    要拿它的结果去画盘，形状必须钉死 —— 它与 Capacity.scheduledTasks 同构。
+  }): { scheduledTasks: (FlexTask & { start: DayMinutes; end: DayMinutes })[]; overflowTasks: FlexTask[] };
   /* ⚠️ 2026-08-24 修正：这两个返回的是【对象】，不是标量。
    *    初版契约把 parseDurationToken 写成 `number | null` —— 错的，实测：
    *      parseDurationToken({text:'写简报 45m'})

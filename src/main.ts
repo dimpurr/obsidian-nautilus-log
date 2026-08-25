@@ -9,6 +9,7 @@
 
 import { Notice, Plugin, MarkdownRenderChild, MarkdownRenderer, TFile, type Editor, type Menu, type MarkdownFileInfo, type MarkdownView, type MarkdownPostProcessorContext } from 'obsidian';
 import { parsePlan, taskDescription } from './parser';
+import { renderCompactOverview, renderOverflowPanel, renderWarningPanel } from './compact';
 import { renderSpiral } from './spiral';
 import { renderCapacityHeader } from './header';
 import { renderChartControls, type ChartControlState } from './controls';
@@ -246,7 +247,7 @@ class NautilusLogView extends MarkdownRenderChild {
       nowMinutes: nowMinutes(),
       playback: this.chartState.playback !== null,
     });
-    const capacity = logCore.calculateCapacity({
+    const capacityBase = logCore.calculateCapacity({
       startMinutes: schedule.startMinutes,
       endMinutes: schedule.endMinutes,
       nowMinutes: dayState.capacityFromMinutes,
@@ -254,6 +255,24 @@ class NautilusLogView extends MarkdownRenderChild {
       allFixedEvents: plan.events,
       pendingTasks: plan.tasks,
     });
+
+    // 🔴 P0-5：上游把【排程起点】与【容量起点】分成【两次独立调用】：
+    //    `scheduleTasks(nowMinutes = scheduleFrom)` 决定楔形画在盘上哪儿
+    //    （component.cljs:729 的 fill-day），
+    //    `calculateCapacity(nowMinutes = capacityFrom)` 只管数字（:1852）。
+    //    本移植原先只调后者、把它内部的 scheduledTasks 直接拿去画 —— 于是
+    //    看过去的日子时 capacityFrom = 当天终点，拿它起排一个都排不下，
+    //    弹性任务全落 overflow。overflow 仍以 calculateCapacity 为准
+    //    （上游 fill-day 的 docstring 原话："overflow is returned separately
+    //    by calculate-capacity"）。
+    const scheduled = logCore.scheduleTasks({
+      startMinutes: schedule.startMinutes,
+      endMinutes: schedule.endMinutes,
+      nowMinutes: dayState.scheduleFromMinutes,
+      tasks: plan.tasks,
+      fixedEvents: plan.events,
+    });
+    const capacity = { ...capacityBase, scheduledTasks: scheduled.scheduledTasks };
 
     const root = el.createDiv({ cls: 'nautilus-log' });
 
@@ -274,6 +293,10 @@ class NautilusLogView extends MarkdownRenderChild {
     }
 
     renderCapacityHeader(root, capacity, settings, dayState.capacityFromMinutes);
+    // 紧凑概览（窄容器时才由 CSS 显出来）。canonical 摘要在折叠头里，body 只有
+    // Available/Events + 图例 —— 照上游 5464e9d 之后的行为，不重复。
+    renderCompactOverview(root, capacity, settings, dayState.capacityFromMinutes,
+      logCore.uiCopy(settings.language) as never);
 
 
     // 螺旋图。几何全部来自 vendor 的 log-core（spiralCellInnerHour /
@@ -317,6 +340,8 @@ class NautilusLogView extends MarkdownRenderChild {
         showDone: this.chartState.showDone,
         playbackMinute: this.chartState.playback?.minute ?? null,
         dayState,
+        // P0-4：把执行层的 CLOCK 记录喂进去，已完成任务才画得出【实际】耗时。
+        clockEntries: this.plugin.timingRuntime?.getSnapshot?.()?.entries ?? [],
       });
     } catch (err) {
       // 图挂了不该带走整个块 —— 容量数字比图更重要，必须还能看见。
@@ -327,25 +352,21 @@ class NautilusLogView extends MarkdownRenderChild {
     }
 
 
-    if (capacity.overflowTasks.length > 0) {
-      const box = root.createDiv({ cls: 'nautilus-log-overflow' });
-      box.createDiv({ cls: 'nautilus-log-overflow-heading' })
-        .setText(`▼ ${panelCopy.overflow}`);
-      // 方案 9：用 MarkdownRenderer 渲染，这样溢出任务里的 [[链接]] / #标签 是活的。
-      // 先例：Tasks 插件的查询结果同样走 MarkdownRenderer.render()。
-      // ⚠️ 它是异步的；渲染失败退回纯文本，不能让一个坏链接吃掉整个列表。
-      for (const task of capacity.overflowTasks) {
-        const row = box.createDiv({ cls: 'nautilus-log-overflow-item' });
-        // 🔴 项目符号必须留在 DOM 层，【不能进 markdown 字符串】——
-        //    行首的 `· ` 会被 Markdown 当成列表标记吃掉，正文只剩一个省略号
-        //    （实测：`· Nautilus Log 插件完善 30m` 渲染成 `· ... 30m`）。
-        row.createSpan({ cls: 'nautilus-log-overflow-bullet', text: '· ' });
-        const body = row.createSpan({ cls: 'nautilus-log-overflow-text' });
+    // 溢出面板：可折叠 + 「总时长 · 条数」（上游是 <details>，本移植原先是
+    // 不可折叠的 div 且丢了 unplacedMinutes 总计）。标题仍走 MarkdownRenderer，
+    // 这样 [[链接]] / #标签 是活的。
+    // 🔴 项目符号必须留在 DOM 层，不能进 markdown 字符串 —— 行首的 `· ` 会被
+    //    Markdown 当成列表标记吃掉（实测 `· Nautilus Log 插件完善 30m`
+    //    渲染成 `· ... 30m`）。renderOverflowPanel 内部已经这么处理。
+    renderOverflowPanel(root, capacity, logCore.uiCopy(settings.language) as never,
+      (host, task) => {
         const md = `${taskDescription(task.string, settings.descLength)} ${logCore.formatDuration(task.duration)}`;
-        MarkdownRenderer.render(this.plugin.app, md, body, this.sourcePath, this)
-          .catch(() => { body.setText(md); });
-      }
-    }
+        MarkdownRenderer.render(this.plugin.app, md, host, this.sourcePath, this)
+          .catch(() => { host.setText(md); });
+      });
+
+    // 排期警告（跨午夜 / 起止时间相同）。parser 现在会把 warningCode 带出来。
+    renderWarningPanel(root, plan, logCore.uiCopy(settings.language) as never);
   }
 }
 
@@ -513,7 +534,13 @@ export default class NautilusLogPlugin extends Plugin {
       if (!this.settings.actualTimeTracking) return;
       // 🔴 onLayoutReady 只保证「布局好了」，预热本身还是异步的 —— 必须 await。
       void timingCacheReady().then(() => {
-        if (this.settings.actualTimeTracking && !this.timingRuntime) this.startExecutionLayer();
+        if (!this.settings.actualTimeTracking || this.timingRuntime) return;
+        this.startExecutionLayer();
+        // 🔴 执行层现在是【延后】启动的，而侧栏很可能在这之前就已经恢复并渲染完
+        //    ——那一刻 getExecContext() 还返回 null，执行区就空着，而且此后
+        //    再没有任何东西会叫醒它。必须在这里主动刷一次。
+        //    （这条是 P0-2 修复引入的连锁问题，真机复验时才暴露。）
+        if (this.timingRuntime) this.refreshSidebars();
       });
     });
 
@@ -692,6 +719,8 @@ export default class NautilusLogPlugin extends Plugin {
       pomodoroMinutes: this.settings.pomodoroMinutes,
       forgottenTimerMinutes: this.settings.forgottenTimerMinutes,
       recentRetentionMinutes: this.settings.recentRetentionMinutes,
+      // 执行层面板的兜底时长。缺了它 exec-panel 会退回硬编码 15。
+      todoDuration: this.settings.todoDuration,
     };
   }
 
