@@ -169,3 +169,105 @@ test('descLength 正常时照常截断', () => {
   assert.equal(parser.taskDescription('- [ ] Nautilus Log 插件完善 30m', 22), 'Nautilus Log 插件完善');
   assert.match(parser.taskDescription('- [ ] 办理 EE 路由器 final bill / 研究新家网络', 22), /…$/);
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// d50% 进度（audit §P1-3）
+// ────────────────────────────────────────────────────────────────────────────
+
+test('d50% => progress 50，duration 保持【原始估计】', () => {
+  const { tasks } = parser.parsePlan('- [ ] 写周报 60m d50%', { sourcePath: 'f.md', settings: DEFAULTS });
+  assert.equal(tasks[0].progress, 50);
+  assert.equal(tasks[0].duration, 60, 'duration 不能被解析器先折减一次');
+});
+
+test('🔑 progress 折减的是【剩余时长】，由引擎自己算', () => {
+  const { tasks } = parser.parsePlan('- [ ] 写周报 60m d50%', { sourcePath: 'f.md', settings: DEFAULTS });
+  const cap = logCore.calculateCapacity({
+    startMinutes: 300, endMinutes: 1260, nowMinutes: 720,
+    fixedEvents: [], allFixedEvents: [], pendingTasks: tasks,
+  });
+  assert.equal(cap.demandMinutes, 30, '引擎 remainingDuration 应折掉一半');
+});
+
+test('无 d 百分号 token => 不带 progress 字段（保持缺省语义）', () => {
+  const { tasks } = parser.parsePlan('- [ ] 写周报 60m', { sourcePath: 'f.md', settings: DEFAULTS });
+  assert.equal('progress' in tasks[0], false);
+});
+
+test('d150% 夹到 100（对齐 timing-core taskProgress）', () => {
+  const { tasks } = parser.parsePlan('- [ ] 写周报 60m d150%', { sourcePath: 'f.md', settings: DEFAULTS });
+  assert.equal(tasks[0].progress, 100);
+});
+
+test('进度 token 不进图例', () => {
+  assert.equal(parser.taskDescription('- [ ] 写周报 60m d50%', 22), '写周报');
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// 紧急触发词：词边界 + 去空格（audit §P1-8）
+// ────────────────────────────────────────────────────────────────────────────
+
+const withTrigger = (trigger) => ({ ...DEFAULTS, urgentTrigger: trigger });
+const isUrgent = (text, trigger) =>
+  parser.parsePlan(text, { sourcePath: 'f.md', settings: withTrigger(trigger) }).tasks[0].urgent === true;
+
+test('触发词作为独立 token 才命中（英文）', () => {
+  assert.equal(isUrgent('- [ ] urgent 写周报 30m', 'urgent'), true);
+  assert.equal(isUrgent('- [ ] 写周报 urgent', 'urgent'), true);
+});
+
+test('🔴 英文子串不得误判（urgently / nonurgent）', () => {
+  assert.equal(isUrgent('- [ ] act urgently 30m', 'urgent'), false);
+  assert.equal(isUrgent('- [ ] nonurgent 30m', 'urgent'), false);
+});
+
+test('🔴 中文子串不得误判（“紧急处理”不算触发词“紧急”）', () => {
+  assert.equal(isUrgent('- [ ] 紧急处理邮件 30m', '紧急'), false);
+  assert.equal(isUrgent('- [ ] 写周报 紧急 30m', '紧急'), true);
+});
+
+test('设置里的空格被去掉（对齐上游 index.js:349）', () => {
+  assert.equal(isUrgent('- [ ] 写周报 #紧急 30m', ' #紧 急 '), true);
+});
+
+test('空触发词永不命中', () => {
+  assert.equal(isUrgent('- [ ] 写周报 30m', ''), false);
+  assert.equal(isUrgent('- [ ] 写周报 30m', '   '), false);
+});
+
+test('触发词含正则元字符不得炸（转义）', () => {
+  assert.doesNotThrow(() => isUrgent('- [ ] 写周报 30m', 'a+(b'));
+  assert.equal(isUrgent('- [ ] a+(b 写周报 30m', 'a+(b'), true);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// warningCode 不再被丢弃（audit §P1-8）
+// ────────────────────────────────────────────────────────────────────────────
+
+test('起止相同的时间段带出 warning', () => {
+  const plan = parser.parsePlan('09:00-09:00 会议', { sourcePath: 'f.md', settings: DEFAULTS });
+  assert.equal(plan.warnings.length, 1);
+  assert.equal(plan.warnings[0].code, 'sameTime');
+  assert.equal(plan.warnings[0].line, 0);
+  assert.equal(plan.warnings[0].uid, 'f.md:0');
+  assert.equal(plan.warnings[0].message, logCore.uiCopy('en').warnings.sameTime);
+});
+
+test('warning 文案跟随语言（取引擎自己的 i18n 表）', () => {
+  const plan = parser.parsePlan('09:00-09:00 会议', {
+    sourcePath: 'f.md', settings: { ...DEFAULTS, language: 'zh' },
+  });
+  assert.equal(plan.warnings[0].message, logCore.uiCopy('zh').warnings.sameTime);
+});
+
+test('warning 的 line 用 lineOffset 后的真实行号', () => {
+  const plan = parser.parsePlan('- [ ] 正常 30m\n09:00-09:00 会议', {
+    sourcePath: 'f.md', settings: DEFAULTS, lineOffset: 10,
+  });
+  assert.equal(plan.warnings[0].uid, 'f.md:11');
+});
+
+test('正常计划 warnings 为空数组（不是 undefined）', () => {
+  const plan = parser.parsePlan('09:00-10:00 会议\n- [ ] 写周报 30m', { sourcePath: 'f.md', settings: DEFAULTS });
+  assert.deepEqual(plan.warnings, []);
+});

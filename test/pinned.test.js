@@ -50,3 +50,17 @@ test('🔴 无时刻无时长 => 弹性任务 + 默认时长', () => {
   assert.equal(events.length,0);
   assert.equal(tasks[0].duration,15);
 });
+
+test('🔴 钉住事件不得冒出合成探针的 sameTime 告警', () => {
+  // pinnedRange 内部用 `09:00-09:00` 探针问引擎，那个区间必然 sameTime ——
+  // 那是我们自己造的，不是用户写的。audit §P1-8。
+  const plan=P('- [ ] 写周报 09:00 30m');
+  assert.deepEqual(plan.warnings,[]);
+});
+
+test('钉住事件的时长为 0 时才算真告警', () => {
+  // 用户写了 24h => 合成区间起止相同，这一条来自用户输入，要带出去。
+  const plan=P('- [ ] 通宵 09:00 24h');
+  assert.equal(plan.warnings.length,1);
+  assert.equal(plan.warnings[0].code,'sameTime');
+});

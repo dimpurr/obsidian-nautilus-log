@@ -37,12 +37,34 @@ export interface FlexTask {
   string: string;
   duration: number;        // minutes, > 0
   done: boolean;
-  progress?: number;       // 0-100; engine reduces duration by this share
+  /** 完成度百分比，0–100 整数。来自 `d50%` token（audit §P1-3）。
+   *  🔴 语义：`duration` 仍然是【原始估计】，progress 折减的是【剩余时长】，
+   *  由引擎的 `log-core.js remainingDuration()`（:606-614）自己算：
+   *      remaining = round(duration * (1 - progress/100))
+   *  ⇒ 解析器必须喂【未折减的 duration + progress】，不要自己先乘好再喂，
+   *    否则会被引擎二次折减（0.5 × 0.5 = 0.25）。 */
+  progress?: number;
   urgent?: boolean;        // matched the urgent trigger word — colour only
-  /** 完成时刻（当日分钟数）。来自 `d18:21` 这样的锚点。
+  /** 完成时刻（当日分钟数）。来自 `d18:21` / `d18`（整点）这样的锚点，见 §D8。
    *  🔴 已完成任务【没有它就画不出来】—— historicalDoneSlice() 拿不到结束时刻
    *  会直接返回 null，引擎拒绝编造它没被告知的历史。 */
   doneAt?: DayMinutes;
+}
+
+/** 一条时间段告警。来自 `logCore.parseTimeRangeToken().warningCode`（audit §P1-8：
+ *  此前 parser 三处调用把它全丢了）。`message` 已按 settings.language 本地化，
+ *  取自引擎自己的 `uiCopy(lang).warnings[code]` —— 不要另写一份文案。
+ *  🔴 解析器只负责把数据带出来，警告面板的渲染不在本文件的职责内。 */
+export interface PlanWarning {
+  /** 计划正文内的 0 起行号，与 malformed[].line 同一坐标系。 */
+  line: number;
+  uid: LineId;
+  /** 引擎的原始码。当前 vendor 只会发 `'sameTime'`
+   *  （已查：`src/vendor/log-core.js` 全文 `warningCode` 仅 :140 一处；
+   *  `'overnight'` 只存在于 uiCopy 文案表，本版引擎不发）。 */
+  code: string;
+  /** 本地化后的可读文案；引擎文案表里查不到该 code 时回落成 code 本身。 */
+  message: string;
 }
 
 /** What the code-block parser hands to the engine and the renderer. */
@@ -50,6 +72,8 @@ export interface ParsedPlan {
   events: FixedEvent[];
   tasks: FlexTask[];       // ORDER IS PRIORITY — do not sort
   malformed: { line: number; text: string; reason: string }[];
+  /** 时间段告警（audit §P1-8）。永远是数组，没有告警时为空数组 —— 消费方不必判空。 */
+  warnings: PlanWarning[];
 }
 
 /** Mirrors the 8 base settings upstream exposes, plus the 5 execution-layer

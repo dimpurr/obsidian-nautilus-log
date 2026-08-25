@@ -43,3 +43,46 @@ test('已完成不占未来容量', () => {
 test('非法锚点忽略（d99:99）', () => {
   assert.equal(P('- [x] 任务 40m d99:99').tasks[0].doneAt,undefined);
 });
+
+// ── d18：无分钟的整点锚点（audit §P1-8，上游 component.cljs:604）──
+
+test('d18（只有小时）视作整点 18:00', () => {
+  const {tasks}=P('- [x] 学术社交 40m d18');
+  assert.equal(tasks[0].doneAt,1080);
+});
+
+test('d9 单位数小时同样接受', () => {
+  assert.equal(P('- [x] 任务 30m d9').tasks[0].doneAt,540);
+});
+
+test('🔴 d50% 是【进度】不是锚点（互斥的关键一条）', () => {
+  const t=P('- [ ] 写周报 60m d50%').tasks[0];
+  assert.equal(t.doneAt,undefined,'d50% 被读成了 50 点/或整点');
+  assert.equal(t.progress,50);
+});
+
+test('🔴 d10% 不得被读成「10 点整」', () => {
+  const t=P('- [ ] 写周报 60m d10%').tasks[0];
+  assert.equal(t.doneAt,undefined);
+  assert.equal(t.progress,10);
+});
+
+test('d18 与时长 token 互不干扰', () => {
+  const t=P('- [x] 任务 1h30m d18').tasks[0];
+  assert.equal(t.duration,90);
+  assert.equal(t.doneAt,1080);
+});
+
+test('非法整点锚点忽略（d99）', () => {
+  assert.equal(P('- [x] 任务 40m d99').tasks[0].doneAt,undefined);
+});
+
+test('整点锚点不进图例', () => {
+  assert.equal(taskDescription('- [x] 学术社交 40m d18',22),'学术社交');
+});
+
+test('🔑 d18 有锚点 => 引擎能算出历史区间', () => {
+  const t=P('- [x] 学术社交 40m d18').tasks[0];
+  const slice=core.historicalDoneSlice({done:true,doneAt:t.doneAt,duration:t.duration,defaultDuration:15});
+  assert.ok(slice); assert.equal(slice.end,1080); assert.equal(slice.start,1040);
+});
