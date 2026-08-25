@@ -13,6 +13,10 @@ into the time that remains, and overload never disappears from view.
 > scheduling engine, spiral renderer, capacity header, chart controls, sidebar
 > view, and the optional execution layer are implemented.
 
+> **Contributing / re-porting?** Read [`docs/PORTING-DECISIONS.md`](docs/PORTING-DECISIONS.md) first —
+> it is the single source of truth for every place this port deliberately diverges from upstream,
+> and is written so that *upstream + that document* is enough to redo the port from scratch.
+
 ## What it gives you
 
 - **A plan that fits time.** See Planned demand, Available time, fixed Events,

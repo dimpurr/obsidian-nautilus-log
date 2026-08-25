@@ -486,7 +486,7 @@ export default class NautilusLogPlugin extends Plugin {
       }) as unknown as TimingRuntime;
       void this.timingRuntime.initialize();
       const el = this.addStatusBarItem();
-      // 状态栏点击三态（上游 7850e58 / d807ea4 的修饰键手势，挂载面换成状态栏）：
+      // 状态栏点击三态（见 PORTING-DECISIONS.md §D2）：
       //   普通点击 → 打开侧栏（Obsidian 这边最有用的默认）
       //   ⌥ Alt-click → 在主编辑区定位今天的计划
       //   ⇧ Shift-click → 把计划送右侧栏

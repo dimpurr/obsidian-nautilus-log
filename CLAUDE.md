@@ -30,10 +30,24 @@ git log --format=%B  | grep -ciE 'claude|session_|co-authored-by'
 git log --format=%ae | grep -vc 'dimpurr@live.com'
 ```
 
+## 🧭 先读这个：移植决策台账
+
+🔴 **[`docs/PORTING-DECISIONS.md`](docs/PORTING-DECISIONS.md) 是「我们为什么和上游不一样」的唯一权威。**
+
+契约是：**上游仓库 + 那份文档 + 足够人力 = 能把这个移植从零重做一遍。**
+
+- 任何「上游是 A、我们做成 B」的动作，**先在那里登记再写代码**
+- 代码注释里**引用条目号**（`见 PORTING-DECISIONS.md §D1`），不要把理由散落在注释里
+- 概念映射、有意的偏离、挂载面重排、超集特性、防复发检测器，全在那份文档
+
+配套：[`docs/parity-audit-2026-08-25.md`](docs/parity-audit-2026-08-25.md) 是已知欠账清单。
+
 ## 📦 关于 vendor 代码
 
-`src/vendor/` 下的文件从上游 `404KSG/roam-nautilus-log` 原样搬来（基线 `7bf19a1d`），
-**一个字都不许改**。要适配就在自己的新文件里做。改了它，上游一更新就无法对齐。
+`src/vendor/` 下的文件从上游 `404KSG/roam-nautilus-log` 原样搬来（基线见
+[`PORTING-DECISIONS.md`](docs/PORTING-DECISIONS.md) 顶部，当前 `86b97c0`），
+**一个字都不许改**。要适配就在自己的新文件里做。改了它，上游一更新就无法对齐，
+也就没法再拿上游自己的测试当验收。升级流程见该文档 §2。
 
 `src/contract.ts` 是跨模块钉死的类型契约。发现它与实际实现不符时：
 **按实际实现写代码 + 把分歧报上来**，不要擅自改契约、也不要将错就错。

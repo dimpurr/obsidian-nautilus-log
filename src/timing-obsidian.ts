@@ -138,7 +138,7 @@ export function initTimingObsidian(next: TimingHost): void {
   if (mc?.on) {
     try { mc.on('changed', metadataListener); } catch { /* ignore */ }
   }
-  // 🔴 预热【必须】等到 onLayoutReady。插件 onload 时 vault 还没索引完，
+  // 🔴 预热【必须】等到 onLayoutReady（见 PORTING-DECISIONS.md §D6）。插件 onload 时 vault 还没索引完，
   //    getMarkdownFiles() 返回空数组 => 缓存永远是 0 条，而同步读又只认缓存，
   //    执行层于是永远报「今天没有 Nautilus Log」。实测踩到，别改回 onload 直调。
   const ws = next.app.workspace as unknown as { onLayoutReady?: (cb: () => void) => void };
@@ -672,7 +672,7 @@ export function readPrimaryPlan(date = new Date(), fallbackMinutes = 15): Primar
   const { body, startLine } = extractPlanBody(lines.join('\n'), fenceClose);
   const planUid = `${path}:${fenceClose}`;
   const bodyLines = body.length ? body.split('\n') : [];
-  // 🔴 `parentUid` 必须按【缩进】还原层级，不能一律填 planUid。
+  // 🔴 `parentUid` 必须按【缩进】还原层级（见 PORTING-DECISIONS.md §D5），不能一律填 planUid。
   //    上游 projectPlan / projectReviewTasks / projectFixedEvents 三处都靠
   //    `row.parentUid === planUid` 只取【直接子级】（文案就叫 direct-child）。
   //    Roam 里 block 自带真实 parentUid，过滤天然成立；这边把正文拍平的话
