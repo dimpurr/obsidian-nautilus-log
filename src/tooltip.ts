@@ -17,8 +17,43 @@ const core = require('./vendor/log-core') as {
     anchorX: number; anchorY: number;
     tooltipWidth: number; tooltipHeight: number;
     viewportWidth: number; viewportHeight: number;
+    /** P1-9②：径向偏好方向。不传时引擎默认 'right'（vendor/log-core.js:1389），
+     *  左半盘的提示于是全部朝右弹、盖住盘面。 */
+    preferred?: string;
+    margin?: number;
+    gap?: number;
   }): { x: number; y: number; placement: string } | null;
 };
+
+/* P1-9③：SVG 用户坐标 -> 屏幕坐标。上游 component.cljs:436-459 的
+ * `svg-screen-point`。<svg> 是 width:100% + viewBox，缩放几乎从不等于 1，
+ * 直接把用户坐标当像素加到 host 左上角会系统性偏移（图越小偏得越多）。 */
+interface CtmSvg {
+  getScreenCTM?(): unknown;
+  createSVGPoint?(): { x: number; y: number; matrixTransform(m: unknown): { x: number; y: number } };
+}
+
+function svgScreenPoint(svg: CtmSvg | null, pt: { x: number; y: number }):
+  { x: number; y: number } | null {
+  try {
+    const matrix = svg?.getScreenCTM?.();
+    const point = svg?.createSVGPoint?.();
+    if (!matrix || !point) return null;
+    point.x = pt.x;
+    point.y = pt.y;
+    const screen = point.matrixTransform(matrix);
+    if (!Number.isFinite(screen.x) || !Number.isFinite(screen.y)) return null;
+    return { x: screen.x, y: screen.y };
+  } catch {
+    return null;
+  }
+}
+
+/** 上游 hover-anchor（component.cljs:447-459）：方向向量相对圆心的主轴决定偏好边。 */
+function preferredSide(dx: number, dy: number): string {
+  if (Math.abs(dx) >= Math.abs(dy)) return dx < 0 ? "left" : "right";
+  return dy < 0 ? "top" : "bottom";
+}
 
 export interface TooltipTarget {
   el: Element;
@@ -66,13 +101,33 @@ export function createTooltip(host: HTMLElement): TooltipController {
     if (!anchor) { hide(); return; }
 
     const hostBox = host.getBoundingClientRect();
+
+    // P1-9③：优先走 getScreenCTM 换算；拿不到（jsdom / 未挂载）再退回
+    // 「viewBox 缩放 = 1」的旧假设，至少不比以前差。
+    const svg = (t.el.closest?.("svg.nautilus-log-svg") ?? null) as CtmSvg | null;
+    const centerScreen = svgScreenPoint(svg, anchor.center);
+    const directionScreen = svgScreenPoint(svg, anchor.direction);
+    const exact = centerScreen !== null && directionScreen !== null;
+
+    const anchorX = exact
+      ? (directionScreen as { x: number }).x
+      : hostBox.left + anchor.direction.x;
+    const anchorY = exact
+      ? (directionScreen as { y: number }).y
+      : hostBox.top + anchor.direction.y;
+    const from = exact ? (centerScreen as { x: number; y: number }) : anchor.center;
+    const to = exact ? (directionScreen as { x: number; y: number }) : anchor.direction;
+
     const placed = core.placeFloatingTooltip({
-      anchorX: hostBox.left + anchor.direction.x,
-      anchorY: hostBox.top + anchor.direction.y,
+      anchorX,
+      anchorY,
       tooltipWidth: tip.offsetWidth,
       tooltipHeight: tip.offsetHeight,
       viewportWidth: doc.defaultView?.innerWidth || 1200,
       viewportHeight: doc.defaultView?.innerHeight || 800,
+      preferred: preferredSide(to.x - from.x, to.y - from.y),   // P1-9②
+      margin: 12,   // 上游 component.cljs:477-478 的显式取值
+      gap: 10,
     });
     if (!placed) { hide(); return; }
 
