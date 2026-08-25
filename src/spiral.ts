@@ -62,6 +62,22 @@ interface SpiralCore {
     endMinutes: number;
     nowMinutes: number;
   }): { start: number; end: number }[];
+  /** 空闲时段分组。吃 `freetime === true` 的事件，返回合并后的连续空档，
+   *  每组已按整点切好 `segments`（与盘上的每小时格子对齐）。 */
+  availableSlotGroups(args: {
+    events: { start: number; end: number; freetime?: boolean }[];
+    startMinutes: number;
+    endMinutes: number;
+    nowMinutes: number;
+    clampToNow?: boolean;
+  }): {
+    key: string;
+    start: number;
+    end: number;
+    duration: number;
+    availableNow: boolean;
+    segments: { start: number; end: number }[];
+  }[];
   pastUnplannedSegments(args: {
     startMinutes: number;
     endMinutes: number;
@@ -548,6 +564,75 @@ function pastTimeOverlay(
     }));
   }
   return group;
+}
+
+/** 占用区间在 [from, to) 里的补集 —— 也就是"没排任何东西"的空档。
+ *  上游把这些空档当作 `freetime: true` 的事件混在同一份事件列表里
+ *  （eventsToSlices / eventsToNewDimensions 都显式排除它们），
+ *  唯一的消费者是 availableSlotGroups。盘上不画实体，只做 hover 预览。 */
+function freeGaps(events: RenderEvent[], from: number, to: number): [number, number][] {
+  const occupied = events
+    .map((e) => [Math.max(from, e.start), Math.min(to, e.end)] as [number, number])
+    .filter(([a, b]) => b > a)
+    .sort((a, b) => a[0] - b[0]);
+  const gaps: [number, number][] = [];
+  let cursor = from;
+  for (const [a, b] of occupied) {
+    if (a > cursor) gaps.push([cursor, a]);
+    if (b > cursor) cursor = b;
+  }
+  if (cursor < to) gaps.push([cursor, to]);
+  return gaps;
+}
+
+/** 空闲时段的 hover 靶区。**类名与结构必须照抄上游**：
+ *  外层 `<g class="nautilus-log-available-slot">` 一组一个（含 `--now` 修饰），
+ *  内层每个整点分片一个 `.nautilus-log-available-slot-hit`。
+ *  styles.css 早就把这套规则移植过来了（hover 时整组一起高亮），
+ *  另造类名 = 白写一遍样式还对不上。
+ *
+ *  整组共享一个 tooltip：鼠标落在任何一个分片上，报的都是【整段连续空档】
+ *  的时长 —— 这正是这个特性的价值（"这儿还能塞下多长的活"，
+ *  而不是"这个格子有多长"）。
+ *  🔴 默认完全透明、不改任何视觉：空档在盘上本来就该是空的。 */
+function freeSlotLayer(
+  groups: {
+    key: string; start: number; end: number; duration: number;
+    availableNow: boolean; segments: { start: number; end: number }[];
+  }[],
+  center: Point,
+  settings: RendererSettings,
+  innerRadius: number,
+  label: (slot: { start: number; end: number; duration: number; availableNow: boolean }) => string,
+): { group: Element; targets: { el: Element; groupIndex: number }[] } {
+  const layer = createSvg("g", { class: "nautilus-log-available-slots" });
+  const targets: { el: Element; groupIndex: number }[] = [];
+  groups.forEach((slot, groupIndex) => {
+    const drawn = slot.segments.filter((seg) => seg.end > seg.start);
+    if (!drawn.length) return;
+    const g = createSvg("g", {
+      class: `nautilus-log-available-slot${slot.availableNow ? " nautilus-log-available-slot--now" : ""}`,
+      // 键盘可达：与实体切片同一套 focus/blur 路径。
+      tabindex: "0",
+      role: "img",
+      "aria-label": label(slot),
+    });
+    for (const segment of drawn) {
+      g.appendChild(createSvg("path", {
+        class: "nautilus-log-available-slot-hit",
+        d: createArcPath(
+          minToAngle(segment.start),
+          minToAngle(segment.end),
+          spiralCellInnerRadius(segment.start, settings, innerRadius),
+          spiralOuterRadius(segment.start, settings),
+          center,
+        ),
+      }));
+    }
+    layer.appendChild(g);
+    targets.push({ el: g, groupIndex });
+  });
+  return { group: layer, targets };
 }
 
 function pastUnplannedOverlay(
@@ -1069,6 +1154,20 @@ export function renderSpiral(
 
   const allEvents = fixedEvents.concat(taskEvents, doneEvents);
 
+  // 空闲时段预览。过去的日子不给 —— "那天还剩多少空档"没有意义。
+  const offerFreeSlots = !ds || ds.showNow || !ds.showElapsed;
+  const freeSlots = offerFreeSlots
+    ? core.availableSlotGroups({
+      events: freeGaps(allEvents, workdayStart, workdayEnd)
+        .map(([a, b]) => ({ start: a, end: b, freetime: true })),
+      startMinutes: workdayStart,
+      endMinutes: workdayEnd,
+      nowMinutes: timelineMinute,
+      // 只有今天才裁到"此刻"；看明天时整天都还空着。
+      clampToNow: showNow,
+    })
+    : [];
+
   const initialWidth = container.clientWidth || 600;
   const initialHeight = container.clientHeight || 800;
   const initialCenter = { x: initialWidth / 2, y: initialHeight / 2 };
@@ -1114,6 +1213,14 @@ export function renderSpiral(
       patternId,
     ));
   }
+  const slotTitle = (slot: { availableNow: boolean }): string => (slot.availableNow
+    ? (copy.tooltips?.availableNow || "Available now")
+    : (copy.tooltips?.available || "Available slot"));
+  const freeLayer = freeSlotLayer(
+    freeSlots, center, s, SNAIL_INNER_RADIUS,
+    (slot) => `${slotTitle(slot)} ${minutesToTime(slot.start)}–${minutesToTime(slot.end)} ${durationLabel(slot.duration)}`,
+  );
+  root.appendChild(freeLayer.group);   // 在 slices 之前：实体切片压过靶区
   root.appendChild(sliceGroups);
   root.appendChild(snailBlueprintComponent(center, s, SNAIL_INNER_RADIUS, showElapsed, elapsedThrough));
   if (showNow) {
@@ -1163,6 +1270,22 @@ export function renderSpiral(
       ],
     });
   });
+
+  // 空闲时段：整组共享文案，报【整段】时长而不是单个格子。
+  for (const t of freeLayer.targets) {
+    const slot = freeSlots[t.groupIndex];
+    if (!slot) continue;
+    targets.push({
+      el: t.el,
+      startMinutes: slot.start,
+      endMinutes: slot.end,
+      lines: [
+        slotTitle(slot),
+        `${minutesToTime(slot.start)}–${minutesToTime(slot.end)}`,
+        durationLabel(slot.duration),
+      ],
+    });
+  }
 
   tooltip.attach(targets, {
     centerX: center.x, centerY: center.y, radius: SNAIL_INNER_RADIUS,

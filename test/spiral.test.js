@@ -201,3 +201,86 @@ test("renderSpiral still emits an <svg> for an empty plan", () => {
 
   assert.match(container.innerHTML, /<svg/, "empty plan still renders an <svg>");
 });
+
+/* ------------------------------------------------------------------ */
+/* 空闲时段 hover 预览（availableSlotGroups）                          */
+/* ------------------------------------------------------------------ */
+/* 🔴 类名与结构必须是上游那套：外层 .nautilus-log-available-slot 一组一个、
+ *    内层每个整点分片一个 .nautilus-log-available-slot-hit。styles.css 里
+ *    这套规则（含 --now 修饰与 hover 高亮）早就移植好了，另造名字就白写。 */
+
+function slotGroups(html) {
+  return (html.match(/class="nautilus-log-available-slot(?![-s])[^"]*"/g) || []);
+}
+function slotLabels(html) {
+  return (html.match(/aria-label="[^"]*"/g) || [])
+    .filter((a) => /Available/.test(a))
+    .map((a) => a.slice('aria-label="'.length, -1));
+}
+
+test("空闲时段：占用区间的补集，且裁到此刻之后", () => {
+  globalThis.document = documentShim;
+  const container = makeContainer();
+  renderSpiral(container, plan, capacity, settings, 600);
+  const html = container.innerHTML;
+
+  // 工作日 5:00–21:00 = 300..1260；占用 = 480-510 / 540-630 / 660-705 / 720-780
+  // now = 600 => 600 之前的空档（300-480、510-540）不该出现。
+  const labels = slotLabels(html);
+  assert.deepEqual(
+    labels.map((l) => l.replace(/^Available slot /, "").replace(/ \S+$/, "")),
+    ["10:30–11:00", "11:45–12:00", "13:00–21:00"],
+    "只应留下此刻之后的三段空档",
+  );
+  assert.equal(slotGroups(html).length, 3, "一段连续空档 = 一个 group");
+});
+
+test("空闲时段：整段报时长，不是单个格子", () => {
+  globalThis.document = documentShim;
+  const container = makeContainer();
+  renderSpiral(container, plan, capacity, settings, 600);
+  const last = slotLabels(container.innerHTML).pop();
+  // 13:00–21:00 跨 8 个整点，会切成 8 个 hit 分片，但报的必须是整段 8h。
+  assert.match(last, /13:00–21:00 8h$/,
+    "这个特性的价值就是「这儿还能塞下多长的活」，报单格时长等于没做");
+  const hits = (container.innerHTML.match(/nautilus-log-available-slot-hit/g) || []).length;
+  assert.ok(hits > slotGroups(container.innerHTML).length,
+    "分片数应多于组数（按整点切开，与盘上格子对齐）");
+});
+
+test("空闲时段：过去的日子不给预览", () => {
+  globalThis.document = documentShim;
+  const container = makeContainer();
+  renderSpiral(container, plan, capacity, settings, 600, {
+    dayState: {
+      relation: "past",
+      timelineMinutes: 1260,
+      scheduleFromMinutes: 300,
+      capacityFromMinutes: 1260,
+      elapsedThroughMinutes: 1260,
+      showNow: false,
+      showElapsed: true,
+    },
+  });
+  assert.equal(slotGroups(container.innerHTML).length, 0,
+    "「昨天还剩多少空档」没有意义");
+});
+
+test("空闲时段：未来的日子整天都算空着", () => {
+  globalThis.document = documentShim;
+  const container = makeContainer();
+  renderSpiral(container, plan, capacity, settings, 600, {
+    dayState: {
+      relation: "future",
+      timelineMinutes: 300,
+      scheduleFromMinutes: 300,
+      capacityFromMinutes: 300,
+      elapsedThroughMinutes: 300,
+      showNow: false,
+      showElapsed: false,
+    },
+  });
+  const labels = slotLabels(container.innerHTML);
+  assert.ok(/^Available slot 05:00–08:00/.test(labels[0]),
+    "看明天时不裁到「此刻」，第一段空档应从工作日起点算起");
+});
