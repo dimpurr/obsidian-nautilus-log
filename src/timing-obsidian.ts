@@ -92,6 +92,8 @@ export interface TimingHost {
 
 let host: TimingHost | null = null;
 let metadataListener: ((file: TFile) => void) | null = null;
+/** 同步缓存首轮预热的完成信号。见 timingCacheReady()。 */
+let primeReady: Promise<void> = Promise.resolve();
 
 /** 同步读的内容缓存。Obsidian 的 vault 全是异步 API，而运行时在 refresh()
  *  里同步调 readPrimaryPlan / readAllEntries / readBlockString —— 只能靠缓存。
@@ -142,8 +144,20 @@ export function initTimingObsidian(next: TimingHost): void {
   //    getMarkdownFiles() 返回空数组 => 缓存永远是 0 条，而同步读又只认缓存，
   //    执行层于是永远报「今天没有 Nautilus Log」。实测踩到，别改回 onload 直调。
   const ws = next.app.workspace as unknown as { onLayoutReady?: (cb: () => void) => void };
-  if (typeof ws?.onLayoutReady === 'function') ws.onLayoutReady(() => { void primeTimingCache(); });
-  else void primeTimingCache();
+  if (typeof ws?.onLayoutReady === 'function') {
+    primeReady = new Promise<void>((resolve) => {
+      ws.onLayoutReady!(() => { primeTimingCache().finally(resolve); });
+    });
+  } else {
+    primeReady = primeTimingCache();
+  }
+}
+
+/** 预热完成的信号。🔴 执行层必须 await 它再 initialize()：
+ *  runtime 的 reconcileLegacyOverlap / closeDoneClocks 是【一次性】的，
+ *  抢在缓存填好之前跑就永远空转。见 PORTING-DECISIONS.md §D6。 */
+export function timingCacheReady(): Promise<void> {
+  return primeReady;
 }
 
 export function disposeTimingObsidian(): void {
@@ -289,6 +303,32 @@ function scanFile(path: string, lines: string[]): TimingEntry[] {
  *  "Clock In could not be confirmed."。比较前一律截到分钟。 */
 function toMinuteMs(ms: number | null): number | null {
   return ms === null ? null : Math.floor(ms / 60000) * 60000;
+}
+
+/** 定位一条已知 entry 的 CLOCK 行。
+ *  🔴 上游是拿 `entry.clockUid` 精确读那一个 block（timing-roam.js）；这边 uid 是
+ *  `path:line`，行会漂，所以早期退化成了「全文件扫第一条起始分钟匹配的」——
+ *  不校验抽屉归属、不校验任务子树。同文件出现两条起始分钟相同的 running CLOCK
+ *  就会认错，而这恰恰是 reconcileLegacyOverlap 要修的场景（最需要精确时最容易撞）。
+ *
+ *  现在两段式：① uid 记的那行还对得上就直接用（绝大多数情况，行没漂）；
+ *  ② 行漂了才扫全文件，且**要求唯一命中**，歧义时返回 -1 让调用方拒写 ——
+ *  宁可报错也不能改错人。见 PORTING-DECISIONS.md §D9。 */
+function locateClockLine(lines: string[], entry: TimingEntry, running: boolean | undefined): number {
+  const target = toMinuteMs(toMs(entry.start));
+  if (target === null) return -1;
+  const matches = (i: number): boolean => {
+    const p = parseClockLineFromLine(lines[i]);
+    if (!p || toMinuteMs(toMs(p.start)) !== target) return false;
+    return running === undefined || p.running === running;
+  };
+  const parsed = entry.clockUid ? splitUid(entry.clockUid) : null;
+  if (parsed && parsed.line >= 0 && parsed.line < lines.length && matches(parsed.line)) {
+    return parsed.line;
+  }
+  const hits: number[] = [];
+  for (let i = 0; i < lines.length; i += 1) if (matches(i)) hits.push(i);
+  return hits.length === 1 ? hits[0] : -1;
 }
 
 function findClockIndexByStart(lines: string[], startMs: number | null, running: boolean | undefined): number {
@@ -539,10 +579,10 @@ export async function closeClock(entry: TimingEntry, now: Date): Promise<TimingE
   const lines = await readFreshLines(parsed.path);
   if (!lines) throw new Error('Clock Out could not read the current CLOCK block.');
   const startMs = toMs(entry.start);
-  let idx = findClockIndexByStart(lines, startMs, true);
+  let idx = locateClockLine(lines, entry, true);
   if (idx < 0) {
     // 已是闭合状态（外部改动）→ 幂等返回当前值。
-    const closedIdx = findClockIndexByStart(lines, startMs, false);
+    const closedIdx = locateClockLine(lines, entry, false);
     if (closedIdx >= 0) {
       const current = parseClockLineFromLine(lines[closedIdx]);
       if (current) return { ...entry, ...current };
@@ -555,7 +595,7 @@ export async function closeClock(entry: TimingEntry, now: Date): Promise<TimingE
   // 确认已闭合。
   const fresh = await readFreshLines(parsed.path);
   if (!fresh) throw new Error('Clock Out could not be confirmed.');
-  const ci = findClockIndexByStart(fresh, startMs, false);
+  const ci = locateClockLine(fresh, entry, false);
   if (ci < 0) throw new Error('Clock Out could not be confirmed.');
   const confirmed = parseClockLineFromLine(fresh[ci]);
   if (!confirmed) throw new Error('Clock Out could not be confirmed.');
@@ -569,7 +609,7 @@ export async function deleteClock(entry: TimingEntry): Promise<boolean> {
   if (!parsed) throw new Error('CLOCK block not found.');
   const lines = await readFreshLines(parsed.path);
   if (!lines) throw new Error('CLOCK block not found.');
-  const idx = findClockIndexByStart(lines, toMs(entry.start), true);
+  const idx = locateClockLine(lines, entry, true);
   if (idx < 0) throw new Error('The CLOCK block changed while deleting. Aborting.');
   const rawCurrent = lines[idx];
   await writeChange(parsed.path, { kind: 'remove', line: idx, expected: rawCurrent });

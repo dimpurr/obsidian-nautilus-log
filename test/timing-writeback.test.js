@@ -288,3 +288,45 @@ test('D1 显式标记的行不受影响', async () => {
   assert.ok(!titles.some(t=>/记得带钥匙|随手写/.test(t)),'裸行不得进 Review');
   v.cleanup();
 });
+
+/* ─────────── P0-3：CLOCK 定位不得在歧义时改错人 ───────────
+ * 上游用 entry.clockUid 精确读一个 block；这边 uid 是 path:line、行会漂，
+ * 早期退化成「全文件扫第一条同起始分钟的」。同文件两条相同起始分钟的 running
+ * CLOCK 就会认错 —— 而这正是 reconcileLegacyOverlap 要修的场景。 */
+const DUP_NOTE=[
+  '# 2026-08-25',                                  // 0
+  '```naut',                                       // 1
+  '```',                                           // 2
+  '- [ ] 任务甲 30m',                               // 3
+  '    - LOGBOOK::',                               // 4
+  '        - CLOCK: [2026-08-25 Tue 10:00]',       // 5  ← 甲的
+  '- [ ] 任务乙 30m',                               // 6
+  '    - LOGBOOK::',                               // 7
+  '        - CLOCK: [2026-08-25 Tue 10:00]',       // 8  ← 乙的，同一分钟
+].join('\n');
+
+test('🔴 P0-3 行没漂时按 clockUid 精确命中，不会改到同分钟的另一条', async () => {
+  const v=makeVault(); v.write('2026-08-25.md',DUP_NOTE);
+  await T.primeTimingCache();
+  const entryB={ clockUid:'2026-08-25.md:8', taskUid:'2026-08-25.md:6', running:true,
+            start:new Date(2026,7,25,10,0) };
+  await T.closeClock(entryB, new Date(2026,7,25,10,25));
+  const out=v.read('2026-08-25.md').split('\n');
+  assert.match(out[8], /=> 0:25/, '应该合上第 8 行（乙）');
+  assert.equal(out[5], '        - CLOCK: [2026-08-25 Tue 10:00]',
+    '第 5 行（甲）必须原封不动 —— 早期实现会扫到它');
+  v.cleanup();
+});
+
+test('🔴 P0-3 行漂且歧义时拒写，而不是赌一个', async () => {
+  const v=makeVault(); v.write('2026-08-25.md',DUP_NOTE);
+  await T.primeTimingCache();
+  // clockUid 指向一个不再是 CLOCK 的行 => 走兜底扫描 => 两条都匹配 => 必须拒写
+  const ambiguous={ clockUid:'2026-08-25.md:3', taskUid:'2026-08-25.md:6', running:true,
+              start:new Date(2026,7,25,10,0) };
+  await assert.rejects(() => T.closeClock(ambiguous, new Date(2026,7,25,10,25)),
+    /could not/i, '歧义时宁可报错也不能改错人');
+  const out=v.read('2026-08-25.md').split('\n');
+  assert.ok(!out.some(l=>/=> 0:25/.test(l)),'拒写后文件不得被改动');
+  v.cleanup();
+});

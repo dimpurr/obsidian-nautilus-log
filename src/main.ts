@@ -14,7 +14,7 @@ import { renderCapacityHeader } from './header';
 import { renderChartControls, type ChartControlState } from './controls';
 import { resolveDayState } from './daystate';
 import { NAUTILUS_VIEW_TYPE, NautilusSidebarView, resolveDailyNoteInfo, primeDailyNotesConfig } from './sidebar';
-import { initTimingObsidian, diagnoseTiming } from './timing-obsidian';
+import { initTimingObsidian, diagnoseTiming, timingCacheReady } from './timing-obsidian';
 import { renderTimingStatusBar } from './statusbar';
 import type { ExecViewContext, TimingRuntime } from './timing-contract';
 import { createTimingRuntime } from './vendor/timing-runtime';
@@ -336,6 +336,21 @@ class NautilusLogView extends MarkdownRenderChild {
   }
 }
 
+/** Roam kebab 键 → 本移植 camelCase 字段。
+ *  🔴 vendor 里每出现一个新的 `settings.get('...')` 字面量，这里必须有对应条目。
+ *  枚举命令：`grep -no "settings.get('[a-z-]*')" src/vendor/*.js`
+ *  见 PORTING-DECISIONS.md §D7 与 §7 的「键名空间」检测器。 */
+const SETTINGS_KEY_MAP: Record<string, keyof NautilusSettings> = {
+  'language': 'language',
+  'workday-start': 'workdayStartHour',
+  'workday-end': 'workdayEndHour',
+  'todo-duration': 'todoDuration',
+  'timing-line-sidebar': 'timingLineSidebar',
+  'pomodoro-minutes': 'pomodoroMinutes',
+  'recent-retention-minutes': 'recentRetentionMinutes',
+  'forgotten-timer-minutes': 'forgottenTimerMinutes',
+};
+
 export default class NautilusLogPlugin extends Plugin {
   settings: NautilusSettings = { ...DEFAULT_SETTINGS };
 
@@ -388,7 +403,19 @@ export default class NautilusLogPlugin extends Plugin {
     // 执行层：总开关打开才起 runtime + 状态栏。
     // 🔴 关闭时【一个定时器/订阅都不许起】—— 上游默认也是关的，
     //    关着还跑就等于用户明确说不要、我们还在后台烧。
-    if (this.settings.actualTimeTracking) this.startExecutionLayer();
+    // 🔴🔴 必须等 onLayoutReady，不能在 onload 里直接起：
+    //    initTimingObsidian 的同步内容缓存也是等 onLayoutReady 才预热的
+    //    （§D6），而 runtime.initialize() 会立刻 readAllEntries()。抢跑的话
+    //    initialEntries 恒为空 => reconcileLegacyOverlap / closeDoneClocks
+    //    这两件【一次性】修复空转，遗留的 running CLOCK 永远不会被自动关闭。
+    //    见 PORTING-DECISIONS.md §D6 与 audit §P0-2。
+    this.app.workspace.onLayoutReady(() => {
+      if (!this.settings.actualTimeTracking) return;
+      // 🔴 onLayoutReady 只保证「布局好了」，预热本身还是异步的 —— 必须 await。
+      void timingCacheReady().then(() => {
+        if (this.settings.actualTimeTracking && !this.timingRuntime) this.startExecutionLayer();
+      });
+    });
 
     // 执行层链路诊断 —— 面板说「今天没有 Nautilus Log」时按这条命令看到底断在哪。
     this.addCommand({
@@ -474,6 +501,12 @@ export default class NautilusLogPlugin extends Plugin {
         extensionAPI: {
           settings: {
             get: (k: string) => {
+              // 🔴 vendor 问的是 Roam 的 kebab 键，我们的字段是 camelCase。
+              //    直接透传 => 全部 undefined => 静默落引擎硬编码兜底。
+              //    而兜底值恰好等于 DEFAULT_SETTINGS，所以默认配置下行为正确、
+              //    只有改过设置的用户会撞上，测试必绿 —— 见 PORTING-DECISIONS.md §D7。
+              const mapped = SETTINGS_KEY_MAP[k];
+              if (mapped) return (this.settings as unknown as Record<string, unknown>)[mapped];
               const own = (this.settings as unknown as Record<string, unknown>)[k];
               return own !== undefined ? own : this.runtimeState[k];
             },
