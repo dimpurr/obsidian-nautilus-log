@@ -268,3 +268,78 @@ test("broken capacity degrades to a zeroed header instead of throwing", () => {
   );
   assert.match(textOf(summaryItems(container)[0]), /0m/, "neutral header shows zeroed values");
 });
+
+/* ------------------------------------------------------------------ */
+/* §P1-8 HTML colour legend + §P1-4 container-query context            */
+/* ------------------------------------------------------------------ */
+
+test("header mounts the HTML colour legend (P1-8)", () => {
+  const container = render(normalCapacity(), settings, 600);
+  const legend = container.querySelector(".nautilus-log-html-legend");
+
+  assert.ok(legend, "header renders one .nautilus-log-html-legend");
+  assert.strictEqual(
+    legend.getAttribute("aria-label"),
+    "Nautilus Log legend",
+    "legend is labelled like upstream html-legend-component",
+  );
+
+  const dots = legend.querySelectorAll(".nautilus-log-legend-dot");
+  assert.strictEqual(dots.length, 3, "three colour dots: urgent / event / task");
+  assert.ok(dots[0].classList.contains("nautilus-log-legend-dot--urgent"));
+  assert.ok(dots[1].classList.contains("nautilus-log-legend-dot--event"));
+  assert.ok(dots[2].classList.contains("nautilus-log-legend-dot--task"));
+  for (const dot of dots) {
+    assert.strictEqual(dot.getAttribute("aria-hidden"), "true", "dots are decorative");
+  }
+
+  const items = legend.querySelectorAll(".nautilus-log-legend-item");
+  assert.strictEqual(items.length, 3, "three legend items");
+  assert.strictEqual(textOf(items[0]), "Urgent");
+  assert.strictEqual(textOf(items[1]), "Event");
+  assert.strictEqual(textOf(items[2]), "Task");
+
+  // The legend lives in the header actions column, like upstream.
+  assert.ok(
+    container.querySelector(".nautilus-log-header-actions .nautilus-log-html-legend"),
+    "legend sits inside .nautilus-log-header-actions",
+  );
+});
+
+test("legend copy is localised (P1-8)", () => {
+  const container = render(normalCapacity(), zhSettings, 600);
+  const items = container.querySelectorAll(
+    ".nautilus-log-html-legend .nautilus-log-legend-item",
+  );
+  assert.deepStrictEqual(
+    Array.from(items, textOf),
+    ["紧急", "事件", "任务"],
+    "legend.urgent / legend.event / legend.task come from uiCopy(zh)",
+  );
+});
+
+test("header establishes the container-query context (P1-4 precondition)", () => {
+  // Every `.nautilus-log-compact-*` rule in styles.css lives inside
+  // `@container (max-width: 520px)`; without `container-type` on the block root
+  // the whole block is dead CSS and the compact panels stay display:none.
+  const container = render(normalCapacity(), settings, 600);
+  assert.strictEqual(
+    container.style.getPropertyValue("container-type"),
+    "inline-size",
+    "block root must carry container-type: inline-size",
+  );
+});
+
+test("header keeps the upstream copy / actions skeleton", () => {
+  const container = render(normalCapacity(), settings, 600);
+  const header = container.querySelector("header.nautilus-log-header");
+  assert.ok(header, "metrics are wrapped in <header class=nautilus-log-header>");
+  assert.ok(
+    header.classList.contains("nautilus-log-header--compact"),
+    "header carries the --compact modifier the container query keys off",
+  );
+  assert.ok(
+    header.querySelector(".nautilus-log-header-copy .nautilus-log-metrics"),
+    "metrics sit in the copy column",
+  );
+});

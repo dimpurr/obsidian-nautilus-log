@@ -30,7 +30,7 @@ type BurningBucket = "available" | "events" | null;
 /** One metric as returned by the engine's `capacityMetrics`.  Every field is
  *  optional so a partial/malformed capacity degrades to an empty cell instead
  *  of throwing. */
-interface MetricReading {
+export interface MetricReading {
   key?: string;
   label?: string;
   value?: string;
@@ -44,7 +44,7 @@ interface MetricReading {
   burningLabel?: string;
 }
 
-interface CapacityMetricsResult {
+export interface CapacityMetricsResult {
   planned: MetricReading;
   status: MetricReading;
   available: MetricReading;
@@ -96,7 +96,7 @@ function appendTextChild(
 }
 
 /** `[value] [summaryLabel]` cell, e.g. "3h30m planned". */
-function appendSummaryItem(row: HTMLElement, metric: MetricReading): void {
+export function appendSummaryItem(row: HTMLElement, metric: MetricReading): void {
   const tone = metric.tone || "neutral";
   const item = el(
     "span",
@@ -107,7 +107,7 @@ function appendSummaryItem(row: HTMLElement, metric: MetricReading): void {
   row.appendChild(item);
 }
 
-function appendSeparator(row: HTMLElement): void {
+export function appendSeparator(row: HTMLElement): void {
   const sep = el("span", "nautilus-log-metric-separator");
   sep.setAttribute("aria-hidden", "true");
   sep.textContent = "·";
@@ -115,7 +115,7 @@ function appendSeparator(row: HTMLElement): void {
 }
 
 /** `[percent] [percentLabel]` cell, e.g. "45% left". */
-function appendPercentItem(row: HTMLElement, planned: MetricReading): void {
+export function appendPercentItem(row: HTMLElement, planned: MetricReading): void {
   const tone = planned.percentTone || "neutral";
   const item = el(
     "span",
@@ -127,7 +127,7 @@ function appendPercentItem(row: HTMLElement, planned: MetricReading): void {
 }
 
 /** `[label] [value / total] [flame]` cell, e.g. "Available 5h11m / 15h 🔥". */
-function appendReading(row: HTMLElement, metric: MetricReading): void {
+export function appendReading(row: HTMLElement, metric: MetricReading): void {
   const tone = metric.tone || "neutral";
   const item = el("div", `nautilus-log-metric nautilus-log-metric--${tone}`);
   appendTextChild(item, "span", "nautilus-log-metric-label", metric.label);
@@ -281,6 +281,89 @@ function readingAriaText(metric: MetricReading): string {
 }
 
 /* ------------------------------------------------------------------ */
+/* Shared seams reused by the compact panels (src/compact.ts)          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Resolve the four capacity metrics, never throwing.
+ *
+ * Mirror of the upstream `capacity-metrics` `(or ... fallback)` in
+ * `component.cljs:1556`: a null/blown engine result degrades to the zeroed
+ * reading instead of taking the block down.  `compact.ts` needs exactly the
+ * same numbers for the compact Overview, so the resolution lives here rather
+ * than being duplicated.  见 parity-audit §P1-4。
+ */
+export function resolveCapacityMetrics(
+  capacity: Capacity,
+  settings: NautilusSettings,
+  nowMinutes: number,
+): CapacityMetricsResult {
+  try {
+    return resolveMetrics(capacity, settings, nowMinutes) ?? neutralMetrics(settings);
+  } catch {
+    return neutralMetrics(settings);
+  }
+}
+
+/**
+ * Give the block root a container-query context.
+ *
+ * 🔴 parity-audit §P1-4 的前置条件：`styles.css` 里紧凑模式的 28 条规则
+ * （`.nautilus-log-compact-*`）全部躺在 `@container (max-width: 520px)` 里，
+ * 而 `container-type: inline-size` 只写在 `.nautilus-log-container` 上 ——
+ * 本移植的块根 div 叫 `nautilus-log`，**从没有任何代码产出过
+ * `nautilus-log-container` 这个类**（已查：`grep -rn "nautilus-log-container" src/`
+ * 仅命中 `src/vendor/upstream-extension.css` 与 `styles.css` 自身）。
+ * 于是整个 `@container` 块是死代码，紧凑面板即便渲染出来也恒为
+ * `display: none`。
+ *
+ * 这里只补上容器上下文本身（一个属性），**不**套用
+ * `.nautilus-log-container` 的 flex/padding —— 那会改动现有非紧凑布局。
+ */
+export function enableContainerQueries(root: HTMLElement): void {
+  const style = root?.style as (CSSStyleDeclaration & { containerType?: string }) | undefined;
+  if (!style) return;
+  // `containerType` 在旧 TS lib / 测试 shim 里可能不存在，两条路都走一遍。
+  try {
+    style.setProperty?.("container-type", "inline-size");
+  } catch { /* shim without setProperty */ }
+  if (!style.containerType) style.containerType = "inline-size";
+}
+
+/**
+ * The upstream HTML colour legend (`component.cljs:1626` `html-legend-component`).
+ *
+ * Three dots + localized words, straight out of `logCore.uiCopy(lang).legend`
+ * (`legend.urgent` / `legend.event` / `legend.task` — zero call sites before
+ * this, see parity-audit §P1-8).  Mounted twice, exactly like upstream: in the
+ * header actions column (below) and inside the compact Overview body
+ * (`compact.ts`).
+ */
+export function renderHtmlLegend(
+  parent: HTMLElement,
+  copy: Record<string, Record<string, string>>,
+): HTMLElement {
+  const legendCopy = copy?.legend || {};
+  const root = el("div", "nautilus-log-html-legend");
+  root.setAttribute("aria-label", "Nautilus Log legend");
+  const tones: [string, string][] = [
+    ["urgent", legendCopy.urgent || "Urgent"],
+    ["event", legendCopy.event || "Event"],
+    ["task", legendCopy.task || "Task"],
+  ];
+  for (const [tone, label] of tones) {
+    const item = el("span", "nautilus-log-legend-item");
+    const dot = el("i", `nautilus-log-legend-dot nautilus-log-legend-dot--${tone}`);
+    dot.setAttribute("aria-hidden", "true");
+    item.appendChild(dot);
+    item.appendChild(document.createTextNode(label));
+    root.appendChild(item);
+  }
+  parent.appendChild(root);
+  return root;
+}
+
+/* ------------------------------------------------------------------ */
 /* Public seam                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -301,12 +384,11 @@ export function renderCapacityHeader(
   settings: NautilusSettings,
   nowMinutes: number,
 ): void {
-  let metrics: CapacityMetricsResult;
-  try {
-    metrics = resolveMetrics(capacity, settings, nowMinutes) ?? neutralMetrics(settings);
-  } catch {
-    metrics = neutralMetrics(settings);
-  }
+  // 🔴 必须最先做：不给块根建立容器查询上下文，styles.css 里所有
+  //    `@container` 规则（含紧凑模式全部 28 条）恒不生效。见 §P1-4。
+  enableContainerQueries(container);
+
+  const metrics = resolveCapacityMetrics(capacity, settings, nowMinutes);
 
   const ordered = [metrics.planned, metrics.status, metrics.available, metrics.events];
   const ariaLabel = ordered.map(metricAriaText).filter(Boolean).join(", ");
@@ -336,5 +418,26 @@ export function renderCapacityHeader(
 
   root.appendChild(summaryRow);
   root.appendChild(capacityRow);
-  container.appendChild(root);
+
+  // 上游 `component.cljs:1876-1883` 的 header 骨架：左列文案 / 右列动作 + 图例。
+  // ⚠️ `nautilus-log-header--compact` 这里【无条件】加 —— 上游靠 React state
+  //    切换它，但本移植用到它的三条规则本身就关在 `@container (max-width:520px)`
+  //    里（styles.css:719-726），宽容器下加不加都没有效果，因此不需要在 JS 里
+  //    再算一次宽度（也就不会和 spiral.ts 的 isCompactChartWidth 打架）。
+  const header = el("header", "nautilus-log-header nautilus-log-header--compact");
+  const copyCol = el("div", "nautilus-log-header-copy");
+  copyCol.appendChild(root);
+  header.appendChild(copyCol);
+
+  const actionsCol = el("div", "nautilus-log-header-actions");
+  let copy: Record<string, Record<string, string>> = {};
+  try {
+    copy = core.uiCopy(settings.language);
+  } catch {
+    copy = {};
+  }
+  renderHtmlLegend(actionsCol, copy);   // §P1-8 图例挂载点 1/2
+  header.appendChild(actionsCol);
+
+  container.appendChild(header);
 }
