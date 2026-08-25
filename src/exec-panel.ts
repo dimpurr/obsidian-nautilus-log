@@ -44,6 +44,7 @@ interface TimingCore {
       notTracked: string; notStarted: string;
     };
     empty: { noActive: string; noLog: string; noPlanTasks: string; noReviewTasks: string };
+    capacity: { label: string; available: string; remaining: string; overload: string; noSlot: string };
   };
   formatElapsed(milliseconds: number): string;
   compactMinutes(minutes: number): string;
@@ -54,6 +55,15 @@ interface TimingCore {
   }): { primaryLabel: string; detailLabel: string; actualMinutes: number; plannedMinutes: number };
   isForgottenClock(entry: TimingEntry, now: Date, thresholdMinutes: number): boolean;
   executionStructureKey(snapshot: TimingSnapshot, view: string): string;
+  /** `d50%` 进度 token（0-100）。见 PORTING-DECISIONS.md §D3 的「多填 progress」修正。 */
+  taskProgress(string: string): number;
+  /** 容量三段摘要（Planned · Over/Free · Left%）。上游 topbar 三 tab 常驻，
+   *  本移植此前【零调用方】—— 见 §7「引擎导出面」检测器与 audit §P1-2。 */
+  capacitySummary(execution: unknown, language: string): {
+    planned: { value: string; label: string };
+    status: { value: string; label: string; warning: boolean };
+    left: { value: string; label: string };
+  };
 }
 
 const timingCore = require('./vendor/timing-core') as unknown as TimingCore;
@@ -68,6 +78,16 @@ interface PlanTask {
   plannedMinutes: number;
   remainingMinutes: number;
   progress: number;
+  /** 仅 execution.scheduledTasks 的行有：当天排定区间（自 00:00 起的分钟数）。 */
+  start?: number;
+  end?: number;
+}
+
+/** planSnapshot.execution —— vendored runtime 的 executionProjection 产出。
+ *  🔴 本移植此前【从未读取】这一支，Plan 的分节与容量条因此整个丢失（audit §P1-2）。 */
+interface ExecutionProjection {
+  scheduledTasks?: PlanTask[];
+  overflowTasks?: PlanTask[];
 }
 
 /** buildDailyReview 的一行（照实际返回抄写；contract 故意留了 unknown 面）。 */
@@ -119,6 +139,8 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
   let lastStructureKey: string | null = null;
   let unsubscribe: (() => void) | null = null;
   let deleteConfirmation: { clockUid: string; button: HTMLButtonElement; timer: number } | null = null;
+  /** Plan 的 Unscheduled 分节是否展开（上游默认收起，只显示计数）。 */
+  let unscheduledExpanded = false;
 
   container.addClass('nautilus-log-exec-panel');
 
@@ -150,15 +172,28 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
     return timingCore.isForgottenClock(entry, state.now, threshold);
   };
 
+  /** 未标时长的任务用哪个兜底：设置里的 todo-duration。
+   *  🔴 上游同名代码读 `settings.get('todo-duration')`（timing-topbar.js:331）；
+   *  本移植此前硬编码 15 —— 恰好等于 DEFAULT_SETTINGS，所以只有改过设置的
+   *  用户会撞上、测试必绿。这正是 PORTING-DECISIONS.md §D7 描述的静默模式。 */
+  const todoDuration = (): number => Number(ctx.todoDuration) || 15;
+
   /** 从一条 CLOCK 条目还原成 plan 行形状（上游 activeTask）。 */
-  const activeTask = (entry: TimingEntry): PlanTask => ({
-    uid: entry.taskUid || '',
-    string: entry.taskString || '',
-    title: entry.title || '(untitled)',
-    plannedMinutes: timingCore.plannedMinutes(entry.taskString || '', 15),
-    remainingMinutes: 0,
-    progress: 0,
-  });
+  const activeTask = (entry: TimingEntry): PlanTask => {
+    const planned = timingCore.plannedMinutes(entry.taskString || '', todoDuration());
+    const progress = timingCore.taskProgress(entry.taskString || '');
+    return {
+      uid: entry.taskUid || '',
+      string: entry.taskString || '',
+      title: entry.title || '(untitled)',
+      plannedMinutes: planned,
+      // 🔴 此前这里硬填 progress: 0 / remainingMinutes: 0，于是「在计时的任务」
+      //    进度恒 0、剩余恒 0，与 Plan 行（走 resolveTaskInstance）自相矛盾。
+      //    语义照 vendor/timing-core.js:351-352（contract.ts:40 声明的 0-100 折减）。
+      progress,
+      remainingMinutes: Math.max(0, Math.round(planned * (1 - progress / 100))),
+    };
+  };
 
   const signedMinutes = (minutes: number): string => {
     const value = Number(minutes) || 0;
@@ -168,15 +203,37 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
 
   /* ─────────────────────────── 行 / 视图构建 ─────────────────────────── */
 
-  const taskRow = (list: HTMLElement, task: PlanTask, opts: { recent?: boolean; entry?: TimingEntry | null } = {}): HTMLElement => {
+  /** 分钟数 → HH:MM（上游 timing-topbar.js:282-286 formatPlanClock 的等价实现）。 */
+  const formatPlanClock = (minutes: number | undefined): string => {
+    const safe = Math.max(0, Math.min(1440, Math.round(Number(minutes) || 0)));
+    if (safe === 1440) return '24:00';
+    return `${String(Math.floor(safe / 60)).padStart(2, '0')}:${String(safe % 60).padStart(2, '0')}`;
+  };
+
+  type RowOpts = {
+    recent?: boolean;
+    entry?: TimingEntry | null;
+    /** '' | 'scheduled' | 'unscheduled' —— 上游 taskRow 的 planState（timing-topbar.js:186-234）。 */
+    planState?: '' | 'scheduled' | 'unscheduled';
+  };
+
+  const taskRow = (list: HTMLElement, task: PlanTask, opts: RowOpts = {}): HTMLElement => {
     const text = copy();
     const focusedEntry = state.activeWork?.focused || null;
     const focused = !!focusedEntry && focusedEntry.taskUid === task.uid;
     const recent = !!opts.recent;
     const entry = opts.entry || null;
 
+    const planState = opts.planState || '';
+
     const row = list.createDiv({ cls: 'nautilus-log-exec-row' });
     row.dataset.taskUid = task.uid;
+    // 机器可读面（沿用 data-task-uid / data-review-live-actual 的既有做法）：
+    // 把折减前后的分钟数落到行上，进度语义（contract.ts:40）因此可被直接断言，
+    // 不必等某个视图恰好把它渲染成文字。
+    row.dataset.plannedMinutes = String(task.plannedMinutes);
+    row.dataset.remainingMinutes = String(Math.max(0, Number(task.remainingMinutes) || 0));
+    if (planState) row.classList.add(`is-${planState}`);
     if (focused) row.classList.add('is-focused');
     const forgotten = focused && focusedEntry ? isForgotten(focusedEntry) : false;
     if (forgotten) row.classList.add('is-forgotten');
@@ -201,8 +258,20 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
       ? `${text.timing.timing} ${timingCore.formatElapsed(state.now.getTime() - toMs(focusedEntry.start))} · ${duration.detailLabel}`
       : '';
 
+    // Remaining/Planned 段：进度折减后还剩多少 vs 计划多少（上游 planDurationText）。
+    const remainingPlanMinutes = Math.max(0, Number(task.remainingMinutes) || 0);
+    const planDurationText = remainingPlanMinutes > 0 && remainingPlanMinutes < task.plannedMinutes
+      ? `${text.timing.remaining} ${timingCore.compactMinutes(remainingPlanMinutes)} · ${text.timing.planned} ${timingCore.compactMinutes(task.plannedMinutes)}`
+      : `${text.timing.planned} ${timingCore.compactMinutes(task.plannedMinutes)}`;
+
     let metaText = duration.detailLabel; // 普通 plan 行：Planned/Actual（上游默认分支）
-    if (focused) {
+    // 🔴 上游分支顺序：planState 优先于 focused（timing-topbar.js:221-231）。
+    //    Plan 视图里在计时的任务显示的是【排定区间】，不是秒表 —— 别调换。
+    if (planState === 'scheduled') {
+      metaText = `${text.plan.today} ${formatPlanClock(task.start)}–${formatPlanClock(task.end)} · ${planDurationText}`;
+    } else if (planState === 'unscheduled') {
+      metaText = `${text.plan.unscheduled} · ${planDurationText}`;
+    } else if (focused) {
       metaText = `${forgotten ? `${text.timing.check} · ` : ''}${timingText}`;
     } else if (recent && entry?.end) {
       const recentRemaining = Math.max(0, Math.ceil(
@@ -211,8 +280,11 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
       metaText = `${text.timing.recent} · ${timingCore.compactMinutes(recentRemaining)} ${text.timing.left} · ${duration.detailLabel}`;
     }
 
+    // is-live 只给「秒表在走」的那一行 —— Plan 分节里的行是静态区间文字，
+    // 打上 is-live 会被 updateLiveElapsed 每秒覆写成秒表（上游 liveMeta 同款守卫）。
+    const liveMeta = focused && !planState;
     copyEl.createDiv({
-      cls: `nautilus-log-exec-row-meta${focused ? ' is-live' : ''}${forgotten ? ' is-warning' : ''}`,
+      cls: `nautilus-log-exec-row-meta${liveMeta ? ' is-live' : ''}${forgotten ? ' is-warning' : ''}`,
     }).setText(metaText);
 
     const actions = row.createDiv({ cls: 'nautilus-log-exec-row-actions' });
@@ -343,6 +415,51 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
     return row;
   };
 
+  /** 分节标题：`标签 · N`。可折叠的那节渲染成 button（上游 planSectionHeader，
+   *  timing-topbar.js:306-320）。 */
+  const planSectionHeader = (
+    section: HTMLElement,
+    { label, count, collapsible = false, expanded = true }:
+      { label: string; count: number; collapsible?: boolean; expanded?: boolean },
+  ): HTMLElement => {
+    const cls = `nautilus-log-exec-plan-heading${collapsible ? ' is-collapsible' : ''}`;
+    const header = collapsible
+      ? section.createEl('button', { cls })
+      : section.createDiv({ cls });
+    if (collapsible) {
+      (header as HTMLButtonElement).type = 'button';
+      header.setAttribute('aria-expanded', String(expanded));
+    }
+    header.createEl('span', {
+      cls: 'nautilus-log-exec-plan-label',
+      text: `${collapsible ? (expanded ? '▾ ' : '▸ ') : ''}${label} · ${count}`,
+    });
+    return header;
+  };
+
+  /** 三个 tab 常驻的容量条（上游 timing-topbar.js:288-304 capacityStrip）。
+   *  数据全部来自 timingCore.capacitySummary —— 别自己算，见文件头注释。 */
+  const renderCapacity = (): void => {
+    const execution = (state.planSnapshot?.execution || null) as ExecutionProjection | null;
+    if (!execution) return;
+    const summary = timingCore.capacitySummary(execution, language);
+    const strip = container.createDiv({ cls: 'nautilus-log-exec-capacity' });
+    strip.setAttribute('aria-label', copy().capacity.label);
+    const metric = strip.createDiv({ cls: 'nautilus-log-exec-capacity-metric' });
+    const part = (piece: { value: string; label: string }, warning = false): void => {
+      const node = metric.createEl('span', {
+        cls: `nautilus-log-exec-capacity-part${warning ? ' is-warning' : ''}`,
+      });
+      node.createEl('strong', { text: piece.value });
+      node.appendChild(document.createTextNode(` ${piece.label}`));
+    };
+    part(summary.planned);
+    metric.appendChild(document.createTextNode(' · '));
+    part(summary.status, summary.status.warning);
+    metric.appendChild(document.createTextNode(' · '));
+    part(summary.left);
+  };
+
   const renderList = (): void => {
     const text = copy();
     const list = container.createDiv({ cls: 'nautilus-log-exec-list' });
@@ -368,7 +485,36 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
       const plan = (state.planSnapshot || {}) as { plan?: { uid?: string } | null; tasks?: PlanTask[] };
       const tasks = plan.tasks || [];
       list.classList.add('is-plan');
-      tasks.forEach((task) => taskRow(list, task));
+      // 🔴 planSnapshot.execution 是 vendored runtime 早就产出的 scheduled/overflow
+      //    分组，本移植此前从未读取，Plan 因而只有一张平铺列表（audit §P1-2）。
+      //    execution 缺席（没有计划/旧快照）时退回平铺 —— 与上游 else 分支一致。
+      const execution = (state.planSnapshot?.execution || null) as ExecutionProjection | null;
+      const scheduled = execution?.scheduledTasks || [];
+      const unscheduled = execution?.overflowTasks || [];
+      if (tasks.length > 0 && execution) {
+        const scheduledSection = list.createDiv({ cls: 'nautilus-log-exec-plan-section is-scheduled' });
+        planSectionHeader(scheduledSection, { label: text.plan.scheduled, count: scheduled.length });
+        scheduled.forEach((task) => taskRow(scheduledSection, task, { planState: 'scheduled' }));
+
+        if (unscheduled.length > 0) {
+          const unscheduledSection = list.createDiv({ cls: 'nautilus-log-exec-plan-section is-unscheduled' });
+          const disclosure = planSectionHeader(unscheduledSection, {
+            label: text.plan.unscheduled,
+            count: unscheduled.length,
+            collapsible: true,
+            expanded: unscheduledExpanded,
+          });
+          disclosure.addEventListener('click', () => {
+            unscheduledExpanded = !unscheduledExpanded;
+            render(state, true);
+          });
+          if (unscheduledExpanded) {
+            unscheduled.forEach((task) => taskRow(unscheduledSection, task, { planState: 'unscheduled' }));
+          }
+        }
+      } else {
+        tasks.forEach((task) => taskRow(list, task));
+      }
       if (!state.planSnapshot?.plan) {
         list.createDiv({ cls: 'nautilus-log-exec-empty' }).setText(text.empty.noLog);
       } else if (tasks.length === 0) {
@@ -450,6 +596,7 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
     container.empty();
     renderHeader();
     renderNotice();
+    renderCapacity();   // 三个 tab 都有（上游 popover 同款位置）
     renderList();
   };
 

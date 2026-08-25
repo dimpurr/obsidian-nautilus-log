@@ -95,4 +95,9 @@ export interface ExecViewContext {
   forgottenTimerMinutes: number;
   /** Recent 保留时长；0 = 关闭。 */
   recentRetentionMinutes: number;
+  /** 未标时长的任务的兜底分钟数（Roam 键 `todo-duration`，见 §D7 的键名映射）。
+   *  🔴 只增不改：省略时面板退回 15（= DEFAULT_SETTINGS.todoDuration），
+   *  行为与本字段引入前逐字一致，既有调用方不受影响。
+   *  面板此前把 15 写死在代码里，改过设置的用户拿不到自己的值（audit §P1-2 邻项）。 */
+  todoDuration?: number;
 }
