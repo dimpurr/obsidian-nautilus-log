@@ -7,7 +7,7 @@
  * "changed") and on a per-minute tick (nowMinutes moves, so Overload moves).
  */
 
-import { Notice, Plugin, MarkdownRenderChild, MarkdownRenderer, TFile, type Editor, type MarkdownPostProcessorContext } from 'obsidian';
+import { Notice, Plugin, MarkdownRenderChild, MarkdownRenderer, TFile, type Editor, type Menu, type MarkdownFileInfo, type MarkdownView, type MarkdownPostProcessorContext } from 'obsidian';
 import { parsePlan, taskDescription } from './parser';
 import { renderSpiral } from './spiral';
 import { renderCapacityHeader } from './header';
@@ -16,11 +16,11 @@ import { resolveDayState } from './daystate';
 import { NAUTILUS_VIEW_TYPE, NautilusSidebarView, resolveDailyNoteInfo, primeDailyNotesConfig } from './sidebar';
 import { initTimingObsidian, diagnoseTiming, timingCacheReady } from './timing-obsidian';
 import { renderTimingStatusBar } from './statusbar';
-import type { ExecViewContext, TimingRuntime } from './timing-contract';
+import type { ExecViewContext, TimingRuntime, TimingSnapshot } from './timing-contract';
 import { createTimingRuntime } from './vendor/timing-runtime';
 import { parseBlockConfig, applyOverrides, extractPlanBody } from './blockconfig';
 import TEST_NOTE from '../docs/test-note.md';
-import { NautilusLogSettingTab } from './settings';
+import { NautilusLogSettingTab, localCopy, type LocalCopy } from './settings';
 import { DEFAULT_SETTINGS, type NautilusSettings, type LogCore } from './contract';
 
 const logCore = require('./vendor/log-core') as unknown as LogCore;
@@ -28,6 +28,28 @@ const logCore = require('./vendor/log-core') as unknown as LogCore;
 function nowMinutes(): number {
   const date = new Date();
   return date.getHours() * 60 + date.getMinutes();
+}
+
+/** 无法识别的配置键警告。P1-8：tooltip 走双语表，不再硬编码英文。
+ *  🔴 抽成导出的纯 DOM 函数是为了**可测**：main.ts 历史上零覆盖，
+ *     而「文案恒为英文」这类回归只有真渲染一遍才抓得住（audit §5 / §P1-8）。 */
+export function renderConfigWarning(
+  root: HTMLElement,
+  unknown: { key: string; value?: string }[],
+  copy: LocalCopy,
+): void {
+  const warn = root.createDiv({ cls: 'nautilus-log-config-warning' });
+  warn.setText('⚠ ' + unknown.map((u) => (u.value ? `${u.key}: ${u.value}` : u.key)).join(' · '));
+  warn.title = copy.unknownConfig;
+}
+
+/** 块里一条计划都没有时的空态：给可照抄的写法 + 诊断行。P1-8 同上。 */
+export function renderBlockEmptyState(root: HTMLElement, copy: LocalCopy, diag: string): void {
+  const hint = root.createDiv({ cls: 'nautilus-log-empty' });
+  hint.createDiv().setText(copy.blockEmptyHeading);
+  hint.createEl('pre').setText(copy.blockEmptySample);
+  hint.createDiv({ cls: 'nautilus-log-empty-note' }).setText(copy.blockEmptyNote);
+  hint.createDiv({ cls: 'nautilus-log-diag' }).setText(diag);
 }
 
 /** One ```nautilus block. Owns its DOM node and its listeners, and cleans
@@ -204,6 +226,8 @@ class NautilusLogView extends MarkdownRenderChild {
       ? `via ${via} ✓ blockEnd ${section.lineEnd} of ${section.text.split('\n').length} lines · plan ${planBody.split('\n').filter((l) => l.trim()).length} lines from ${lineOffset}`
       : '✗ both getSectionInfo() and file fallback failed';
 
+    // P1-8：这四处空态/警告文案引擎的 uiCopy 里没有对应 key（已枚举），走本地双语表。
+    const local = localCopy(settings.language);
     const copy = logCore.uiCopy(settings.language).capacity;
     const panelCopy = logCore.uiCopy(settings.language).panels;
     const schedule = logCore.normalizeScheduleSettings({
@@ -234,22 +258,11 @@ class NautilusLogView extends MarkdownRenderChild {
     const root = el.createDiv({ cls: 'nautilus-log' });
 
     // 无法识别的配置键：报出来，不静默吞掉（否则用户敲错一个词会以为插件坏了）
-    if (overrides.unknown.length > 0) {
-      const warn = root.createDiv({ cls: 'nautilus-log-config-warning' });
-      warn.setText('⚠ ' + overrides.unknown
-        .map((u) => (u.value ? `${u.key}: ${u.value}` : u.key)).join(' · '));
-      warn.title = 'Unrecognised setting. Supported: start, end, default-duration, legend-length, urgent, language';
-    }
+    if (overrides.unknown.length > 0) renderConfigWarning(root, overrides.unknown, local);
 
     // 计划为空：给出可照抄的写法，而不是渲染一张空盘让人猜
     if (plan.events.length === 0 && plan.tasks.length === 0) {
-      const hint = root.createDiv({ cls: 'nautilus-log-empty' });
-      hint.createDiv().setText('Nautilus Log — write the plan directly below this block:');
-      const pre = hint.createEl('pre');
-      pre.setText('05:00-06:00 Morning routine\n- [ ] Write project brief 45m\n- [ ] Review notes 30m');
-      hint.createDiv({ cls: 'nautilus-log-empty-note' })
-        .setText('The plan ends at the first blank line. The block itself holds per-day overrides, e.g. `end: 02:00`.');
-      hint.createDiv({ cls: 'nautilus-log-diag' }).setText(diag);
+      renderBlockEmptyState(root, local, diag);
       return;
     }
 
@@ -334,6 +347,93 @@ class NautilusLogView extends MarkdownRenderChild {
       }
     }
   }
+}
+
+/* ───────────────────────── P1-6 · 命令与块右键菜单 ─────────────────────────
+ * 上游 `src/timing-commands.js:44-70` 注册命令面板 3 条 + `blockContextMenu` 2 条
+ * （带 display-conditional）。本移植此前【一条都没有】——「在正文里对某一行直接
+ * Clock in/out」没有任何入口（audit §P1-6）。
+ *
+ * 挂载面重排（PORTING-DECISIONS.md §5）：
+ *   `extensionAPI.ui.commandPalette` → `Plugin.addCommand`
+ *   `roamAlphaAPI.ui.blockContextMenu` → `workspace.on('editor-menu')`
+ *
+ * 🔴 决策全部抽成下面这些**纯函数**再由壳调用。main.ts 历史上零覆盖，而
+ *    test/locate.test.js 是「复刻算法再测复刻件」的假覆盖（audit §5）——
+ *    这里的测试 bundle 的是 main.ts 本体，不是复刻件。
+ */
+
+const timingCore = require('./vendor/timing-core') as {
+  taskStatus(string: string): string | null;
+};
+
+/** 任务 uid 的形态是 `filepath:line`（0-based 行号，与
+ *  timing-obsidian.ts `splitUid` 逐字对齐）。见 PORTING-DECISIONS.md §1。 */
+export function uidForLine(sourcePath: string, line: number): string {
+  return `${sourcePath}:${line}`;
+}
+
+/** 编辑器里某一行的任务状态。
+ *  🔴 状态语法归 vendor 所有（`timing-core.taskStatus` 认的是 `{{TODO}}`），
+ *     这里只做 markdown → Roam 形态的归一，与 timing-obsidian 的
+ *     `normalizeTaskString` 同一套规则（那个函数没有导出，且 vendor 邻接层
+ *     一个字都不许改，所以只能在这里重述这一条桥接）。
+ *  §D1：本移植要求**显式** `- [ ]` / `- [x]`，裸行不算任务。 */
+export function editorTaskStatus(line: string): string | null {
+  if (typeof line !== 'string') return null;
+  const m = /^\s*[-*+]\s+\[(.)\]\s*(.*)$/.exec(line);
+  if (!m) return null;
+  return timingCore.taskStatus(`${/[xX]/.test(m[1]) ? '{{DONE}}' : '{{TODO}}'} ${m[2]}`);
+}
+
+/** 今天主计划里的全部任务 uid。 */
+export function planTaskUids(snapshot: TimingSnapshot | null): string[] {
+  const tasks = (snapshot?.planSnapshot as { tasks?: { uid?: unknown }[] } | null | undefined)?.tasks;
+  if (!Array.isArray(tasks)) return [];
+  return tasks.map((t) => (typeof t?.uid === 'string' ? t.uid : '')).filter(Boolean);
+}
+
+/** 当前 Timing Line 聚焦的任务 uid；没有则 null。 */
+export function focusedTaskUid(snapshot: TimingSnapshot | null): string | null {
+  const uid = snapshot?.activeWork?.focused?.taskUid;
+  return typeof uid === 'string' && uid ? uid : null;
+}
+
+export type TimingMenuAction = 'clock-in' | 'clock-out';
+
+export interface TimingMenuContext {
+  /** 右键所在行的原始 markdown。 */
+  line: string;
+  /** 该行的 uid（`filepath:line`）。 */
+  uid: string;
+  /** 执行层总开关 + runtime 是否真的在跑。**关闭时一个菜单项都不许出现**。 */
+  enabled: boolean;
+  focusedTaskUid: string | null;
+  planTaskUids: string[];
+}
+
+/** 右键菜单该显示哪几项 —— 上游 display-conditional 的等价物。
+ *  上游：Clock in ⇔ 该块是未完成 TODO；Clock out ⇔ 该块正是当前 Timing Line。
+ *  本移植多要求一条「必须在今天的主计划里」：我们的 vendor
+ *  （timing-runtime.js:403-406）在 startTask 里就是这么校验的，
+ *  不加这条会给出一个点了必然报错的菜单项。 */
+export function timingMenuActions(ctx: TimingMenuContext): TimingMenuAction[] {
+  if (!ctx.enabled) return [];
+  const actions: TimingMenuAction[] = [];
+  if (editorTaskStatus(ctx.line) === 'TODO' && ctx.planTaskUids.includes(ctx.uid)) {
+    actions.push('clock-in');
+  }
+  if (ctx.focusedTaskUid && ctx.focusedTaskUid === ctx.uid) actions.push('clock-out');
+  return actions;
+}
+
+/** 「Focus current block」的前置校验，照抄上游 timing-commands.js:34-38 的两条判据：
+ *  没有可用的块 → needTodo；块存在但不是未完成 TODO → onlyTodo。 */
+export function focusCurrentBlockError(line: string): 'needTodo' | 'onlyTodo' | null {
+  const status = editorTaskStatus(line);
+  if (status === null) return 'needTodo';
+  if (status !== 'TODO') return 'onlyTodo';
+  return null;
 }
 
 /** Roam kebab 键 → 本移植 camelCase 字段。
@@ -424,6 +524,8 @@ export default class NautilusLogPlugin extends Plugin {
       callback: () => { new Notice(`[Nautilus Log] ${diagnoseTiming()}`, 15000); },
     });
 
+    this.registerTimingCommands();
+
     this.addSettingTab(new NautilusLogSettingTab(this.app, this));
 
     // 勾选当前行并追加 `dHH:MM` 完成锚点。
@@ -471,6 +573,109 @@ export default class NautilusLogPlugin extends Plugin {
         (this.app as unknown as { setting: { open(): void } }).setting.open();
       },
     });
+  }
+
+  /** 执行层 runtime，且总开关确实是开的。任何执行层入口都必须过这道闸：
+   *  🔴 总开关关闭时命令面板与右键菜单里**一个入口都不许出现**。 */
+  private liveRuntime(): TimingRuntime | null {
+    if (!this.settings.actualTimeTracking) return null;
+    return this.timingRuntime;
+  }
+
+  /** 上游 timing-commands.js:20-27 的 `run()`：任何失败都变成一条 toast，
+   *  绝不让 promise rejection 冒到控制台之外。 */
+  private runTimingAction(action: () => Promise<unknown> | unknown): void {
+    const fail = (error: unknown) => {
+      console.error('[Nautilus Log] timing command failed', error);
+      new Notice(`[Nautilus Log] ${(error as Error)?.message || 'could not complete that action.'}`);
+    };
+    try {
+      Promise.resolve(action()).catch(fail);
+    } catch (error) {
+      fail(error);
+    }
+  }
+
+  /** P1-6：上游的 3 条命令面板项 + 2 条块右键菜单项。
+   *  见 PORTING-DECISIONS.md §5 与 docs/parity-audit-2026-08-25.md §P1-6。 */
+  private registerTimingCommands(): void {
+    // 1/3 Focus current block —— 把光标所在行送上 Timing Line。
+    this.addCommand({
+      id: 'focus-current-block',
+      name: 'Focus current block on the Timing Line / 聚焦当前行到 Timing Line',
+      editorCheckCallback: (checking: boolean, editor: Editor, info: MarkdownView | MarkdownFileInfo) => {
+        const runtime = this.liveRuntime();
+        const path = info?.file?.path;
+        if (!runtime || !path) return false;
+        if (checking) return true;
+        const lineNo = editor.getCursor().line;
+        const line = editor.getLine(lineNo);
+        const problem = focusCurrentBlockError(line);
+        if (problem) {
+          new Notice(`[Nautilus Log] ${localCopy(this.settings.language)[problem]}`);
+          return true;
+        }
+        this.runTimingAction(() => runtime.startTask(uidForLine(path, lineNo), line));
+        return true;
+      },
+    });
+
+    // 2/3 Clock out Timing Line.
+    this.addCommand({
+      id: 'clock-out-timing-line',
+      name: 'Clock out Timing Line / 结束当前计时',
+      checkCallback: (checking: boolean) => {
+        const runtime = this.liveRuntime();
+        if (!runtime) return false;
+        if (!checking) this.runTimingAction(() => runtime.stopTask());
+        return true;
+      },
+    });
+
+    // 3/3 Locate Primary Plan.
+    this.addCommand({
+      id: 'locate-primary-plan',
+      name: 'Locate Primary Plan / 定位今天的主计划',
+      checkCallback: (checking: boolean) => {
+        const runtime = this.liveRuntime();
+        if (!runtime) return false;
+        if (!checking) this.runTimingAction(() => runtime.locate());
+        return true;
+      },
+    });
+
+    // 块右键菜单。Roam 的 blockContextMenu 在 Obsidian 的等价挂载面是
+    // editor-menu；条件显示由 timingMenuActions 这个纯函数决定。
+    this.registerEvent(this.app.workspace.on(
+      'editor-menu',
+      (menu: Menu, editor: Editor, info: MarkdownView | MarkdownFileInfo) => {
+        const runtime = this.liveRuntime();
+        const path = info?.file?.path;
+        if (!runtime || !path) return;
+        const lineNo = editor.getCursor().line;
+        const snapshot = runtime.getSnapshot();
+        const uid = uidForLine(path, lineNo);
+        const actions = timingMenuActions({
+          line: editor.getLine(lineNo),
+          uid,
+          enabled: true,
+          focusedTaskUid: focusedTaskUid(snapshot),
+          planTaskUids: planTaskUids(snapshot),
+        });
+        if (actions.length === 0) return;
+        const copy = localCopy(this.settings.language);
+        for (const action of actions) {
+          menu.addItem((item) => item
+            .setTitle(action === 'clock-in' ? copy.clockIn : copy.clockOut)
+            .setIcon(action === 'clock-in' ? 'play' : 'square')
+            .onClick(() => {
+              this.runTimingAction(() => (action === 'clock-in'
+                ? runtime.startTask(uid, editor.getLine(lineNo))
+                : runtime.stopTask()));
+            }));
+        }
+      },
+    ));
   }
 
   /** 打开（或聚焦）右侧栏视图。已存在就复用，不重复开。 */

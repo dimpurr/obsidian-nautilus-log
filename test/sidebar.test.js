@@ -269,3 +269,40 @@ test('🔴 daily-notes.json 只有 folder、没有 format（Obsidian 未改日�
   assert.ok(found, '只有 folder 时也必须能定位到今日笔记');
   assert.equal(found.path, "Daily/_Daily/2026-08-24.md");
 });
+
+/* ------------------------------------------------------------------ */
+/* P1-8 · 空态文案跟随 settings.language                                */
+/* ------------------------------------------------------------------ */
+
+/** 侧栏空态曾经硬编码英文：language='zh' 的用户也只看得到英文
+ *  （docs/parity-audit-2026-08-25.md §P1-8，sidebar.ts:315,318-320）。 */
+async function renderEmptyState(settings, dnOptions) {
+  makeDom();
+  const app = makeApp({}, dnOptions);          // 没有今日笔记 => 走空态分支
+  const w = globalThis.window;
+  w.setInterval = () => 1;
+  w.clearInterval = () => {};
+  const view = new NautilusSidebarView(new WorkspaceLeaf(app), settings);
+  await view.onOpen();
+  const text = view.contentEl.textContent;
+  await view.onClose();
+  return text;
+}
+
+test("🔴 P1-8 侧栏空态：language='zh' 时出中文，不再恒为英文", async () => {
+  const zh = await renderEmptyState({ ...SETTINGS, language: "zh" }, DN_OPTIONS);
+  assert.match(zh, /今天还没有计划/);
+  assert.match(zh, /请把今天的计划写进那篇日记/);
+  assert.doesNotMatch(zh, /no plan for today/);
+
+  const en = await renderEmptyState({ ...SETTINGS, language: "en" }, DN_OPTIONS);
+  assert.match(en, /no plan for today/);
+  assert.match(en, /Write today's plan in that Daily Note/);
+});
+
+test("🔴 P1-8 侧栏空态：没有 Daily Notes 配置时的兜底提示也双语", async () => {
+  const zh = await renderEmptyState({ ...SETTINGS, language: "zh" }, null);
+  assert.match(zh, /没找到 Daily Notes 插件配置/);
+  const en = await renderEmptyState({ ...SETTINGS, language: "en" }, null);
+  assert.match(en, /No Daily Notes plugin config found/);
+});
