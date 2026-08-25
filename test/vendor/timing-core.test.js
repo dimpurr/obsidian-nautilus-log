@@ -57,6 +57,176 @@ test('Plan is a flat ordered projection of unfinished direct children', () => {
   );
 });
 
+test('a bare reference inherits source status but not source completion time', () => {
+  const sourceString = '{{[[DONE]]}} 群里通知上午处理完稿件 15m d09:11';
+  const readString = (uid) => (uid === 'source-task' ? sourceString : '');
+
+  const inherited = timing.resolveTaskInstance({
+    uid: 'today-task',
+    localString: '((source-task)) 25m',
+    readString,
+    fallbackMinutes: 10,
+  });
+
+  assert.deepEqual(
+    {
+      uid: inherited.uid,
+      sourceUid: inherited.sourceUid,
+      title: inherited.title,
+      status: inherited.status,
+      statusOrigin: inherited.statusOrigin,
+      explicitStatus: inherited.explicitStatus,
+      plannedMinutes: inherited.plannedMinutes,
+      doneAt: inherited.doneAt,
+    },
+    {
+      uid: 'today-task',
+      sourceUid: 'source-task',
+      title: '群里通知上午处理完稿件',
+      status: 'DONE',
+      statusOrigin: 'source',
+      explicitStatus: null,
+      plannedMinutes: 25,
+      doneAt: null,
+    },
+  );
+  assert.doesNotMatch(inherited.effectiveString, /d09:11|15m/);
+  assert.match(inherited.effectiveString, /DONE.*25m/);
+});
+
+test('a bare reference chain inherits the nearest explicit source status', () => {
+  const strings = new Map([
+    ['middle-source', '((completed-source))'],
+    ['completed-source', '{{[[DONE]]}} Reusable report 15m d10:46'],
+  ]);
+  const task = timing.resolveTaskInstance({
+    uid: 'daily-wrapper',
+    localString: '((middle-source))',
+    readString: (uid) => strings.get(uid) || '',
+    fallbackMinutes: 10,
+  });
+
+  assert.deepEqual(
+    {
+      title: task.title,
+      status: task.status,
+      statusOrigin: task.statusOrigin,
+      plannedMinutes: task.plannedMinutes,
+      doneAt: task.doneAt,
+    },
+    {
+      title: 'Reusable report',
+      status: 'DONE',
+      statusOrigin: 'source',
+      plannedMinutes: 15,
+      doneAt: null,
+    },
+  );
+});
+
+test('an outer marker owns today status while local duration overrides reusable source duration', () => {
+  const sourceString = '{{[[DONE]]}} Reusable report 15m d60% d09:11';
+  const readString = (uid) => (uid === 'source-task' ? sourceString : '');
+  const resolve = (localString) => timing.resolveTaskInstance({
+    uid: 'today-task',
+    localString,
+    readString,
+    fallbackMinutes: 10,
+  });
+
+  const reopened = resolve('{{[[TODO]]}} ((source-task))');
+  const overridden = resolve('{{[[TODO]]}} ((source-task)) 25m');
+  const completed = resolve('{{[[DONE]]}} ((source-task)) 25m d10:20');
+
+  assert.deepEqual(
+    [reopened, overridden, completed].map((task) => ({
+      status: task.status,
+      statusOrigin: task.statusOrigin,
+      plannedMinutes: task.plannedMinutes,
+      progress: task.progress,
+      doneAt: task.doneAt,
+    })),
+    [
+      { status: 'TODO', statusOrigin: 'local', plannedMinutes: 15, progress: 0, doneAt: null },
+      { status: 'TODO', statusOrigin: 'local', plannedMinutes: 25, progress: 0, doneAt: null },
+      { status: 'DONE', statusOrigin: 'local', plannedMinutes: 25, progress: 0, doneAt: 620 },
+    ],
+  );
+  assert.doesNotMatch(reopened.effectiveString, /d60%|d09:11/);
+  assert.match(completed.effectiveString, /DONE.*25m.*d10:20/);
+});
+
+test('a bare reference to reusable TODO content stays pending with source-owned status', () => {
+  const task = timing.resolveTaskInstance({
+    uid: 'today-task',
+    localString: '((source-task))',
+    readString: (uid) => (uid === 'source-task' ? '{{[[TODO]]}} Reusable draft 40m' : ''),
+  });
+
+  assert.deepEqual(
+    {
+      status: task.status,
+      statusOrigin: task.statusOrigin,
+      explicitStatus: task.explicitStatus,
+      plannedMinutes: task.plannedMinutes,
+      title: task.title,
+    },
+    {
+      status: 'TODO',
+      statusOrigin: 'source',
+      explicitStatus: null,
+      plannedMinutes: 40,
+      title: 'Reusable draft',
+    },
+  );
+});
+
+test('plain direct children are implicit pending tasks while fixed events remain excluded from Plan', () => {
+  const rows = [
+    { uid: 'plain', parentUid: 'plan', order: 0, string: 'Read 25m' },
+    { uid: 'todo', parentUid: 'plan', order: 1, string: '{{[[TODO]]}} Write 30m' },
+    { uid: 'done', parentUid: 'plan', order: 2, string: '{{[[DONE]]}} Ship 15m' },
+    { uid: 'event', parentUid: 'plan', order: 3, string: '10:00-11:00 Meeting' },
+  ];
+
+  assert.deepEqual(
+    timing.projectPlan(rows, 'plan').map(({ uid, status, explicitStatus, plannedMinutes }) => ({
+      uid,
+      status,
+      explicitStatus,
+      plannedMinutes,
+    })),
+    [
+      { uid: 'plain', status: 'TODO', explicitStatus: null, plannedMinutes: 25 },
+      { uid: 'todo', status: 'TODO', explicitStatus: 'TODO', plannedMinutes: 30 },
+    ],
+  );
+});
+
+test('Review excludes source-completed bare references but keeps locally completed instances', () => {
+  const source = '{{[[DONE]]}} Reusable task 15m d09:11';
+  const references = [{ uid: 'source-task', string: source }];
+  const rows = [
+    { uid: 'inherited', parentUid: 'plan', order: 0, string: '((source-task))', references },
+    { uid: 'reopened', parentUid: 'plan', order: 1, string: '{{[[TODO]]}} ((source-task))', references },
+    { uid: 'today-done', parentUid: 'plan', order: 2, string: '{{[[DONE]]}} ((source-task)) 25m d10:20', references },
+  ];
+
+  assert.deepEqual(
+    timing.projectReviewTasks(rows, 'plan').map(({ uid, status, statusOrigin, plannedMinutes, doneAt }) => ({
+      uid,
+      status,
+      statusOrigin,
+      plannedMinutes,
+      doneAt,
+    })),
+    [
+      { uid: 'reopened', status: 'TODO', statusOrigin: 'local', plannedMinutes: 15, doneAt: null },
+      { uid: 'today-done', status: 'DONE', statusOrigin: 'local', plannedMinutes: 25, doneAt: 620 },
+    ],
+  );
+});
+
 test('execution projections share the renderer duration syntax', () => {
   assert.equal(timing.plannedMinutes('{{[[TODO]]}} A 30m'), 30);
   assert.equal(timing.plannedMinutes('{{[[TODO]]}} B 30min'), 30);
@@ -294,8 +464,10 @@ test('execution surface copy follows the extension language', () => {
   assert.equal(timing.executionCopy('en').tabs.plan, 'Plan');
   assert.equal(timing.executionCopy('en').trigger.thread, 'thread');
   assert.equal(timing.executionCopy('en').trigger.threads, 'threads');
+  assert.equal(timing.executionCopy('en').actions.openPanelHint, 'Click: panel · ⌥/Alt: main · ⇧: sidebar');
   assert.equal(timing.executionCopy('zh').tabs.plan, '计划');
   assert.equal(timing.executionCopy('zh').capacity.available, '可安排');
+  assert.equal(timing.executionCopy('zh').actions.openPanelHint, '单击：面板 · ⌥/Alt：主界面 · ⇧：侧边栏');
   assert.equal(timing.executionCopy('en').empty.noActive, 'No active work. Open Plan to start a task.');
 });
 

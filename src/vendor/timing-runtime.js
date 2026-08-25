@@ -88,17 +88,21 @@ export function createTimingRuntime({
   extensionAPI,
   now = () => new Date(),
   scheduleMutationStart = scheduleNextTask,
+  watchPlan = null,
 }) {
   let destroyed = false;
   let ticker = null;
   let cancelSidebarWarmup = null;
   let refreshHandle = null;
   let refreshHandleKind = null;
+  let refreshRunner = null;
   let refreshPromise = null;
   let resolveRefresh = null;
   let mutationQueue = Promise.resolve();
   const pendingMutationStarts = new Set();
   let standaloneClearPromise = null;
+  let watchedPlanUid = null;
+  let stopPlanWatch = null;
   let snapshot = {
     revision: 0,
     status: 'loading',
@@ -117,6 +121,20 @@ export function createTimingRuntime({
     for (const listener of listeners) {
       try { listener(snapshot); } catch (error) { console.error('[Nautilus Log] timing listener failed', error); }
     }
+  };
+
+  const syncPlanWatch = () => {
+    const planUid = snapshot.planSnapshot?.plan?.uid || null;
+    if (planUid === watchedPlanUid) return;
+    stopPlanWatch?.();
+    stopPlanWatch = null;
+    watchedPlanUid = planUid;
+    if (!planUid || typeof watchPlan !== 'function') return;
+    stopPlanWatch = watchPlan(planUid, () => {
+      if (!destroyed && snapshot.planSnapshot?.plan?.uid === planUid) {
+        void requestRefresh({ immediate: true });
+      }
+    }, { emitInitial: false });
   };
 
   const setPomodoro = async (value) => {
@@ -183,9 +201,19 @@ export function createTimingRuntime({
           .filter((entry) => entry.running || snapshot.activeWork?.items?.some((item) => item.taskUid === entry.taskUid))
           .map((entry) => entry.taskUid),
       ];
-      const entries = suppliedEntries === undefined
+      const rawEntries = suppliedEntries === undefined
         ? readEntriesForTaskUids(relevantTaskUids)
         : suppliedEntries;
+      const tasksByUid = new Map(reviewTasks.map((task) => [task.uid, task]));
+      const entries = rawEntries.map((entry) => {
+        const task = tasksByUid.get(entry.taskUid);
+        return task ? {
+          ...entry,
+          title: task.title,
+          status: task.status,
+          plannedMinutes: task.plannedMinutes,
+        } : entry;
+      });
       const dailyReview = timingCore.buildDailyReview({ tasks: reviewTasks, entries, now: currentNow });
       const recentRetention = extensionAPI.settings.get('recent-retention-minutes') ?? 45;
       const activeWork = timingCore.buildActiveWork(entries, currentNow, recentRetention);
@@ -206,6 +234,7 @@ export function createTimingRuntime({
         standalonePomodoro,
         now: currentNow,
       };
+      syncPlanWatch();
     } catch (error) {
       snapshot = {
         ...snapshot,
@@ -219,14 +248,22 @@ export function createTimingRuntime({
     return snapshot;
   };
 
-  const requestRefresh = ({ notice = '' } = {}) => {
+  const requestRefresh = ({ notice = '', immediate = false } = {}) => {
     if (destroyed) return Promise.resolve(snapshot);
-    if (refreshPromise) return refreshPromise;
+    if (refreshPromise) {
+      if (immediate && refreshHandleKind === 'idle' && refreshRunner) {
+        window.cancelIdleCallback?.(refreshHandle);
+        refreshHandleKind = 'timeout';
+        refreshHandle = window.setTimeout(refreshRunner, 0);
+      }
+      return refreshPromise;
+    }
     refreshPromise = new Promise((resolve) => {
       resolveRefresh = resolve;
       const run = () => {
         refreshHandle = null;
         refreshHandleKind = null;
+        refreshRunner = null;
         let next = snapshot;
         try { next = refresh({ notice }); }
         finally {
@@ -236,7 +273,8 @@ export function createTimingRuntime({
           finish?.(next);
         }
       };
-      if (typeof window.requestIdleCallback === 'function') {
+      refreshRunner = run;
+      if (!immediate && typeof window.requestIdleCallback === 'function') {
         refreshHandleKind = 'idle';
         refreshHandle = window.requestIdleCallback(run, { timeout: 1200 });
       } else {
@@ -253,6 +291,7 @@ export function createTimingRuntime({
     else window.clearTimeout(refreshHandle);
     refreshHandle = null;
     refreshHandleKind = null;
+    refreshRunner = null;
     const finish = resolveRefresh;
     resolveRefresh = null;
     refreshPromise = null;
@@ -361,10 +400,11 @@ export function createTimingRuntime({
       });
     }
     return enqueue(async () => {
-      const taskString = readBlockString(taskUid);
-      if (timingCore.taskStatus(taskString) !== 'TODO') {
-        throw new Error('Only an unfinished TODO can own the Timing Line.');
+      const task = snapshot.planSnapshot?.tasks?.find((candidate) => candidate.uid === taskUid);
+      if (!task || task.status !== 'TODO') {
+        throw new Error('Only an unfinished task in today’s Nautilus Plan can own the Timing Line.');
       }
+      const taskString = readBlockString(taskUid);
       const before = snapshot.entries;
       const focused = timingCore.chooseFocusedEntry(before);
       const instant = now();
@@ -379,6 +419,12 @@ export function createTimingRuntime({
       }
       const closedEntries = await closeEntriesAt(before, instant);
       const created = await createRunningClock(taskUid, instant, taskString);
+      created.entry = {
+        ...created.entry,
+        title: task.title,
+        status: task.status,
+        plannedMinutes: task.plannedMinutes,
+      };
       await setPomodoro(timingCore.nextPomodoroState(snapshot.pomodoro, {
         action: focused ? 'switch' : 'start',
         nowMs: instant.getTime(),
@@ -504,6 +550,9 @@ export function createTimingRuntime({
     ticker = null;
     cancelSidebarWarmup?.();
     cancelSidebarWarmup = null;
+    stopPlanWatch?.();
+    stopPlanWatch = null;
+    watchedPlanUid = null;
     for (const pending of [...pendingMutationStarts]) pending.cancel();
     cancelScheduledRefresh();
     resolveRefresh?.(snapshot);
@@ -522,7 +571,7 @@ export function createTimingRuntime({
     deleteCurrentClock,
     startStandalonePomodoro,
     stopStandalonePomodoro,
-    locate: () => openPrimaryPlan(snapshot.planSnapshot?.plan?.uid),
+    locate: (options = {}) => openPrimaryPlan(snapshot.planSnapshot?.plan?.uid, options),
     openTask: (taskUid, { sidebar = false } = {}) => (
       sidebar ? openTaskInRightSidebar(taskUid) : openTaskInMainWindow(taskUid)
     ),

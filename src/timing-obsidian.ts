@@ -690,14 +690,26 @@ export function readPrimaryPlan(date = new Date(), fallbackMinutes = 15): Primar
     }
     return { uid: uids[k], string: normalizeTaskString(raw), order: k, parentUid };
   });
+  // 🔴 上游 HEAD 起 TODO 标记变成【可选】：projectDirectTasks 的过滤器清空了，
+  //    计划块的任何直接子行只要不是时间段就成为弹性任务（隐式 TODO）。
+  //    ⛔ 本移植【有意不跟随】—— 决策与理由见 docs/PORTING-DECISIONS.md §D1。
+  //    Obsidian 的日记里随手写的 bullet 太常见，隐式成任务会凭空吃掉容量。
+  //    🔴 实现方式是【不喂给引擎】，不是改 vendor —— vendor 必须保持零修改，
+  //    否则以后无法 diff 对账。只滤直接子级；嵌套行本来就被 parentUid 挡掉。
+  const planRows = rows.filter((row) => (
+    row.parentUid !== planUid
+    || !!timingCore.taskStatus(row.string)
+    || !!timingCore.parseTimeRangeMinutes(row.string)
+  ));
+
   return {
     pageTitle,
     pageUid: path,
     plan: { uid: planUid, string: '', order: 0, parentUid: null },
-    rows,
-    tasks: timingCore.projectPlan(rows, planUid, fallbackMinutes),
-    reviewTasks: timingCore.projectReviewTasks(rows, planUid, fallbackMinutes),
-    fixedEvents: timingCore.projectFixedEvents(rows, planUid),
+    rows: planRows,
+    tasks: timingCore.projectPlan(planRows, planUid, fallbackMinutes),
+    reviewTasks: timingCore.projectReviewTasks(planRows, planUid, fallbackMinutes),
+    fixedEvents: timingCore.projectFixedEvents(planRows, planUid),
   };
 }
 
@@ -762,9 +774,17 @@ export async function openTaskInRightSidebar(taskUid: string): Promise<{ ok: boo
   return result;
 }
 
-export async function openPrimaryPlan(planUid: string): Promise<void> {
+/** 打开今天的计划。`sidebar: true` 时送右侧栏而不是主编辑区。
+ *  🔴 第二参是上游 HEAD 加的（d807ea4 / 7850e58），签名必须跟着改，
+ *     否则 runtime 的 `locate(options)` 传进来的 `{sidebar}` 会被静默丢弃。
+ *     这是本轮升级里唯一破坏适配层签名的上游改动。 */
+export async function openPrimaryPlan(
+  planUid: string,
+  { sidebar = false }: { sidebar?: boolean } = {},
+): Promise<void> {
   const parsed = splitUid(planUid);
   if (!parsed) throw new Error('No Primary Nautilus Log was found today.');
+  if (sidebar) { await openTaskInRightSidebar(planUid); return; }
   const a = getApp();
   const f = a.vault.getAbstractFileByPath(parsed.path);
   if (!isFileLike(f)) throw new Error('No Primary Nautilus Log was found today.');

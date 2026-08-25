@@ -69,7 +69,7 @@ export interface StatusBarHandle {
 export function renderTimingStatusBar(
   el: HTMLElement,             // plugin.addStatusBarItem() 给的元素
   ctx: ExecViewContext,        // 从 './timing-contract' 引
-  onClick: () => void,         // 点击回调（主会话接成“打开侧栏”）
+  onClick: (ev: MouseEvent) => void,   // 点击回调（主会话接成“打开侧栏”；带修饰键时改走定位）
 ): StatusBarHandle {
   el.classList.add('nautilus-log-statusbar');
 

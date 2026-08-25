@@ -74,7 +74,8 @@ export interface TimingRuntime {
   deleteCurrentClock(taskUid?: string): Promise<unknown>;
   startStandalonePomodoro(): Promise<unknown> | unknown;
   stopStandalonePomodoro(): Promise<unknown> | unknown;
-  locate(): Promise<unknown> | unknown;
+  /** 上游 HEAD 起支持 { sidebar }：true 送右侧栏，false/省略 = 主编辑区。 */
+  locate(options?: { sidebar?: boolean }): Promise<unknown> | unknown;
   openTask(taskUid: string, opts?: { sidebar?: boolean }): Promise<unknown> | unknown;
   disable(): void;
   destroy(): void;

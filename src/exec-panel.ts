@@ -398,9 +398,14 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
 
     const identity = header.createEl('button', { cls: 'nautilus-log-exec-identity', text: text.identity.locate });
     identity.type = 'button';
-    identity.title = text.identity.locate;
     identity.setAttribute('aria-label', text.identity.locate);
-    identity.addEventListener('click', () => runAction(() => runtime.locate()));
+    // 修饰键手势（上游 7850e58 / d807ea4）：普通点击不变，
+    // Alt/Option-click 在主编辑区定位，Shift-click 送右侧栏。
+    // 🔴 底层 openTaskInRightSidebar 早就有，之前只是没接线。
+    identity.title = `${text.identity.locate} · ⌥ / ⇧`;
+    identity.addEventListener('click', (ev: MouseEvent) => {
+      runAction(() => runtime.locate({ sidebar: ev.shiftKey }));
+    });
 
     header.createEl('span', { cls: 'nautilus-log-exec-header-divider' }).setAttribute('aria-hidden', 'true');
 

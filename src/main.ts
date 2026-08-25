@@ -486,7 +486,18 @@ export default class NautilusLogPlugin extends Plugin {
       }) as unknown as TimingRuntime;
       void this.timingRuntime.initialize();
       const el = this.addStatusBarItem();
-      this.statusBar = renderTimingStatusBar(el, this.execContext(), () => { void this.activateSidebar(); });
+      // 状态栏点击三态（上游 7850e58 / d807ea4 的修饰键手势，挂载面换成状态栏）：
+      //   普通点击 → 打开侧栏（Obsidian 这边最有用的默认）
+      //   ⌥ Alt-click → 在主编辑区定位今天的计划
+      //   ⇧ Shift-click → 把计划送右侧栏
+      this.statusBar = renderTimingStatusBar(el, this.execContext(), (ev: MouseEvent) => {
+        if (ev.altKey || ev.shiftKey) {
+          const rt = this.timingRuntime;
+          if (rt) { void Promise.resolve(rt.locate({ sidebar: ev.shiftKey })).catch(() => { /* 已由 runtime notice 报出 */ }); }
+          return;
+        }
+        void this.activateSidebar();
+      });
     } catch (err) {
       // 执行层起不来不该带走整个插件 —— 规划与可视化必须还能用。
       console.error('[Nautilus Log] execution layer failed to start', err);
@@ -534,5 +545,21 @@ export default class NautilusLogPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     await this.saveData({ ...this.settings, _runtime: this.runtimeState });
+    this.broadcastSettingsChanged();
+  }
+
+  /** 设置一改就让所有已渲染的视图立刻重画。
+   *  🔴 上游 index.js:152-165 用一个自定义事件广播，component 监听后重绘；
+   *     我这边没有这条线时，改完设置要【等 60 秒 tick】才看到效果（实测）。
+   *  这里不引入上游的 plan-watch.js（那是 Roam Pull Watch，Obsidian 无等价物），
+   *  只补上「设置变更」这一个触发时机 —— 文件变更早就有 metadataCache 在管。 */
+  private broadcastSettingsChanged(): void {
+    this.refreshSidebars();
+    // 已打开笔记里的代码块视图：重跑一次 Markdown 后处理即可。
+    for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
+      const view = leaf.view as unknown as { previewMode?: { rerender?(full: boolean): void } };
+      view?.previewMode?.rerender?.(true);
+    }
+    this.timingRuntime?.refresh?.();
   }
 }

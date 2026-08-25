@@ -241,3 +241,50 @@ test('parentUid 按缩进还原，子步骤挂在父任务上', async () => {
   assert.equal(byLine(11).parentUid,'2026-08-25.md:7','同一父下的最后一条子步骤同理');
   v.cleanup();
 });
+
+/* ─────────────── D1：有意不跟随上游的「TODO 可选」 ───────────────
+ * 上游 HEAD 起 projectDirectTasks 的过滤器清空，计划块任何直接子行只要不是
+ * 时间段就成为弹性任务（隐式 TODO）。本移植【有意不跟随】，理由见
+ * docs/PORTING-DECISIONS.md §D1：Obsidian 日记里随手写的 bullet 太常见。
+ * 🔴 实现在适配层「不喂给引擎」，vendor 保持零修改。这条测试是那个决策的锚。 */
+const BARE_NOTE=[
+  '# 2026-08-25',              // 0
+  '```naut',                   // 1
+  '```',                       // 2
+  '- [ ] 写周报 45m',           // 3  显式 TODO → 任务
+  '- 记得带钥匙',                // 4  裸行 → 不该成为任务
+  '- 08:30-09:30 起床',         // 5  时间段 → 固定事件
+  '- 随手写的一句备注',           // 6  裸行 → 不该成为任务
+  '- [x] 已完成的事 30m d11:00', // 7  显式 DONE → 进 Review
+].join('\n');
+
+async function bareVault(){
+  const v=makeVault(); v.write('2026-08-25.md',BARE_NOTE);
+  await T.primeTimingCache();
+  return v;
+}
+
+test('🔴 D1 裸行不成为弹性任务（有意不跟随上游的 TODO-可选）', async () => {
+  const v=await bareVault();
+  const snap=T.readPrimaryPlan(new Date(2026,7,25,9,0));
+  assert.deepEqual(snap.tasks.map(t=>t.title), ['写周报'],
+    '「记得带钥匙」「随手写的一句备注」不得被隐式当成 15m 任务吃掉容量');
+  v.cleanup();
+});
+
+test('D1 时间段裸行仍然是固定事件（不能连它一起滤掉）', async () => {
+  const v=await bareVault();
+  const events=T.readPrimaryPlan(new Date(2026,7,25,9,0)).fixedEvents;
+  assert.equal(events.length,1,'时间段行必须留下');
+  assert.match(events[0].string,/起床/);
+  v.cleanup();
+});
+
+test('D1 显式标记的行不受影响', async () => {
+  const v=await bareVault();
+  const titles=T.readPrimaryPlan(new Date(2026,7,25,9,0)).reviewTasks.map(t=>t.title);
+  assert.ok(titles.includes('写周报') && titles.includes('已完成的事'),
+    'Review 应同时含未完成与已完成的显式任务');
+  assert.ok(!titles.some(t=>/记得带钥匙|随手写/.test(t)),'裸行不得进 Review');
+  v.cleanup();
+});
