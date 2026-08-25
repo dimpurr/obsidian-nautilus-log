@@ -27,6 +27,107 @@ export function clampMinutes(
   return value;
 }
 
+/* ── P1-8 · 用户可见文案的本地双语表 ─────────────────────────────────────────
+ * 引擎的 `logCore.uiCopy(language)` 只覆盖它自己渲染的那部分（capacity /
+ * allocation / legend / controls / panels / tooltips / warnings）——
+ * 已实测枚举，**没有**空态提示、配置警告、右键菜单这些「移植层自己发明的」文案
+ * （它们在上游对应的是 Roam 侧不同的挂载面，见 PORTING-DECISIONS.md §5）。
+ * 所以这些只能走本地双语常量。
+ *
+ * 🔴 为什么放在 settings.ts：本移植不允许新建 src 文件承载它，而 main.ts 与
+ *    sidebar.ts 都要用 —— main.ts 已经 import 了 sidebar.ts，反向 import 会成环。
+ *    settings.ts 是两者共同的下游（它对 main 只有 `import type`，运行时无边），
+ *    且本来就是用户可见英文串最集中的地方。
+ * 见 docs/parity-audit-2026-08-25.md §P1-8。 */
+export interface LocalCopy {
+  unknownConfig: string;
+  blockEmptyHeading: string;
+  blockEmptySample: string;
+  blockEmptyNote: string;
+  sidebarEmptyHeading: string;
+  sidebarLooking(path: string): string;
+  sidebarNoConfig(path: string): string;
+  clockIn: string;
+  clockOut: string;
+  needTodo: string;
+  onlyTodo: string;
+}
+
+export const LOCAL_COPY: { en: LocalCopy; zh: LocalCopy } = {
+  en: {
+    /** ```nautilus 块内出现无法识别的配置键时的 tooltip（main.ts）。 */
+    unknownConfig: 'Unrecognised setting. Supported: start, end, default-duration, legend-length, urgent, language',
+    /** 块解析不出任何计划时的空态（main.ts）。 */
+    blockEmptyHeading: 'Nautilus Log — write the plan directly below this block:',
+    blockEmptySample: '05:00-06:00 Morning routine\n- [ ] Write project brief 45m\n- [ ] Review notes 30m',
+    blockEmptyNote: 'The plan ends at the first blank line. The block itself holds per-day overrides, e.g. `end: 02:00`.',
+    /** 侧栏找不到今天的计划时的空态（sidebar.ts）。 */
+    sidebarEmptyHeading: 'Nautilus Log — no plan for today',
+    sidebarLooking: (path: string) => `Looking in ${path} for a \`\`\`nautilus block.\nWrite today's plan in that Daily Note.`,
+    sidebarNoConfig: (path: string) => `No Daily Notes plugin config found; falling back to ${path}.\nConfigure the core Daily Notes plugin (format/folder) or create this file.`,
+    /** P1-6 编辑器右键菜单项与命令失败提示。 */
+    clockIn: 'Clock in',
+    clockOut: 'Clock out',
+    needTodo: 'Focus an unfinished TODO block before starting timing.',
+    onlyTodo: 'Only an unfinished TODO can own the Timing Line.',
+  },
+  zh: {
+    unknownConfig: '无法识别的配置项。支持：start、end、default-duration、legend-length、urgent、language',
+    blockEmptyHeading: 'Nautilus Log — 请把计划直接写在这个块的下方：',
+    blockEmptySample: '05:00-06:00 晨间例程\n- [ ] 写项目简报 45m\n- [ ] 复习笔记 30m',
+    blockEmptyNote: '计划到第一个空行为止。块【内】写当天的配置覆盖，例如 `end: 02:00`。',
+    sidebarEmptyHeading: 'Nautilus Log — 今天还没有计划',
+    sidebarLooking: (path: string) => `正在 ${path} 里找 \`\`\`nautilus 块。\n请把今天的计划写进那篇日记。`,
+    sidebarNoConfig: (path: string) => `没找到 Daily Notes 插件配置，回退到 ${path}。\n请配置核心「日记」插件（日期格式/文件夹），或直接创建这个文件。`,
+    clockIn: '开始计时',
+    clockOut: '结束计时',
+    needTodo: '请先把光标放在一条未完成的任务行上。',
+    onlyTodo: '只有未完成的任务才能占用 Timing Line。',
+  },
+};
+
+export function localCopy(language: string): LocalCopy {
+  return language === 'zh' ? LOCAL_COPY.zh : LOCAL_COPY.en;
+}
+
+/* ── P1-8 · 滑块量程（导出以便回归测试直接钉住）────────────────────────────
+ * 上游是离散下拉列表，本移植用滑块 —— 量程必须与上游列表的**端点**一致，
+ * 否则用户能选到上游选不到的值。上游列表见 index.js:494 / :412。 */
+
+/** 上游 `desc-length` 的列表是 [14,16,…,28]（index.js:494）。
+ *  🔴 本移植曾写死下界 15、上界 30 —— 两端都与上游不符（audit §P1-8）。
+ *  滑块用 step 1 是有意的超集：离散列表在滑块上没有对应物，
+ *  而端点一致就保证了「上游能选的这里都能选、上游选不到的这里也选不到」。 */
+export const DESC_LENGTH_SLIDER = { min: 14, max: 28, step: 1 } as const;
+
+/** 上游 `pomodoro-minutes` 的列表是 [15,20,25,30,45,50,60,90]（index.js:412），
+ *  **没有 0** —— guide §Settings 也只给 Recent Retention / Forgotten Timer 标了
+ *  `0 disables`。所以下界必须是 15，不能是 0：
+ *  滑块允许 0 而 `clampMinutes(…, false)` 又把 0 退回 45，
+ *  用户拖到 0 保存后回来看见 45，UI 文案与实现自相矛盾（audit §P1-8）。 */
+export const POMODORO_SLIDER = { min: 15, max: 180, step: 5 } as const;
+
+/** 结束整点的显示标签。上游 index.js:376-380：结束 ≤ 开始（且不是 24）时
+ *  追加「· 次日 / · next day」，否则用户无从知道 21→2 是跨午夜。 */
+export function workdayEndLabel(endHour: number, startHour: number, language: string): string {
+  const label = `${String(endHour).padStart(2, '0')}:00`;
+  if (Number(endHour) <= Number(startHour) && Number(endHour) !== 24) {
+    return `${label} · ${language === 'zh' ? '次日' : 'next day'}`;
+  }
+  return label;
+}
+
+/** 结束整点那一项的完整描述。把 `workdayEndLabel` 的结果嵌进去，
+ *  这样「· 次日」在滑块界面上也看得见。 */
+export function workdayEndDesc(
+  settings: Pick<NautilusSettings, 'workdayEndHour' | 'workdayStartHour' | 'language'>,
+): string {
+  const label = workdayEndLabel(settings.workdayEndHour, settings.workdayStartHour, settings.language);
+  return settings.language === 'zh'
+    ? `一天的结束整点（1–24）。当前 ${label}。结束 ≤ 开始表示次日，例如 21 → 2。`
+    : `Hour (1–24) the day ends. Currently ${label}. End <= start means the next day, e.g. 21 → 2.`;
+}
+
 export class NautilusLogSettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: NautilusLogPlugin) {
     super(app, plugin);
@@ -60,23 +161,27 @@ export class NautilusLogSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         }));
 
-    new Setting(containerEl)
+    // 上游把「· 次日」直接写进结束整点的**选项标签**（index.js:376-380）。
+    // 滑块没有选项标签，所以把它放进 desc 并在每次 onChange 后重画整页 ——
+    // 否则用户拖到 02:00 只看见一个 "2"，完全看不出这是跨午夜（audit §P1-8）。
+    const endSetting = new Setting(containerEl)
       .setName('Workday end hour')
-      .setDesc('Hour (1–24) the day ends. End <= start means "next day", e.g. 21 → 2.')
-      .addSlider((slider) => slider
-        .setLimits(1, 24, 1)
-        .setValue(this.plugin.settings.workdayEndHour)
-        .setDynamicTooltip()
-        .onChange(async (value) => {
-          this.plugin.settings.workdayEndHour = value;
-          await this.plugin.saveSettings();
-        }));
+      .setDesc(workdayEndDesc(this.plugin.settings));
+    endSetting.addSlider((slider) => slider
+      .setLimits(1, 24, 1)
+      .setValue(this.plugin.settings.workdayEndHour)
+      .setDynamicTooltip()
+      .onChange(async (value) => {
+        this.plugin.settings.workdayEndHour = value;
+        await this.plugin.saveSettings();
+        endSetting.setDesc(workdayEndDesc(this.plugin.settings));
+      }));
 
     new Setting(containerEl)
       .setName('Description length')
-      .setDesc('Maximum glyphs for a task description before truncation (15–30). Default 22.')
+      .setDesc(`Maximum glyphs for a task description before truncation (${DESC_LENGTH_SLIDER.min}–${DESC_LENGTH_SLIDER.max}). Default 22.`)
       .addSlider((slider) => slider
-        .setLimits(15, 30, 1)
+        .setLimits(DESC_LENGTH_SLIDER.min, DESC_LENGTH_SLIDER.max, DESC_LENGTH_SLIDER.step)
         .setValue(this.plugin.settings.descLength)
         .setDynamicTooltip()
         .onChange(async (value) => {
@@ -141,9 +246,9 @@ export class NautilusLogSettingTab extends PluginSettingTab {
 
       new Setting(containerEl)
         .setName('Pomodoro minutes')
-        .setDesc('Pomodoro threshold. Hitting it only changes the hint — it never stops work. 0 = off.')
+        .setDesc(`Pomodoro threshold (${POMODORO_SLIDER.min}–${POMODORO_SLIDER.max} min). Hitting it only changes the hint — it never stops work. It cannot be switched off.`)
         .addSlider((slider) => slider
-          .setLimits(0, 180, 5)
+          .setLimits(POMODORO_SLIDER.min, POMODORO_SLIDER.max, POMODORO_SLIDER.step)
           .setValue(clampMinutes(this.plugin.settings.pomodoroMinutes, 180, 45))
           .setDynamicTooltip()
           .onChange(async (value) => {

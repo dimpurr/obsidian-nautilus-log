@@ -27,6 +27,7 @@ import { renderExecPanel } from './exec-panel';
 import { resolveDayState } from './daystate';
 import { renderPomoControl } from './pomo';
 import type { ExecViewContext } from './timing-contract';
+import { localCopy } from './settings';
 
 const logCore = require('./vendor/log-core') as {
   calculateCapacity(args: {
@@ -310,15 +311,13 @@ export class NautilusSidebarView extends ItemView {
     if (!plan) {
       this.primaryPath = null;
       this.disposeSpiral();
+      // P1-8：空态文案走本地双语表 —— 之前恒为英文，language='zh' 也不变。
+      const copy = localCopy(this.settings.language);
       const hint = el.createDiv({ cls: 'nautilus-log-sidebar-empty' });
       hint.createDiv({ cls: 'nautilus-log-sidebar-empty-heading' })
-        .setText('Nautilus Log — no plan for today');
+        .setText(copy.sidebarEmptyHeading);
       const sub = hint.createDiv({ cls: 'nautilus-log-sidebar-empty-note' });
-      sub.setText(
-        info.viaPlugin
-          ? `Looking in ${info.path} for a \`\`\`nautilus block.\nWrite today's plan in that Daily Note.`
-          : `No Daily Notes plugin config found; falling back to ${info.path}.\nConfigure the core Daily Notes plugin (format/folder) or create this file.`,
-      );
+      sub.setText(info.viaPlugin ? copy.sidebarLooking(info.path) : copy.sidebarNoConfig(info.path));
       return;
     }
 
