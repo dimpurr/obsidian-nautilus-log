@@ -118,8 +118,8 @@ openPrimaryPlan · warmRightSidebarWindowCache · legacyLogbookIsRunning · show
 | **上游** | 一个常驻 top bar trigger，点开是 Timing / Plan / Review 的 popover。插入点靠 `querySelector('.rm-find-or-create-wrapper')` 扒 Roam 内部 DOM |
 | **本移植** | 不做独立 top bar。三视图直接渲染进右侧栏面板；只在状态栏留一个计时 token |
 | **为什么** | 用户决策（2026-08-24）：「top bar 那个因为有交互，我觉得一起丢进侧栏里面好」。且 Obsidian 有正经的 `registerView` / `addStatusBarItem` API，不需要扒 DOM |
-| **🔴 已知代价** | 上游 `timing-topbar.js`（879 行、零 Roam 耦合）因此**未被 import**，功能是手写重实现的。审计确认因此丢失：Plan 的 Scheduled/Unscheduled 分节与折叠、每行的预计区间 meta、三 tab 常驻 capacity strip。详见 audit §P1-2 |
-| **正确做法（欠账）** | 应当**复用 vendored `timing-topbar.js`**，只替换它的挂载点，而不是手写重实现。这是本移植最大的单一遗漏来源 |
+| **🔴 已知代价** | 上游 `timing-topbar.js`（879 行）因此**未被 import**，功能是手写重实现的。审计确认因此丢失：Plan 的 Scheduled/Unscheduled 分节与折叠、每行的预计区间 meta、三 tab 常驻 capacity strip。详见 audit §P1-2。**这三项已于 2026-08-25 补回**（`exec-panel.ts`），仍缺快捷键 popover |
+| ⚠️ **一处订正（2026-08-25）** | 本条曾写「零 Roam 耦合、应当直接复用」。实测**只有渲染逻辑是 Roam-free，挂载与生命周期不是**：`ensureMounted` / `placeAfterNavigation` / `syncResponsiveDensity` / `watchTopbar` 共 5 处被 `document.querySelector('.rm-topbar')` 门控（`timing-topbar.js:728,740,799,805,814`），图标还依赖 Blueprint `bp3-icon-*` 字体。复用它必须伪造一个 `.rm-topbar` 宿主，且它的形态是 `document.body` 上绝对定位的 popover —— 正是本条决策否决掉的那个挂载面。**⇒ 手写重实现在这里是合理的**，代价是必须靠 §7 的检测器盯住「重写丢了什么」，而不是靠人记 |
 
 ### §D4 渲染载体：Roam renderer block → 代码块
 
