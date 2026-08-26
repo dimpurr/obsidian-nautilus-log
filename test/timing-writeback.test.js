@@ -560,6 +560,136 @@ test('🔴 A1-095 重复 Clock Out 幂等：返回已闭合值，且不再写文
   v.cleanup();
 });
 
+/* ─────────── 乐观锁：外部并发编辑不得被 Clock Out 覆盖 ───────────
+ * closeClock 先读文件定位 CLOCK 行（拿到 expected），后写回。若写回那一刻
+ * [目标行已被外部改动]，必须在 applyChange 的内容校验处【拒写】——绝不能
+ * 按记录行号把用户刚改的内容整个盖掉（乐观锁失效 = 覆盖真实事故）。
+ * 用「状态化 getValue」模拟：closeClock 读第一版 A，写回时看到已变的 B。 */
+function makeRacingEditorVault(){
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'nl-race-'));
+  const abs=p=>path.join(dir,p);
+  const files=new Map();
+  const snapshots=new Map();   // path -> { first, rest, calls }
+  const api={
+    dir,
+    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,{path:p});
+      snapshots.set(p,{first:text, rest:text, calls:0}); return files.get(p); },
+    /** 让「下一次写回提交」看到一份与读取时不同的文件（模拟外部并发编辑）。 */
+    mutateBeforeWrite(p,newText){ const s=snapshots.get(p); s.rest=newText; fs.writeFileSync(abs(p),newText); return api; },
+    read(p){ return fs.readFileSync(abs(p),'utf8'); },
+    cleanup(){ fs.rmSync(dir,{recursive:true,force:true}); },
+  };
+  function makeEditor(p){
+    return {
+      getValue(){
+        const s=snapshots.get(p); s.calls+=1;
+        // 第 1 次读 = closeClock 的定位读（first）；之后 = 写回时的提交读（rest）
+        return s.calls===1 ? s.first : s.rest;
+      },
+      lineCount(){ return this.getValue().split('\n').length; },
+      getLine(i){ return this.getValue().split('\n')[i] ?? ''; },
+      setLine(i,text){ const l=this.getValue().split('\n'); l[i]=text;
+        const joined=l.join('\n'); fs.writeFileSync(abs(p),joined);
+        const s=snapshots.get(p); s.rest=joined; s.first=joined; },
+      replaceRange(text,from,to){
+        const v=this.getValue(); const lines=v.split('\n');
+        const off=(pos)=>lines.slice(0,pos.line).reduce((n,l)=>n+l.length+1,0)+pos.ch;
+        const a=off(from), b=to?off(to):a;
+        const joined=v.slice(0,a)+text+v.slice(b);
+        fs.writeFileSync(abs(p),joined);
+        const s=snapshots.get(p); s.rest=joined; s.first=joined;
+      },
+    };
+  }
+  const editors=new Map();
+  const vault={
+    getAbstractFileByPath:p=>files.get(p)||null,
+    getMarkdownFiles:()=>[...files.values()],
+    cachedRead:async f=>fs.readFileSync(abs(f.path),'utf8'),
+    read:async f=>fs.readFileSync(abs(f.path),'utf8'),
+    process:async()=>{ throw new Error('开着编辑器时不该走 vault.process'); },
+  };
+  const app={vault,
+    workspace:{
+      iterateAllLeaves(cb){ for(const [p,ed] of editors) cb({view:{file:{path:p},editor:ed}}); },
+      getLeaf:()=>null, openLinkText:async()=>{},
+    },
+    metadataCache:{on(){},off(){}}};
+  // write() 后补挂 editors
+  const origWrite=api.write.bind(api);
+  api.write=(p,text)=>{ const f=origWrite(p,text); editors.set(p,makeEditor(p)); return f; };
+  T.initTimingObsidian({app});
+  return api;
+}
+
+const RACE_NOTE=[
+  '# 2026-08-25',                              // 0
+  '```naut',                                   // 1
+  '```',                                       // 2
+  '- [ ] 写周报 45m',                           // 3
+  '    - LOGBOOK::',                           // 4
+  '        - CLOCK: [2026-08-25 Tue 10:00]',   // 5  ← 运行中的 CLOCK
+].join('\n');
+const RACE_ENTRY={ clockUid:'2026-08-25.md:5', taskUid:'2026-08-25.md:3',
+  running:true, start:new Date(2026,7,25,10,0) };
+
+test('🔴 乐观锁：目标行在定位与写回之间被外部改掉，Clock Out 必须拒写而非覆盖', async () => {
+  const v=makeRacingEditorVault(); v.write('2026-08-25.md',RACE_NOTE);
+  await T.primeTimingCache();
+  // closeClock 读到第一版后，写回那一刻 CLOCK 行已被外部改成（仍运行中但多了注记）
+  v.mutateBeforeWrite('2026-08-25.md',
+    RACE_NOTE.replace('        - CLOCK: [2026-08-25 Tue 10:00]',
+                     '        - CLOCK: [2026-08-25 Tue 10:00]  # 外部注记'));
+  await assert.rejects(()=>T.closeClock({...RACE_ENTRY}, new Date(2026,7,25,10,18)),
+    /target line changed|Aborting/i,
+    '乐观锁生效：预期拒绝写回（外部已改动，不能按行号盲写覆盖）');
+  const out=v.read('2026-08-25.md');
+  assert.match(out,/外部注记/,'用户外部新增的内容必须原样保留，绝不能被我覆盖');
+  assert.ok(!/=> 0:18/.test(out),'拒写后文件不得出现闭合改写的身影');
+  v.cleanup();
+});
+
+test('🔴 A1-095 行号漂移后重复 Clock Out 仍幂等：按内容锚回，不写文件', async () => {
+  const v=makeVault(); v.write('d.md',NOTE);
+  await T.createRunningClock('d.md:3', new Date(2026,7,24,10,0));
+  const running=(await T.readAllEntries()).find(e=>e.running);
+  const first=await T.closeClock(running,new Date(2026,7,24,10,18));
+  // 用户在闭合同再次编辑：开头插两行（CLOCK 行号漂移）
+  v.write('d.md','新增一行\n又一行\n'+v.read('d.md'));
+  const snapshot=v.read('d.md');
+  // 拿【同一个 running entry】在漂移后再关一次
+  const again=await T.closeClock(running,new Date(2026,7,24,10,45));
+  assert.equal(v.read('d.md'),snapshot,
+    '行漂后第二次 Clock Out 仍不得改文件 —— 闭合同内容的覆盖 = 用户凭空多出 27 分钟');
+  assert.equal(again.running,false,'必须返回已闭合状态');
+  assert.equal(again.end.getTime(),first.end.getTime(),'结束时刻必须是第一次的 10:18');
+  assert.equal(again.minutes,first.minutes);
+  v.cleanup();
+});
+
+/* ─────────── A1-078 镜像：Clock Out 的闭合确认不得认到同分钟的另一条 ───────────
+ * closeClock 写回的确认按「running:false 的精确重定位」走；若退化成「全文扫
+ * 第一条同起始分钟」，会拍在【别人的、仍运行中】的同分钟 CLOCK 上，返回一个
+ * 仍然 running 的 entry，调用方（runtime）就以为这条还没闭 —— 之后任何
+ * closeDoneClocks/reconcile 都会再次对着它下笔。文件写对了也白搭：状态机错了。 */
+test('🔴 闭合确认按精确重定位，返回已闭合同一条，不认同分钟的另一条 running', async () => {
+  const v=makeVault(); v.write('2026-08-25.md',DUP_NOTE);
+  await T.primeTimingCache();
+  const entryB={ clockUid:'2026-08-25.md:8', taskUid:'2026-08-25.md:6', running:true,
+            start:new Date(2026,7,25,10,0) };
+  const closed=await T.closeClock(entryB, new Date(2026,7,25,10,25));
+  // 🔴 返回的必须是【已闭合】的那一条（乙），而不是同分钟仍在跑的甲
+  assert.equal(closed.running,false,
+    '返回必须已闭合 —— 命中甲的那条 running 会让 runtime 认为还没闭，之后重复下笔');
+  assert.equal(closed.end.getTime(), new Date(2026,7,25,10,25).getTime(),'结束时刻 = 本次 Clock Out');
+  assert.equal(closed.clockUid, '2026-08-25.md:8','确认的对象必须是刚关的乙 line:8');
+  // 文件层面：改的只是乙
+  const out=v.read('2026-08-25.md').split('\n');
+  assert.match(out[8],/=> 0:25/);
+  assert.equal(out[5],'        - CLOCK: [2026-08-25 Tue 10:00]','甲的 CLOCK 必须原样保留');
+  v.cleanup();
+});
+
 /* ─────────── A1-110 / A1-199 / A1-202：editor 分支的 remove ─────────── */
 const LAST_LINE_NOTE=[
   '# 2026-08-25',                              // 0
