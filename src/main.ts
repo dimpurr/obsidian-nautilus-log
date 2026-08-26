@@ -524,6 +524,46 @@ const SETTINGS_KEY_MAP: Record<string, keyof NautilusSettings> = {
   'forgotten-timer-minutes': 'forgottenTimerMinutes',
 };
 
+/** 交给 vendored runtime 的 extensionAPI.settings shim。
+ *  🔴 抽成导出的纯工厂是为了可测（§D7 的 kebab→camel 映射表 + T2-098 的
+ *  广播语义都是此前零覆盖的宿主细节）；startExecutionLayer 只在接线。
+ *
+ *  🔴 认证审计 T2-098：runtime 内部状态【写盘】走 `set` —— 番茄钟状态一
+ *  改变它就全量 `refreshSidebars()` + 把每篇打开的 markdown previewMode
+ *  rerender(true) + `timingRuntime.refresh()`（saveSettings → §S12 广播链）。
+ *  那是「设置变更立即重绘」的代价，只该为【用户改设置】付；runtime 内部
+ *  写盘也走它 = 每次番茄钟起/停/到点都把整个工作区重绘一遍（重入/性能放大）。
+ *  所以这里只 `persist()`（写盘，不广播）：runtime 自己的 `refresh()`→
+ *  `publish()` 会把新快照推给订阅方（状态栏/面板），UI 不缺这一路。
+ *  「落盘」必须保留 —— 否则重启后：番茄钟持久态、standalone 状态全部丢失
+ *  （runtime 启动时靠 settings.get(POMODORO_STATE_KEY) 恢复）。 */
+export function buildExecutionSettingsShim(host: {
+  /** 每次调用现读，避免捕获到被整体替换的 settings 对象。 */
+  getSettings(): NautilusSettings;
+  runtimeState: Record<string, unknown>;
+  persist(): Promise<void>;
+}): { get(k: string): unknown; set(k: string, v: unknown): Promise<void> } {
+  return {
+    get: (k: string) => {
+      // 🔴 vendor 问的是 Roam 的 kebab 键，我们的字段是 camelCase。
+      //    直接透传 => 全部 undefined => 静默落引擎硬编码兜底。
+      //    而兜底值恰好等于 DEFAULT_SETTINGS，所以默认配置下行为正确、
+      //    只有改过设置的用户会撞上，测试必绿 —— 见 PORTING-DECISIONS.md §D7。
+      const settings = host.getSettings() as unknown as Record<string, unknown>;
+      const mapped = SETTINGS_KEY_MAP[k];
+      if (mapped) return settings[mapped];
+      const own = settings[k];
+      // 第三层兜底：`POMODORO_STATE_KEY` 这类变量键不在映射表里，靠它落到
+      // runtimeState（见 §D7）。
+      return own !== undefined ? own : host.runtimeState[k];
+    },
+    set: async (k: string, v: unknown) => {
+      host.runtimeState[k] = v;
+      await host.persist();
+    },
+  };
+}
+
 /* ── 设置版本戳 + 一次性迁移（认证审计 E1-039 / E1-040）────────────────────────
  * 上游 index.js:197-204 / :275-286 有两条版本化迁移（`product-defaults-version`
  * = "timing-v1"、`language-default-version` = "en-v1"）。本移植此前**整类没有**
@@ -856,22 +896,13 @@ export default class NautilusLogPlugin extends Plugin {
         //    只给 get 时 Clock Out 会抛 "settings.set is not a function"。
         //    这些是 runtime 的内部状态键，不属于 NautilusSettings，单独存一份。
         extensionAPI: {
-          settings: {
-            get: (k: string) => {
-              // 🔴 vendor 问的是 Roam 的 kebab 键，我们的字段是 camelCase。
-              //    直接透传 => 全部 undefined => 静默落引擎硬编码兜底。
-              //    而兜底值恰好等于 DEFAULT_SETTINGS，所以默认配置下行为正确、
-              //    只有改过设置的用户会撞上，测试必绿 —— 见 PORTING-DECISIONS.md §D7。
-              const mapped = SETTINGS_KEY_MAP[k];
-              if (mapped) return (this.settings as unknown as Record<string, unknown>)[mapped];
-              const own = (this.settings as unknown as Record<string, unknown>)[k];
-              return own !== undefined ? own : this.runtimeState[k];
-            },
-            set: async (k: string, v: unknown) => {
-              this.runtimeState[k] = v;
-              await this.saveSettings();
-            },
-          },
+          // 🔴 拿去重放用的 shim 在 buildExecutionSettingsShim（§D7 + T2-098），
+          //    这里只接线：settings 现读、runtimeState 是本插件的、写盘不广播。
+          settings: buildExecutionSettingsShim({
+            getSettings: () => this.settings,
+            runtimeState: this.runtimeState,
+            persist: () => this.persist(),
+          }),
         },
       }) as unknown as TimingRuntime;
       // 🔴 必须 await + catch：initialize() 是异步的，`void` 会让 rejection
@@ -969,6 +1000,17 @@ export default class NautilusLogPlugin extends Plugin {
       data, typeof data._settingsVersion === 'number' ? data._settingsVersion : 0,
     );
     const merged = Object.assign({}, DEFAULT_SETTINGS, stamped.data) as Record<string, unknown>;
+    // 🔴 认证审计 E1-030：data.json 里显式写的 `null` / `undefined` 必须视为【缺失】。
+    //    Object.assign 只认「键存在」，把 null 原样带进来 ⇒ 手改或同步冲突写入
+    //    `"descLength": null` 时，图例截断宽度变 0 / 滑块 setValue(null) / 数值键
+    //    全变 null。契约里这些字段都是 number/string/boolean，null 一律回落
+    //    DEFAULT_SETTINGS（上游 extensionAPI.settings 对缺失值也是 `?? default`）。
+    //    只扫契约那 11 个键；`_runtime` / `_settingsVersion` 仍在下面单独剔除。
+    for (const key of Object.keys(DEFAULT_SETTINGS)) {
+      if (merged[key] === null || merged[key] === undefined) {
+        merged[key] = (DEFAULT_SETTINGS as unknown as Record<string, unknown>)[key];
+      }
+    }
     // 下划线键是文件级元数据，不属于 NautilusSettings —— 别让它们渗进设置对象。
     delete merged._runtime;
     delete merged._settingsVersion;

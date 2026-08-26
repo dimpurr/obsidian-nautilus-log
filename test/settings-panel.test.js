@@ -398,3 +398,46 @@ test("下划线元数据键不许渗进 settings 对象", async () => {
   assert.equal(p.settings._settingsVersion, undefined);
   assert.deepEqual(p.runtimeState, { pomo: 1 });
 });
+
+test("🔴 E1-030 显式 null/undefined 必须视为缺失、回落默认（Object.assign 不认）", async () => {
+  const p = makePlugin();
+  p.loadData = async () => ({
+    language: "zh",
+    descLength: null,
+    recentRetentionMinutes: null,
+    pomodoroMinutes: undefined,
+    workdayEndHour: 23,          // 有值的键正常带入
+  });
+  await p.loadSettings();
+  assert.equal(p.settings.language, "zh", "有值的键不受影响");
+  assert.equal(p.settings.workdayEndHour, 23);
+  assert.equal(p.settings.descLength, DEFAULTS.descLength,
+    "descLength: null 必须回落默认 —— 否则图例截断宽度变 0（E1-030）");
+  assert.equal(p.settings.recentRetentionMinutes, DEFAULTS.recentRetentionMinutes);
+  assert.equal(p.settings.pomodoroMinutes, DEFAULTS.pomodoroMinutes,
+    "undefined 同样回落默认");
+});
+
+test("🔴 T2-098 runtime 内部状态写盘只落盘、不广播（不得触发整页重绘）", async () => {
+  const state = {};
+  const calls = [];
+  const host = {
+    getSettings() { calls.push("getSettings"); return { ...DEFAULTS }; },
+    runtimeState: state,
+    persist() { calls.push("persist"); return Promise.resolve(); },
+  };
+  const shim = M.buildExecutionSettingsShim(host);
+  // 映射表 / 第三层兜底不能回退（§D7，顺手钉住）
+  assert.equal(shim.get("todo-duration"), DEFAULTS.todoDuration);
+  assert.equal(shim.get("pomodoro-minutes"), DEFAULTS.pomodoroMinutes);
+  calls.length = 0;    // 上面的 get 不算，只盯 set 的副作用
+  await shim.set("pomodoro-state", { startedAt: 600 });
+  assert.equal(state["pomodoro-state"].startedAt, 600,
+    "runtime 内部状态必须写进 runtimeState");
+  // set 只允许两件事：写 runtimeState + persist()。任何涉足 saveSettings /
+  // broadcasts 的宿主方法都会在 calls 里现形 —— 那正是 T2-098 的重入放大。
+  assert.deepEqual(calls, ["persist"],
+    "runtime 内部写盘不得广播/整页重绘（回归了这个修复就该红）");
+  assert.deepEqual(shim.get("pomodoro-state"), { startedAt: 600 },
+    "runtime 要在启动时用 settings.get(POMODORO_STATE_KEY) 恢复状态 —— 读回不能断");
+});

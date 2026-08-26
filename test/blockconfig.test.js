@@ -36,6 +36,41 @@ test('非法值不覆盖，且计入 unknown', () => {
   assert.equal(o.unknown.length, 1);
 });
 
+// ── 🔴 L1-039 / L1-040 · 数值键关掉「绕过滑块钳制」的入口 ─────────────────
+// 上游 resolveRendererSettings 用 boundedInteger 钳 [5,60]/[15,30]；
+// 本移植此前 parseInt_ 只查 isFinite ⇒ 块内 default-duration / legend-length
+// 能塞进 99999 直通容量与螺旋（§1.1 P1-058 登记的漏洞）。越界→拒收+上报
+// unknown，用户看得到警告、且回落全局设置。量程 = 本移植 UI 滑块端点。
+
+test('🔴 L1-040 default-duration 越界拒收并上报（99999 不再直通容量）', () => {
+  const o=parseBlockConfig('default-duration: 99999');
+  assert.equal(o.todoDuration, undefined, '越界值不许进 overrides');
+  assert.ok(o.unknown.some((u) => u.key === 'default-duration'), '越界应计入 unknown 上报 UI');
+  assert.equal(o.unknown[0].value, '99999');
+});
+
+test('L1-040 default-duration 量程端点 5/60 保留、29 合法', () => {
+  assert.equal(parseBlockConfig('default-duration: 5').todoDuration, 5);
+  assert.equal(parseBlockConfig('default-duration: 60').todoDuration, 60);
+  const o=parseBlockConfig('todo-duration: 29');
+  assert.equal(o.todoDuration, 29);
+  assert.equal(o.unknown.length, 0);
+});
+
+test('🔴 L1-039 legend-length 越界拒收并上报', () => {
+  const o=parseBlockConfig('legend-length: 99999');
+  assert.equal(o.descLength, undefined);
+  assert.ok(o.unknown.some((u) => u.key === 'legend-length'));
+});
+
+test('L1-039 legend-length 14 必须保留（滑块合法值，引擎 [15,30] 会夹掉它）', () => {
+  assert.equal(parseBlockConfig('legend-length: 14').descLength, 14);
+  assert.equal(parseBlockConfig('legend-length: 28').descLength, 28);
+  const o=parseBlockConfig('legend-length: 29');
+  assert.equal(o.descLength, undefined, '越过本移植滑块上界 28 也要拒收');
+  assert.equal(o.unknown.length, 1);
+});
+
 // ── 边界规则：任何空白行 ──
 const FILE=[
   '# 今天',            // 0
