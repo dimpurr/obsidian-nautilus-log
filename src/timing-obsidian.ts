@@ -146,11 +146,32 @@ export function initTimingObsidian(next: TimingHost): void {
   const ws = next.app.workspace as unknown as { onLayoutReady?: (cb: () => void) => void };
   if (typeof ws?.onLayoutReady === 'function') {
     primeReady = new Promise<void>((resolve) => {
-      ws.onLayoutReady!(() => { primeTimingCache().finally(resolve); });
+      ws.onLayoutReady!(() => {
+        primeTimingCache().finally(() => { warnIfCacheStillCold(); resolve(); });
+      });
     });
   } else {
-    primeReady = primeTimingCache();
+    primeReady = primeTimingCache().finally(() => { warnIfCacheStillCold(); });
   }
+}
+
+/** 预热之后的自检：缓存仍然是空的 = 静默降级已经发生。
+ *  🔴 这一类问题【测试环境复现不了】—— 夹具里 vault 总是就绪的。
+ *  与其等用户报「面板说今天没有 Nautilus Log」，不如在真机上当场出声。
+ *  见 test/reality-quirks.md RQ-4。 */
+function warnIfCacheStillCold(): void {
+  if (contentCache.size > 0) return;
+  const total = (() => {
+    try { return (getApp().vault.getMarkdownFiles() || []).length; } catch { return -1; }
+  })();
+  if (total === 0) return;   // vault 里本来就没有 markdown，不是降级
+  // eslint-disable-next-line no-console
+  console.warn(
+    '[Nautilus Log] 同步内容缓存预热后仍为空'
+    + `（vault 报告 ${total} 个 markdown 文件）。执行层会全面失明：`
+    + 'readPrimaryPlan / readAllEntries 都只认这份缓存。'
+    + ' 见 test/reality-quirks.md RQ-4；用命令「Diagnose execution layer」看断在哪一环。',
+  );
 }
 
 /** 预热完成的信号。🔴 执行层必须 await 它再 initialize()：

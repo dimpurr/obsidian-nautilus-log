@@ -11,6 +11,7 @@
  *   3. 引擎导出面    src/vendor/*.js 导出了、没有任何调用点的符号
  *   4. 键名空间      vendor 里的 settings.get('...') 字面量必须在 shim 映射表里
  *   5. 上游漂移      vendor 基线与上游 HEAD 的距离（需本地有上游 clone）
+ *   6. 怪癖钉子      test/reality-quirks.md 里每条现实怪癖必须有一个真实存在的测试钉住
  *
  * 用法：
  *   node scripts/audit-detectors.mjs           # 人读的报告
@@ -136,6 +137,28 @@ function upstreamDrift() {
     : '未在 PORTING-DECISIONS.md 里找到 vendor 基线（已查：正则 /vendor 基线 \\| `sha`/）' };
 }
 
+/* ── 6. 怪癖钉子 ─────────────────────────────────────────────────────────
+ * test/reality-quirks.md 是一个【棘轮】：它发现不了新怪癖，但保证已发现的
+ * 丢不掉。每条 `## RQ-n` 必须有一行 `**钉住它的测试**：\`file\` → \`name\``，
+ * 且该文件真的存在、真的含有那个测试名。断链即红。
+ * 🔴 与 baseline 不同，这里【没有豁免】—— 怪癖表只许变长。 */
+function danglingQuirkPins() {
+  const REL = 'test/reality-quirks.md';
+  if (!exists(REL)) return [`${REL} 未找到（已查：仓库根下该相对路径）`];
+  const doc = read(REL);
+  const out = [];
+  const sections = [...doc.matchAll(/^## (RQ-\d+)[^\n]*\n([\s\S]*?)(?=^## |\Z)/gm)];
+  if (!sections.length) return [`${REL} 里未找到任何 \`## RQ-n\` 条目`];
+  for (const [, id, body] of sections) {
+    const pin = /\*\*钉住它的测试\*\*[：:]\s*`([^`]+)`\s*(?:→|->)\s*`([^`]+)`/.exec(body);
+    if (!pin) { out.push(`${id}: 缺「钉住它的测试」一行`); continue; }
+    const [, file, name] = pin;
+    if (!exists(file)) { out.push(`${id}: 钉子文件不存在 → ${file}`); continue; }
+    if (!read(file).includes(name)) out.push(`${id}: ${file} 里找不到测试「${name}」`);
+  }
+  return out;
+}
+
 /* ── 汇总 ───────────────────────────────────────────────────────────────── */
 const result = {
   orphanCss: orphanCss(),
@@ -143,6 +166,7 @@ const result = {
   unreachableExports: unreachableExports(),
   unmappedSettingKeys: unmappedSettingKeys(),
   upstreamDrift: upstreamDrift(),
+  danglingQuirkPins: danglingQuirkPins(),
 };
 
 const BASELINE_PATH = 'scripts/audit-baseline.json';
@@ -157,6 +181,8 @@ for (const key of ['orphanCss', 'orphanCopy', 'unreachableExports', 'unmappedSet
   if (fixed.length) (regressions.__staleBaseline ||= []).push(...fixed.map((x) => `${key}:${x}`));
 }
 
+if (result.danglingQuirkPins.length) regressions.danglingQuirkPins = result.danglingQuirkPins;
+
 if (process.argv.includes('--json')) {
   console.log(JSON.stringify({ result, regressions }, null, 2));
 } else {
@@ -170,6 +196,10 @@ if (process.argv.includes('--json')) {
     console.log(`\n## ${title} — ${result[k].length} 条`);
     for (const x of result[k]) console.log(`  ${known0(baseline[k], x) ? ' ' : '🔴'} ${x}`);
   }
+  console.log(`\n## 怪癖钉子（test/reality-quirks.md）`);
+  console.log(result.danglingQuirkPins.length
+    ? result.danglingQuirkPins.map((x) => `  🔴 ${x}`).join('\n')
+    : '  ✅ 每条怪癖都有活着的钉子');
   console.log(`\n## 上游漂移\n  ${result.upstreamDrift.note}`);
   if (Object.keys(regressions).length) {
     console.log('\n🔴 相对 baseline 的新增/过期：');

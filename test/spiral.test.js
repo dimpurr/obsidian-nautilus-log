@@ -479,3 +479,24 @@ test("P0-4 没有 CLOCK 记录时退回纯估计值（不炸、不编造）", ()
   assert.doesNotMatch(container.innerHTML, /nautilus-log-event-slice-group/,
     "既无锚点又无 CLOCK 时不画，是上游的明确立场（does not invent history）");
 });
+
+/* ------------------------------------------------------------------ */
+/* RQ-6 夹具必须至少和真实 document 一样宽                            */
+/* ------------------------------------------------------------------ */
+/* 真实 document 同时有 createElementNS（SVG）与 createElement（HTML），
+ * 且 createElement('canvas').getContext 一定存在。早期 shim 只给了前者，
+ * 接紧凑列表时整片 spiral 测试直接抛 'document.createElement is not a
+ * function' —— 这类「夹具比现实窄」的会大声炸，成本低；真正危险的是反过来。
+ * 见 test/reality-quirks.md RQ-6。 */
+test("RQ-6 documentShim 覆盖真实 document 的必需面（createElement + canvas.getContext）", () => {
+  assert.equal(typeof documentShim.createElementNS, "function");
+  assert.equal(typeof documentShim.createElement, "function",
+    "紧凑列表（compact.ts）走的是 createElement");
+  const canvas = documentShim.createElement("canvas");
+  assert.equal(typeof canvas.getContext, "function",
+    "log-core 的 truncateTextToWidth 会 createElement('canvas').getContext('2d')；"
+    + "缺这个方法会直接抛，而不是退到 fallbackTextWidth");
+  assert.equal(canvas.getContext("2d"), null,
+    "Node 里拿不到 2d 上下文 —— 返回 null 让引擎按【字符数】兜底，"
+    + "真实 Electron 里拿得到、按【像素】量（parser.test.js 那条钉的就是这个差异）");
+});

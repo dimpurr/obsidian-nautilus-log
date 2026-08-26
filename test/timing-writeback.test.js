@@ -330,3 +330,64 @@ test('🔴 P0-3 行漂且歧义时拒写，而不是赌一个', async () => {
   assert.ok(!out.some(l=>/=> 0:25/.test(l)),'拒写后文件不得被改动');
   v.cleanup();
 });
+
+/* ─────────── RQ-4：vault 索引在 onload 时还没好 ───────────
+ * 真实 Obsidian 在插件 onload 时 `getMarkdownFiles()` 返回空数组 —— 索引还没
+ * 建完。同步内容缓存若在那时预热就永远是 0 条，执行层随之全面失明。
+ * 见 test/reality-quirks.md RQ-4 与 PORTING-DECISIONS.md §D6。 */
+function makeLateIndexVault(){
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'nl-late-'));
+  const abs=p=>path.join(dir,p);
+  const files=new Map();
+  let indexed=false;                 // ← 现实：onload 时是 false
+  const readyCbs=[];
+  const api={
+    dir,
+    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,{path:p}); return files.get(p); },
+    /** 模拟 Obsidian 建完索引并触发 onLayoutReady。 */
+    finishIndexing(){ indexed=true; readyCbs.splice(0).forEach(cb=>cb()); },
+    cleanup(){ fs.rmSync(dir,{recursive:true,force:true}); },
+  };
+  const vault={
+    getAbstractFileByPath:p=>files.get(p)||null,
+    // 🔴 索引没好之前返回空数组，正是真实行为
+    getMarkdownFiles:()=>(indexed?[...files.values()]:[]),
+    cachedRead:async f=>fs.readFileSync(abs(f.path),'utf8'),
+    read:async f=>fs.readFileSync(abs(f.path),'utf8'),
+    process:async(f,fn)=>{ const cur=fs.readFileSync(abs(f.path),'utf8');
+      const next=fn(cur); fs.writeFileSync(abs(f.path),next); return next; },
+  };
+  const app={vault,
+    workspace:{ iterateAllLeaves(){}, getLeaf:()=>null, openLinkText:async()=>{},
+                onLayoutReady(cb){ readyCbs.push(cb); } },
+    metadataCache:{on(){},off(){}}};
+  T.initTimingObsidian({app});
+  return api;
+}
+
+test('🔴 RQ-4 预热必须等 onLayoutReady —— 布局就绪前 timingCacheReady() 不许 resolve', async () => {
+  const v=makeLateIndexVault();
+  v.write('2026-08-26.md','```naut\n```\n- [ ] 写周报 45m');
+  let resolved=false;
+  const waiter=T.timingCacheReady().then(()=>{ resolved=true; });
+  // 把微任务队列放干净；此刻布局还没就绪
+  await new Promise((r)=>setImmediate(r));
+  assert.equal(resolved, false,
+    '抢在 onLayoutReady 之前 resolve = 执行层会拿着空缓存 initialize()，'
+    + '而 reconcileLegacyOverlap / closeDoneClocks 是一次性的，空转就永远补不回来');
+  v.finishIndexing();
+  await waiter;
+  assert.ok(resolved);
+  v.cleanup();
+});
+
+test('RQ-4 resolve 的那一刻缓存必须已经填好（不是 onLayoutReady 一触发就 resolve）', async () => {
+  const v=makeLateIndexVault();
+  v.write('2026-08-26.md','```naut\n```\n- [ ] 写周报 45m');
+  const waiter=T.timingCacheReady();
+  v.finishIndexing();
+  await waiter;
+  assert.ok(T.readPrimaryPlan(new Date(2026,7,26,9,0)).plan,
+    'resolve 之后必须立刻读得到 —— 执行层就是等它才启动的');
+  v.cleanup();
+});
