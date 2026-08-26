@@ -253,3 +253,172 @@ test("destroy() 之后 interval 不再触发", (t) => {
     "按钮条已从容器移除",
   );
 });
+
+/* ------------------------------------------------------------------ */
+/* 认证审计 C2-054 · localStorage 键的命名空间前缀                      */
+/* ------------------------------------------------------------------ */
+
+/** 上游 `component.cljs:1417-1418` 的键是
+ *  `"nautilus-log:collapsed:v1:" + block-uid`；本移植的调用方传的是裸的
+ *  `"<path>.md:<lineOffset>"`，于是 vault 级 localStorage 里躺着一个毫无
+ *  命名空间、也没有版本位的键。
+ *
+ *  ⚠️ 旧测试抓不到这条 —— 它把**自己造的、已经带前缀的**键喂进被测函数，
+ *  再断言同一个键被写了，永远自洽。这条测试传的是**调用方真实会传的裸键**。 */
+test("🔴 C2-054 折叠态的 localStorage 键带 nautilus-log:collapsed:v1: 前缀", () => {
+  const { dom, container, opts, calls, handlers } = makeFixture();
+  const blockKey = "Daily/2026-08-24.md:12";   // main.ts / sidebar.ts 真实传入的形态
+
+  const { destroy } = renderChartControls(
+    container,
+    initialState(),
+    handlers,
+    SETTINGS,
+    opts,
+    blockKey,
+  );
+
+  const [, , collapse] = buttonsOf(container);
+  collapse.click();
+
+  assert.equal(calls[calls.length - 1].collapsed, true);
+  assert.equal(
+    dom.window.localStorage.getItem(blockKey),
+    null,
+    "裸键不该出现在 vault 级 localStorage 里（无命名空间会撞上别的插件）",
+  );
+  assert.equal(
+    dom.window.localStorage.getItem(`nautilus-log:collapsed:v1:${blockKey}`),
+    "true",
+    "必须写在上游那个带版本位的命名空间下",
+  );
+
+  destroy();
+});
+
+test("🔴 C2-054 已带前缀的键原样通过（幂等，不叠第二层前缀）", () => {
+  const { dom, container, opts, storageKey, handlers } = makeFixture();
+  const { destroy } = renderChartControls(
+    container,
+    initialState(),
+    handlers,
+    SETTINGS,
+    opts,
+    storageKey,                      // "nautilus-log:collapsed:v1:test-block"
+  );
+  buttonsOf(container)[2].click();
+  assert.equal(dom.window.localStorage.getItem(storageKey), "true");
+  assert.equal(
+    dom.window.localStorage.getItem(`nautilus-log:collapsed:v1:${storageKey}`),
+    null,
+    "不能把前缀叠两层",
+  );
+  destroy();
+});
+
+/* ------------------------------------------------------------------ */
+/* 认证审计 C2-023 / C2-024 / C2-057 · 挂载点与折叠骨架                  */
+/* ------------------------------------------------------------------ */
+
+/** 造出宿主在调 renderChartControls 之前已经画好的那部分骨架：
+ *  块根（container）> header > [header-copy, header-actions > legend]。 */
+function makeShellFixture(overrides = {}) {
+  const f = makeFixture(overrides);
+  const doc = f.dom.window.document;
+  f.container.className = "nautilus-log nautilus-log-container";
+  const header = doc.createElement("header");
+  header.className = "nautilus-log-header nautilus-log-header--compact";
+  const copy = doc.createElement("div");
+  copy.className = "nautilus-log-header-copy";
+  const actions = doc.createElement("div");
+  actions.className = "nautilus-log-header-actions";
+  const legend = doc.createElement("div");
+  legend.className = "nautilus-log-html-legend";
+  actions.appendChild(legend);
+  header.appendChild(copy);
+  header.appendChild(actions);
+  f.container.appendChild(header);
+  return { ...f, header, actions, legend };
+}
+
+test("🔴 C2-023 控制栏挂进 header-actions 列（图例之前），不再是块根的兄弟", () => {
+  const { container, actions, legend, opts, storageKey, handlers } = makeShellFixture();
+  const { destroy } = renderChartControls(
+    container,
+    initialState(),
+    handlers,
+    SETTINGS,
+    opts,
+    storageKey,
+  );
+
+  const bar = container.querySelector(".nautilus-log-controls-top");
+  assert.ok(bar, "按钮条渲染出来了");
+  assert.equal(
+    bar.parentNode,
+    actions,
+    "上游 component.cljs:1880-1883 把 controls 放在 header-actions 列里；"
+    + "挂在块根上会让紧凑宽度下 header 塌成一条 32px 空条、按钮掉到下面",
+  );
+  assert.equal(actions.firstChild, bar, "上游顺序：controls 在 html-legend 之前");
+  assert.equal(bar.nextSibling, legend);
+
+  destroy();
+  assert.equal(actions.querySelectorAll("button").length, 0, "destroy 要从真实父节点上摘干净");
+});
+
+test("🔴 C2-057/C2-024 折叠后：块根拿 nautilus-log-collapsed，按钮条浮回块根，头部不再显示", () => {
+  const { container, actions, header, opts, storageKey, handlers } = makeShellFixture();
+  const { destroy } = renderChartControls(
+    container,
+    initialState(),
+    handlers,
+    SETTINGS,
+    opts,
+    storageKey,
+  );
+
+  assert.equal(
+    container.classList.contains("nautilus-log-collapsed"),
+    false,
+    "展开态不带折叠类",
+  );
+
+  buttonsOf(container)[2].click();   // 折叠
+
+  // styles.css:692-709 的整族（浮到块上方 + 只留折叠键）全部挂在这个类上。
+  assert.equal(
+    container.classList.contains("nautilus-log-collapsed"),
+    true,
+    "上游 component.cljs:1870 折叠时给容器加 nautilus-log-collapsed",
+  );
+  const bar = container.querySelector(".nautilus-log-controls-top");
+  assert.equal(
+    bar.parentNode,
+    container,
+    "折叠态必须离开 header-actions —— 否则会跟着被藏掉的头部一起消失",
+  );
+  assert.notEqual(bar.parentNode, actions);
+  assert.equal(
+    header.style.display,
+    "none",
+    "上游折叠后整块只剩一排按钮；容量头部留着会从 height:0 的容器里溢出来",
+  );
+
+  buttonsOf(container)[2].click();   // 展开回来
+
+  assert.equal(container.classList.contains("nautilus-log-collapsed"), false);
+  assert.equal(header.style.display, "", "展开后头部还原");
+  assert.equal(
+    container.querySelector(".nautilus-log-controls-top").parentNode,
+    actions,
+    "展开后按钮条回到 header-actions",
+  );
+
+  destroy();
+  assert.equal(
+    container.classList.contains("nautilus-log-collapsed"),
+    false,
+    "destroy 不能把折叠类留在宿主的 DOM 上",
+  );
+});

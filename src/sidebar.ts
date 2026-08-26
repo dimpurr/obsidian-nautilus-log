@@ -19,7 +19,8 @@
 
 import { ItemView, TFile, type App, type WorkspaceLeaf } from 'obsidian';
 import { renderSpiral, type SpiralHandle } from './spiral';
-import { renderCapacityHeader } from './header';
+import { renderCapacityHeader, enableContainerQueries } from './header';
+import { renderChartControls, type ChartControlState } from './controls';
 import { renderCompactOverview, renderOverflowPanel, renderWarningPanel } from './compact';
 import { parsePlan } from './parser';
 import { parseBlockConfig, applyOverrides, extractPlanBody } from './blockconfig';
@@ -44,6 +45,8 @@ const logCore = require('./vendor/log-core') as {
     startMinutes: number;
     endMinutes: number;
   };
+  /** 认证审计 L2-127：紧凑阈值必须来自引擎，不能在这里再写一次 520。 */
+  isCompactChartWidth(width: number): boolean;
 };
 
 export const NAUTILUS_VIEW_TYPE = 'nautilus-log-view';
@@ -203,6 +206,18 @@ export class NautilusSidebarView extends ItemView {
   private exec: { destroy(): void } | null = null;
   private pomo: { destroy(): void } | null = null;
 
+  /* ---- 认证审计 C2-058：侧栏此前完全没有控制栏（眼睛/播放/折叠）。 ----
+   * 图表状态得有个宿主，`main.ts` 的 view 有 `chartState`，侧栏没有 ——
+   * 这里补一份同构的。它是【纯视觉】状态，不写回 Markdown。 */
+  private controls: { destroy(): void } | null = null;
+  private chartState: ChartControlState = { showDone: true, collapsed: false, playback: null };
+  /** 回放时钟归 view 所有 —— 见 controls.ts 里关于孤儿定时器的注释。 */
+  private playbackTimer: number | null = null;
+  /** 认证审计 L2-127：跟随宽度变化的观察者（上游 `observe-compact-width!`）。 */
+  private resizeObserver: { disconnect(): void } | null = null;
+  /** 上一次渲染时的紧凑判定；只有它翻转才重排，避免 observer 自激。 */
+  private lastCompact: boolean | null = null;
+
   // 🔴 contentEl 下必须是【两个固定容器】，而不是让 render() 直接 empty(contentEl)。
   //    否则每分钟 tick 的重渲染会连执行区 DOM 一起抹掉，而 renderExecutionArea()
   //    只在 onOpen 调过一次 => 侧栏开满一分钟后按钮栏永久消失（实测踩到）。
@@ -242,6 +257,66 @@ export class NautilusSidebarView extends ItemView {
 
     // 每分钟 tick 一次 —— 当前时刻会变，盘上的流逝区与指针必须跟着走。
     this.timer = window.setInterval(() => void this.render(), 60_000);
+
+    this.observeCompactWidth();
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 认证审计 L2-127 · 跟随宽度变化                                       */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * 上游 `component.cljs:1739-1757 observe-compact-width!` 用 ResizeObserver
+   * 持续跟随容器宽度，并在**转入紧凑**时清空 hover 状态。本移植原先只在渲染
+   * 那一刻算一次 `isCompactChartWidth`（`spiral.ts:1326`）—— 拖窄侧栏或分屏
+   * 不会重排，得等下一次 60 秒 tick 或文件改动才生效。
+   *
+   * 只有紧凑判定**翻转**时才重渲染：ResizeObserver 的回调本身会被重渲染再次
+   * 触发，无条件重画就是一个自激循环。hover 状态由 `renderSpiral` 持有，
+   * 重建 spiral 即清空，与上游 `(reset! hover-info-state nil)` 等价。
+   */
+  private observeCompactWidth(): void {
+    const Ctor = (window as unknown as {
+      ResizeObserver?: new (cb: () => void) => { observe(el: Element): void; disconnect(): void };
+    }).ResizeObserver;
+    if (!Ctor || !this.planHost) return;   // jsdom / 老 webview 上没有就退化成原行为
+    const observer = new Ctor(() => {
+      const host = this.planHost;
+      if (!host) return;
+      const compact = logCore.isCompactChartWidth(host.clientWidth || 0);
+      if (compact === this.lastCompact) return;
+      this.lastCompact = compact;
+      void this.render();
+    });
+    observer.observe(this.planHost);
+    this.resizeObserver = observer;
+  }
+
+  private stopPlaybackClock(): void {
+    if (this.playbackTimer !== null) {
+      window.clearInterval(this.playbackTimer);
+      this.playbackTimer = null;
+    }
+  }
+
+  /** 状态里有 playback 就保证时钟在跑，没有就保证停掉。幂等，可反复调。
+   *  与 `main.ts` 的 syncPlaybackClock 同构 —— 推进不能放进 controls.ts。 */
+  private syncPlaybackClock(startMinutes: number, endMinutes: number): void {
+    if (this.chartState.playback === null) { this.stopPlaybackClock(); return; }
+    if (this.playbackTimer !== null) return;
+    const end = Math.max(startMinutes, Math.min(nowMinutes(), endMinutes));
+    const step = Math.max(1, Math.round((end - startMinutes) / 60));
+    this.playbackTimer = window.setInterval(() => {
+      const cur = this.chartState.playback;
+      if (cur === null) { this.stopPlaybackClock(); return; }
+      const next = Math.min(end, cur.minute + step);
+      this.chartState = { ...this.chartState, playback: { minute: next } };
+      if (next >= end) {
+        this.stopPlaybackClock();
+        this.chartState = { ...this.chartState, playback: null };
+      }
+      void this.render();
+    }, 120);
   }
 
   /** 执行层区域。总开关关闭时什么都不渲染（也就不起任何订阅/定时器）。 */
@@ -277,9 +352,14 @@ export class NautilusSidebarView extends ItemView {
   }
 
   async onClose(): Promise<void> {
-    // 🔴 五个都得清，一个都不许漏：interval、事件监听、spiral、执行面板、POMO。
+    // 🔴 八个都得清，一个都不许漏：interval、事件监听、spiral、执行面板、
+    //    POMO、控制栏、回放时钟、ResizeObserver。
     this.exec?.destroy(); this.exec = null;
     this.pomo?.destroy(); this.pomo = null;
+    this.controls?.destroy(); this.controls = null;
+    this.stopPlaybackClock();
+    this.resizeObserver?.disconnect(); this.resizeObserver = null;
+    this.lastCompact = null;
     if (this.timer !== null) {
       window.clearInterval(this.timer);
       this.timer = null;
@@ -344,23 +424,38 @@ export class NautilusSidebarView extends ItemView {
       pendingTasks: parsed.tasks,
     });
 
+    // 上游 `component.cljs:1870-1890` 的骨架：
+    //   container > (collapsed ? controls : shell > [header, compact, content])
+    // 认证审计 C2-056/057 + S1-003/005：这三个类名本移植此前一个都没发射过，
+    // 于是块根布局、控制栏 hover 浮现、折叠态浮出全族 CSS 都是死规则。
     const root = el.createDiv({ cls: 'nautilus-log' });
+    enableContainerQueries(root);   // => `nautilus-log-container`
 
     if (capacity.demandMinutes === 0 && capacity.totalFixedMinutes === 0) {
       const d = root.createDiv({ cls: 'nautilus-log-diag' });
       d.setText(`⚠ nothing scheduled — events ${parsed.events.length} · tasks ${parsed.tasks.length} · malformed ${parsed.malformed.length}`);
     }
 
-    renderCapacityHeader(root, capacity, settings, nowMinutes());
+    // 认证审计 C2-024：折叠后上游只剩一排按钮 —— 头部与紧凑概览都不渲染。
+    if (this.chartState.collapsed) {
+      this.disposeSpiral();
+      this.mountControls(root, settings, schedule);
+      return;
+    }
+
+    const shell = root.createDiv({ cls: 'nautilus-log-shell' });
+    renderCapacityHeader(shell, capacity, settings, nowMinutes());
+    // 认证审计 C2-058 + C2-023：控制栏挂进 header-actions 列（controls.ts 自己
+    // 找挂载点）。必须在 renderCapacityHeader 之后，那一列才存在。
+    this.mountControls(root, settings, schedule);
     // 🔴 侧栏几乎总是落在 @container (max-width:520px) 里，那套规则会把完整
     //    头部藏起来、改显紧凑概览。只接 main.ts 不接这里 => 侧栏什么都没有。
     const uiCopy = logCore.uiCopy(settings.language) as never;
-    renderCompactOverview(root, capacity, settings, nowMinutes(), uiCopy);
+    renderCompactOverview(shell, capacity, settings, nowMinutes(), uiCopy);
 
-    renderOverflowPanel(root, capacity, uiCopy);
-    renderWarningPanel(root, parsed, uiCopy);
+    const content = shell.createDiv({ cls: 'nautilus-log-content' });
 
-    const chart = root.createDiv({ cls: 'nautilus-log-chart' });
+    const chart = content.createDiv({ cls: 'nautilus-log-chart' });
     try {
       // 上一次的 hover 监听必须先拆，否则每次重渲染（每分钟 tick + 文件改动）
       //    都会再挂一层，很快就累积成泄漏。
@@ -368,6 +463,10 @@ export class NautilusSidebarView extends ItemView {
       // 侧栏总是看今天，但仍显式解析 —— 万一 Primary Plan 落在别的日期
       // （例如跨午夜窗口把昨天的计划算作 today），也能走对分支。
       this.spiral = renderSpiral(chart, parsed, capacity, settings, nowMinutes(), {
+        // 认证审计 C2-058：控制栏的两个视觉开关必须真的接到图上，
+        //   否则按钮点了没反应。只用 renderSpiral 的现有 options。
+        showDone: this.chartState.showDone,
+        playbackMinute: this.chartState.playback?.minute ?? null,
         // P0-4：同 main.ts —— 侧栏也要拿到 CLOCK 记录。
         clockEntries: this.getExecContext()?.runtime?.getSnapshot?.()?.entries ?? [],
         dayState: resolveDayState({
@@ -379,9 +478,49 @@ export class NautilusSidebarView extends ItemView {
       });
     } catch (err) {
       chart.remove();
-      const warn = root.createDiv({ cls: 'nautilus-log-chart-error' });
+      const warn = content.createDiv({ cls: 'nautilus-log-chart-error' });
       warn.setText('⚠ chart failed to render (capacity figures above are still valid)');
       console.error('[Nautilus Log] sidebar renderSpiral failed', err);
     }
+
+    // 🔴 认证审计 C2-101：溢出/警告面板必须排在**图之后**（上游
+    //    `component.cljs:1889-1890` 的 `nautilus-log-content` 内是
+    //    visual → overflow → warning）。侧栏原先把它俩画在图之前。
+    renderOverflowPanel(content, capacity, uiCopy);
+    renderWarningPanel(content, parsed, uiCopy);
+  }
+
+  /**
+   * 认证审计 C2-058：挂上眼睛/播放/折叠三个按钮。
+   *
+   * `container` 恒为块根（带 `nautilus-log-container`）—— controls.ts 需要它
+   * 来切 `nautilus-log-collapsed`，并在展开态自己找到 header-actions 列。
+   * 存储键传裸的「块身份」，命名空间前缀由 controls.ts 加（C2-054）。
+   */
+  private mountControls(
+    container: HTMLElement,
+    settings: NautilusSettings,
+    schedule: { startMinutes: number; endMinutes: number },
+  ): void {
+    this.controls?.destroy();
+    this.controls = renderChartControls(
+      container,
+      this.chartState,
+      {
+        onChange: (next) => {
+          this.chartState = next;
+          this.syncPlaybackClock(schedule.startMinutes, schedule.endMinutes);
+          void this.render();
+        },
+      },
+      settings,
+      {
+        workdayStartMinutes: schedule.startMinutes,
+        workdayEndMinutes: schedule.endMinutes,
+        nowMinutes: nowMinutes(),   // 侧栏恒看今天，回放区间总是有意义的
+      },
+      // 侧栏的「块」就是当天的 Primary Plan；同一篇笔记的折叠态跟着它走。
+      `${this.primaryPath ?? 'primary'}:sidebar`,
+    );
   }
 }

@@ -306,22 +306,34 @@ export function resolveCapacityMetrics(
 }
 
 /**
- * Give the block root a container-query context.
+ * 让块根真正成为上游那套 DOM 骨架的容器节点。
  *
- * 🔴 parity-audit §P1-4 的前置条件：`styles.css` 里紧凑模式的 28 条规则
- * （`.nautilus-log-compact-*`）全部躺在 `@container (max-width: 520px)` 里，
- * 而 `container-type: inline-size` 只写在 `.nautilus-log-container` 上 ——
- * 本移植的块根 div 叫 `nautilus-log`，**从没有任何代码产出过
- * `nautilus-log-container` 这个类**（已查：`grep -rn "nautilus-log-container" src/`
- * 仅命中 `src/vendor/upstream-extension.css` 与 `styles.css` 自身）。
- * 于是整个 `@container` 块是死代码，紧凑面板即便渲染出来也恒为
- * `display: none`。
+ * 认证审计 C2-056 / C2-057 / C2-091 / S1-003：`styles.css` 是从上游
+ * `extension.css` 整份搬来的，块根的所有规则都挂在 `.nautilus-log-container`
+ * 上（`container-type: inline-size` 之外还有 flex 列布局、padding、
+ * `position: relative`、以及 `:hover .nautilus-log-controls-top{opacity:1}` 与
+ * `@container` 里的紧凑内边距）。而本移植的块根 div 只叫 `nautilus-log`
+ * —— 那个类在 `styles.css` 里**一条规则都没有**，于是上述整族全部失效。
  *
- * 这里只补上容器上下文本身（一个属性），**不**套用
- * `.nautilus-log-container` 的 flex/padding —— 那会改动现有非紧凑布局。
+ * 取舍：**发射上游类名**，而不是把 CSS 选择器改成 `.nautilus-log`。
+ * 理由 —— CSS 是逐段从上游搬来的、将来还要按上游 diff 对账；一旦把选择器
+ * 改名，每次对账都要额外维护一张「改名表」，而 DOM 侧多加一个 class 是
+ * 零成本且与上游逐字一致的。`position: relative` 也必须来自这条规则，
+ * 否则 `.nautilus-log-collapsed .nautilus-log-controls-top{position:absolute}`
+ * 会相对错误的祖先定位。
+ *
+ * 内联 `container-type` 作为兜底保留：jsdom 测试与不加载 styles.css 的
+ * 环境里没有 CSS 规则可用。
  */
 export function enableContainerQueries(root: HTMLElement): void {
-  const style = root?.style as (CSSStyleDeclaration & { containerType?: string }) | undefined;
+  if (!root) return;
+  // 🔴 上游 `component.cljs:1870` 的块根就是这个类。
+  //    幂等且只认最外层：侧栏会把 header 放进 `.nautilus-log-shell`，那时
+  //    容器上下文已经由块根建立，内层再建一个会让 `@container` 按错误的
+  //    宽度求值（shell 与块根之间还隔着 padding）。
+  if (root.closest?.(".nautilus-log-container")) return;
+  root.classList?.add("nautilus-log-container");
+  const style = root.style as (CSSStyleDeclaration & { containerType?: string }) | undefined;
   if (!style) return;
   // `containerType` 在旧 TS lib / 测试 shim 里可能不存在，两条路都走一遍。
   try {

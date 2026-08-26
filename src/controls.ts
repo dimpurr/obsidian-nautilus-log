@@ -48,7 +48,12 @@ const PLAYBACK_TICK_COUNT = 60;
 
 /* uiCopy has no label for the "playing" state of the play button (upstream
  * disables the button instead of re-labelling it).  We complement it here
- * rather than touching the vendored copy table. */
+ * rather than touching the vendored copy table.
+ *
+ * 认证审计 C2-043（有意偏离，待登记台账）：上游播放中把按钮置 `:disabled`
+ * 且图标不变，一旦开播只能等它跑完；本移植换成可点的停止键。上游的回放是
+ * 固定 6s 的一次性动画，而本移植的时钟归宿主、步长随窗口长度变化（见下方
+ * startPlayback 的注释），跑起来可能明显更久 —— 没有中止手段是不可接受的。 */
 const STOP_PLAYBACK_LABEL: Record<string, string> = {
   en: "Stop playback",
   zh: "停止回放",
@@ -96,6 +101,24 @@ const ICON_EXPAND =
 /* localStorage persistence (guarded — storage can throw in some        */
 /* Obsidian webviews and must never take the whole chart down).        */
 /* ------------------------------------------------------------------ */
+
+/**
+ * 认证审计 C2-054：上游的键是 `"nautilus-log:collapsed:v1:" + block-uid`
+ * （`component.cljs:1417-1418`）。本移植的调用方传的是裸的
+ * `"<path>.md:<lineOffset>"` —— vault 级的 localStorage 里于是躺着一个毫无
+ * 命名空间的键，既撞得上别的插件，也没有版本位可供将来迁移。
+ *
+ * 命名空间在**这里**补，而不是要求每个调用方自己拼：调用方只知道「这是哪
+ * 一块」，键的格式与版本位是本组件的实现细节（本文件的 doc 一直是这么写
+ * 的，只有调用方没照做）。已经带前缀的键原样通过 —— 幂等，老键不迁移。
+ */
+const COLLAPSED_STORAGE_PREFIX = "nautilus-log:collapsed:v1:";
+
+export function collapsedStorageKey(blockKey: string): string {
+  return blockKey.startsWith(COLLAPSED_STORAGE_PREFIX)
+    ? blockKey
+    : `${COLLAPSED_STORAGE_PREFIX}${blockKey}`;
+}
 
 function readCollapsed(storageKey: string): boolean {
   try {
@@ -150,8 +173,15 @@ function clearChildren(node: Node): void {
  *
  * `state` seeds the component; `handlers.onChange` receives a full snapshot
  * after every interaction (and once at render if the persisted collapsed value
- * differs from the passed-in one).  `storageKey` is the exact localStorage key
- * used to remember `collapsed` per block (e.g. `"nautilus-log:collapsed:v1:<uid>"`).
+ * differs from the passed-in one).  `blockKey` identifies the block whose
+ * collapsed state is remembered; the localStorage namespace/version prefix is
+ * added here (`collapsedStorageKey`, 认证审计 C2-054), so callers pass a bare
+ * block identity such as `"<path>.md:<lineOffset>"`.
+ *
+ * Mount point mirrors upstream `component.cljs:1874-1881`: expanded charts put
+ * the bar in the header's actions column (before the legend); collapsed charts
+ * put it straight into the block root, which is also what makes
+ * `.nautilus-log-collapsed .nautilus-log-controls-top` position correctly.
  *
  * Returns `{ destroy() }` — must be called on teardown; it clears any running
  * playback interval and removes the button bar from the container.
@@ -162,10 +192,11 @@ export function renderChartControls(
   handlers: ChartControlHandlers,
   settings: NautilusSettings,
   opts: { workdayStartMinutes: number; workdayEndMinutes: number; nowMinutes: number },
-  storageKey: string,
+  blockKey: string,
 ): { destroy(): void } {
   const controlsCopy = core.uiCopy(settings.language).controls;
   const stopLabel = STOP_PLAYBACK_LABEL[settings.language] ?? STOP_PLAYBACK_LABEL.en;
+  const storageKey = collapsedStorageKey(blockKey);   // 认证审计 C2-054
 
   // Local working state.  Persisted collapse wins over the passed-in value,
   // mirroring upstream where read-collapsed-state seeds the atom.
@@ -190,6 +221,10 @@ export function renderChartControls(
   //    => 定时器建在已销毁的实例上，clearInterval 永远轮不到它，
   //       孤儿定时器不停把 playback 复活，表现就是「停不下来」。
   //    本组件只上报【意图】，推进由宿主做（宿主本来就有渲染时钟）。
+  //  认证审计 C2-044（有意偏离，待登记台账）：上游 6000ms 内从 workdayStart
+  //    线性扫到 **workdayEnd**；本移植扫到 **min(此刻, workdayEnd)**。理由是
+  //    本移植的容量与楔形都按 dayState 从「此刻」切分，回放越过此刻只会重复
+  //    播放一段还没发生的计划；到此刻为止才是「重播今天」。
   function startPlayback(): void {
     const end = Math.max(
       opts.workdayStartMinutes,
@@ -267,6 +302,66 @@ export function renderChartControls(
     playBtn.appendChild(svgIcon(playing ? ICON_STOP : ICON_PLAY));
   }
 
+  /* ------------------------------------------------------------------ */
+  /* 骨架同步（认证审计 C2-023 / C2-024 / C2-057）                        */
+  /* ------------------------------------------------------------------ */
+
+  /** 被本组件临时藏起来的兄弟节点（折叠态）。展开时逐一还原。 */
+  const hidden: HTMLElement[] = [];
+
+  function showHiddenSiblings(): void {
+    while (hidden.length > 0) {
+      const node = hidden.pop();
+      if (node) node.style.display = node.dataset.nlPrevDisplay || "";
+      if (node) delete node.dataset.nlPrevDisplay;
+    }
+  }
+
+  /**
+   * 认证审计 C2-023：上游把这条按钮栏放在 `header-actions` 列里（图例之前）。
+   * 本移植原先把它 append 成块根的兄弟节点 —— 紧凑宽度下
+   * `styles.css` 的 `@container` 规则会把 `header-copy` 与图例都藏掉，于是
+   * header 塌成一条 32px 空条，按钮却掉到它下面。
+   *
+   * 认证审计 C2-057：折叠时上游只渲染这条按钮栏、且它是块根的直接子节点，
+   * 靠 `.nautilus-log-collapsed .nautilus-log-controls-top{position:absolute}`
+   * 浮到块上方。所以折叠态必须**离开** header-actions，否则会跟着 header
+   * 一起被藏掉。
+   */
+  function placeControls(): void {
+    const actions = current.collapsed
+      ? null
+      : (container.querySelector(".nautilus-log-header-actions") as HTMLElement | null);
+    const target: HTMLElement = actions || container;
+    if (root.parentNode === target) return;
+    if (actions) actions.insertBefore(root, actions.firstChild);   // 上游顺序：controls 在图例之前
+    else container.appendChild(root);
+  }
+
+  /**
+   * 认证审计 C2-024 / C2-057：折叠后块根拿 `nautilus-log-collapsed`，并且
+   * 除了按钮栏之外**什么都不显示**（上游 `component.cljs:1874-1875` 是压根
+   * 不渲染）。
+   *
+   * ⚠️ 有意偏离：上游「不渲染」，本移植「渲染后藏起来」。原因是挂载顺序归
+   * 宿主（`main.ts` 在知道 collapsed 之前就已经画好了 header 与紧凑概览），
+   * 而 `.nautilus-log-collapsed` 是 `height:0; overflow:visible` —— 若把
+   * header 留着，它会整段溢出压在下一段正文上。见报告。
+   */
+  function syncCollapsedShell(): void {
+    container.classList?.toggle("nautilus-log-collapsed", current.collapsed);
+    showHiddenSiblings();
+    if (!current.collapsed) return;
+    // 🔴 不用 `instanceof HTMLElement` —— 测试里只往 globalThis 注入了
+    //    window/document，构造器本身不在全局，会直接 ReferenceError。
+    for (const child of Array.from(container.children) as HTMLElement[]) {
+      if (child === root || !child.style || !child.dataset) continue;
+      child.dataset.nlPrevDisplay = child.style.display;
+      child.style.display = "none";
+      hidden.push(child);
+    }
+  }
+
   function updateCollapse(): void {
     const label = copyLabel(
       controlsCopy,
@@ -277,17 +372,18 @@ export function renderChartControls(
     collapseBtn.setAttribute("aria-expanded", String(!current.collapsed));
     clearChildren(collapseBtn);
     collapseBtn.appendChild(svgIcon(current.collapsed ? ICON_EXPAND : ICON_COLLAPSE, 18));
+    placeControls();
+    syncCollapsedShell();
   }
 
   updateEye();
   updatePlay();
-  updateCollapse();
 
   // Upstream order: Eye, Play, Collapse.
   root.appendChild(eyeBtn);
   root.appendChild(playBtn);
   root.appendChild(collapseBtn);
-  container.appendChild(root);
+  updateCollapse();   // 内含挂载点选择 + 折叠骨架同步，必须在按钮装配之后
 
   // If we hydrated a persisted collapse that the caller didn't know about,
   // tell it now so the chart body renders collapsed immediately.
@@ -297,9 +393,10 @@ export function renderChartControls(
 
   return {
     destroy(): void {
-      if (root.parentNode === container) {
-        container.removeChild(root);
-      }
+      // 🔴 挂载点可能是 header-actions（C2-023），不再恒等于 container。
+      root.parentNode?.removeChild(root);
+      container.classList?.remove("nautilus-log-collapsed");
+      showHiddenSiblings();
     },
   };
 }
