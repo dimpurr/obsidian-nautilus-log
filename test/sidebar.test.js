@@ -326,3 +326,183 @@ test('🔴 RQ-7 Daily Notes 配了非默认日期格式时，路径必须按它�
     + '用户看到「今天没有 Nautilus Log」，而他明明配置好了');
   assert.equal(found.path, 'Journal/24-08-2026.md');
 });
+
+/* ================================================================== */
+/* 认证审计 C2-058 / C2-101 / L2-127 · 侧栏的控制栏、骨架与面板顺序      */
+/* ================================================================== */
+
+/** 一份能真的排出楔形的今日计划：两个事件 + 两个任务（其中一个已完成）。 */
+const FULL_PLAN = [
+  "# 2026-08-24",
+  "",
+  "```nautilus",
+  "start: 5",
+  "end: 21",
+  "```",
+  "",
+  "09:00-10:00 Standup",
+  "14:00-15:00 Review",
+  "10:00-10:00 Zero length slot",   // => 警告面板（sameTime）
+  "- [ ] Write report 45m",
+  "- [x] Answer mail 30m d11:20",
+  "- [ ] Oversized A 900m",         // => 溢出面板（排不下）
+  "- [ ] Oversized B 900m",
+].join("\n");
+
+/** 打开一个真的画出图的侧栏，返回 view 与块根。 */
+async function openFullSidebar(settings = SETTINGS) {
+  makeDom();
+  const w = globalThis.window;
+  w.setInterval = () => 1;
+  w.clearInterval = () => {};
+  const app = makeApp({ "2026-08-24.md": FULL_PLAN }, DN_OPTIONS);
+  const view = new NautilusSidebarView(new WorkspaceLeaf(app), settings);
+  // 🔴 mock 的 containerEl 是游离节点 => `planHost.isConnected` 恒 false =>
+  //    ensureHosts 每次渲染都新建一个 host，`contentEl.querySelector` 会一直
+  //    取到第一个（陈旧的）那份。挂进 document 才是真实 Obsidian 的形态。
+  w.document.body.appendChild(view.containerEl);
+  await view.onOpen();
+  const root = view.contentEl.querySelector(".nautilus-log");
+  assert.ok(root, "侧栏画出了块根");
+  return { view, root };
+}
+
+test("🔴 C2-058 侧栏有眼睛/播放/折叠三个按钮，且挂在 header-actions 列里", async () => {
+  const { view, root } = await openFullSidebar();
+
+  const bar = root.querySelector(".nautilus-log-controls-top");
+  assert.ok(bar, "侧栏此前【完全没有】控制栏（sidebar.ts 从不调 renderChartControls）");
+  const buttons = bar.querySelectorAll("button.nautilus-log-toggle-btn");
+  assert.equal(buttons.length, 3, "上游顺序：眼睛 / 播放 / 折叠");
+  assert.ok(buttons[2].classList.contains("nautilus-log-collapse-btn"));
+
+  // C2-023：和正文块一样，按钮必须在 header 的动作列里。
+  const actions = root.querySelector(".nautilus-log-header-actions");
+  assert.ok(actions, "header 的动作列存在");
+  assert.equal(bar.parentNode, actions);
+
+  await view.onClose();
+});
+
+test("🔴 C2-058 眼睛真的接到图上：关掉后已完成任务的楔形消失", async () => {
+  const { view, root } = await openFullSidebar();
+
+  const titles = (el) => Array.from(el.querySelectorAll(".nautilus-log-slice-group title"))
+    .map((t) => t.textContent);
+
+  const before = titles(root);
+  assert.ok(
+    before.some((t) => /Answer mail/.test(t)),
+    "夹具里必须真有一个已完成任务的楔形（带 d11:20 锚点），否则这条断言什么都证明不了",
+  );
+
+  root.querySelector(".nautilus-log-controls-top button").click();   // 眼睛
+  await new Promise((r) => setTimeout(r, 0));
+
+  const after = titles(view.contentEl.querySelector(".nautilus-log"));
+  assert.equal(
+    after.some((t) => /Answer mail/.test(t)),
+    false,
+    "showDone 必须真的传进 renderSpiral 的 options —— 只改本地状态等于按钮点了没反应",
+  );
+  assert.deepEqual(
+    before.filter((t) => !/Answer mail/.test(t)),
+    after,
+    "只有那一个已完成项消失，其余楔形不受影响",
+  );
+
+  await view.onClose();
+});
+
+test("🔴 C2-101 溢出/警告面板排在螺旋图【之后】（上游 nautilus-log-content 内的顺序）", async () => {
+  const { view, root } = await openFullSidebar();
+
+  const content = root.querySelector(".nautilus-log-content");
+  assert.ok(content, "S1-005：上游 component.cljs:1885 的 nautilus-log-content 此前从不发射");
+  assert.ok(root.querySelector(".nautilus-log-shell"), "S1-005：nautilus-log-shell 同上");
+
+  const order = Array.from(content.children).map((n) => n.className.split(/\s+/)[0]);
+  const chart = order.indexOf("nautilus-log-chart");
+  const overflow = order.indexOf("nautilus-log-overflow-panel");
+  const warning = order.indexOf("nautilus-log-warning-panel");
+  // 🔴 夹具必须真的把这两个面板逼出来 —— 否则 indexOf 恒为 -1，
+  //    「面板在图之后」这条断言会空洞地永远成立（V1 变异实验里的经典陷阱）。
+  assert.ok(chart >= 0, "图在 content 里");
+  assert.ok(overflow >= 0, "夹具里必须真有排不下的任务，溢出面板才存在");
+  assert.ok(warning >= 0, "夹具里必须真有一条排期警告，警告面板才存在");
+  assert.ok(overflow > chart, "溢出面板必须在图之后（原先在图之前）");
+  assert.ok(warning > chart, "警告面板必须在图之后");
+  assert.ok(warning > overflow, "上游顺序 visual → overflow → warning");
+
+  await view.onClose();
+});
+
+test("🔴 C2-024 侧栏折叠后只剩一排按钮：头部与紧凑概览都不显示", async () => {
+  const { view, root } = await openFullSidebar();
+
+  root.querySelectorAll(".nautilus-log-controls-top button")[2].click();   // 折叠
+  await new Promise((r) => setTimeout(r, 0));
+
+  const after = view.contentEl.querySelector(".nautilus-log");
+  assert.ok(
+    after.classList.contains("nautilus-log-collapsed"),
+    "折叠后块根带 nautilus-log-collapsed（styles.css:692-709 的挂点）",
+  );
+  assert.equal(after.querySelector(".nautilus-log-header"), null, "上游折叠后不渲染头部");
+  assert.equal(after.querySelector(".nautilus-log-compact-overview"), null, "也不渲染紧凑概览");
+  assert.equal(after.querySelector(".nautilus-log-chart"), null, "更没有图");
+  assert.equal(
+    after.querySelectorAll(".nautilus-log-controls-top button").length,
+    3,
+    "按钮条还在，且是块根的直接子节点",
+  );
+  assert.equal(after.querySelector(".nautilus-log-controls-top").parentNode, after);
+
+  await view.onClose();
+});
+
+test("🔴 L2-127 侧栏用 ResizeObserver 跟随宽度；紧凑判定翻转时才重排", async () => {
+  makeDom();
+  const w = globalThis.window;
+  w.setInterval = () => 1;
+  w.clearInterval = () => {};
+
+  const observed = [];
+  let fire = null;
+  w.ResizeObserver = class {
+    constructor(cb) { fire = cb; }
+    observe(el) { observed.push(el); }
+    disconnect() { fire = null; }
+  };
+
+  const app = makeApp({ "2026-08-24.md": FULL_PLAN }, DN_OPTIONS);
+  const view = new NautilusSidebarView(new WorkspaceLeaf(app), SETTINGS);
+  w.document.body.appendChild(view.containerEl);
+  await view.onOpen();
+
+  assert.equal(observed.length, 1, "onOpen 必须注册一个 ResizeObserver（上游 observe-compact-width!）");
+  assert.equal(observed[0], view.contentEl.querySelector(".nautilus-log-plan-host"));
+
+  // jsdom 里 clientWidth 恒为 0 => isCompactChartWidth(0) 为 true。
+  // 首次触发：判定从 null 翻到 true => 必须重渲染。
+  const before = view.contentEl.innerHTML;
+  fire();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(view.contentEl.querySelector(".nautilus-log"), "重渲染后块根还在");
+
+  // 第二次触发：判定没变 => 不能再重渲染（否则 observer 自激成死循环）。
+  let renders = 0;
+  const origRender = Object.getPrototypeOf(view).render;
+  Object.getPrototypeOf(view).render = function counted(...args) {
+    renders += 1;
+    return origRender.apply(this, args);
+  };
+  fire();
+  await new Promise((r) => setTimeout(r, 0));
+  Object.getPrototypeOf(view).render = origRender;
+  assert.equal(renders, 0, "紧凑判定没翻转就不许重画 —— 无条件重画是自激循环");
+  assert.ok(before.length >= 0);
+
+  await view.onClose();
+  assert.equal(fire, null, "onClose 必须 disconnect");
+});

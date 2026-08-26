@@ -343,3 +343,43 @@ test("header keeps the upstream copy / actions skeleton", () => {
     "metrics sit in the copy column",
   );
 });
+
+/* ------------------------------------------------------------------ */
+/* 认证审计 C2-056 / C2-091 / S1-003 · 块根必须发射上游的骨架类         */
+/* ------------------------------------------------------------------ */
+
+/** styles.css 是从上游 extension.css 整份搬来的，块根的**所有**规则都挂在
+ *  `.nautilus-log-container` 上：flex 列布局、padding、`position: relative`、
+ *  `container-type`，以及
+ *    `.nautilus-log-container:hover .nautilus-log-controls-top{opacity:1}`
+ *  这条「控制栏 hover 才浮现」。本移植的块根只叫 `nautilus-log`，
+ *  在 styles.css 里**一条规则都没有** ⇒ 按钮恒为 opacity .38，
+ *  只有键盘 focus 进去才亮；紧凑内边距（styles.css:712）也拿不到。
+ *
+ *  ⚠️ 只断言内联 `container-type` 抓不住这条 —— 那是本移植自己补的补丁，
+ *  它让 @container 活过来，却不会让上面那族选择器匹配上。 */
+test("🔴 C2-056 块根发射 nautilus-log-container（hover 浮现 / 块根布局全族的挂点）", () => {
+  const container = render(normalCapacity(), settings, 600);
+  assert.ok(
+    container.classList.contains("nautilus-log-container"),
+    "上游 component.cljs:1870 的块根类名；styles.css:55/597/712 全都以它为选择器",
+  );
+});
+
+test("🔴 C2-056 容器上下文只建在最外层（侧栏把 header 放进 shell 时不重复建）", () => {
+  const root = document.createElement("div");
+  root.className = "nautilus-log";
+  renderCapacityHeader(root, normalCapacity(), settings, 600);
+
+  const shell = document.createElement("div");
+  shell.className = "nautilus-log-shell";
+  root.appendChild(shell);
+  renderCapacityHeader(shell, normalCapacity(), settings, 600);
+
+  assert.equal(
+    shell.classList.contains("nautilus-log-container"),
+    false,
+    "内层再建一个容器上下文会让 @container 按 shell 的宽度求值（块根还有 padding）",
+  );
+  assert.equal(shell.style.getPropertyValue("container-type"), "");
+});
