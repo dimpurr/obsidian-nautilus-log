@@ -869,3 +869,139 @@ test('🔴 T2-061 空 taskUid 的失败必须带自己的 message，绝不让 Ro
     assert.ok(!/Roam/i.test(res.message),'message 不得再含 Roam 字样');
   });
 });
+
+/* ─────────────────── 写回乐观锁：两个读之间内容被改写时必须拒写 ───────────────────
+ * 变异实验（report-4，第 4 组）把「写回前不比对 expected 内容」的三种打碎方式都放进了
+ * 现有夹具 —— 全部存活：现有测试里 read 与 process 之间从不夹进一次写入，
+ * 乐观锁那行代码从来没真正被考验过。以下用「第一个读返回旧快照、写回读磁盘当前态」
+ * 的夹具模拟两个读之间的并发改写，再断言写回必须落在【当前】内容上、或干脆拒写。 */
+function makeRaceVault(){
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'nl-race-'));
+  const abs=p=>path.join(dir,p);
+  const files=new Map();
+  let stale=null, staleServed=false;
+  const api={ dir,
+    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,{path:p}); return files.get(p); },
+    read(p){ return fs.readFileSync(abs(p),'utf8'); },
+    /** 让「第一个读」返回旧快照，之后的读一律回到磁盘当前内容。 */
+    setStale(text){ stale=text; staleServed=false; },
+    cleanup(){ fs.rmSync(dir,{recursive:true,force:true}); } };
+  const vault={
+    getAbstractFileByPath:p=>files.get(p)||null,
+    getMarkdownFiles:()=>[...files.values()],
+    cachedRead:async f=>fs.readFileSync(abs(f.path),'utf8'),
+    read:async f=>{
+      if(stale!==null && !staleServed){ staleServed=true; return stale; }
+      return fs.readFileSync(abs(f.path),'utf8');
+    },
+    // 🔴 process 永远读【磁盘当前内容】—— 模拟两个读之间文件被其它写入者改了
+    process:async(f,fn)=>{ const cur=fs.readFileSync(abs(f.path),'utf8');
+      const nxt=fn(cur); fs.writeFileSync(abs(f.path),nxt); return nxt; } };
+  const app={vault, workspace:{iterateAllLeaves(){}, getLeaf:()=>null, openLinkText:async()=>{}},
+             metadataCache:{on(){},off(){}}};
+  T.initTimingObsidian({app});
+  return api;
+}
+
+test('🔴 乐观锁：扫描与写回之间任务行被插行移动，completeTask 必须按【内容】回锚，不得按旧行号落笔', async () => {
+  const v=makeRaceVault();
+  const STALE=['# 2026-08-25','- [ ] 写周报 45m','- [ ] 回邮件 30m'].join('\n');
+  const LIVE =['# 2026-08-25','- 用户刚插入的行','- [ ] 写周报 45m','- [ ] 回邮件 30m'].join('\n');
+  v.write('d.md', LIVE);
+  v.setStale(STALE);
+  await T.completeTask('d.md:1');            // 调用方手里的 uid 还指旧行号
+  const out=v.read('d.md').split('\n');
+  assert.equal(out[1],'- 用户刚插入的行','用户刚插入的行必须原样，不得被改写成任务');
+  assert.equal(out[2],'- [x] 写周报 45m','写回必须落到【当前】那一行（按内容回锚），而不是旧行号');
+  assert.equal((out.join('\n').match(/CLOCK:/g)||[]).length,0,'不得产生多余行');
+  v.cleanup();
+});
+
+test('🔴 乐观锁：CLOCK 行在定位与写回之间被改（如用户手动闭合），deleteClock 必须拒删',
+  async () => {
+    const v=makeRaceVault();
+    const STALE=['# 2026-08-25','- [ ] 写周报 45m','    - LOGBOOK::',
+      '        - CLOCK: [2026-08-25 Tue 10:00]'].join('\n');
+    const LIVE =['# 2026-08-25','- [ ] 写周报 45m','    - LOGBOOK::',
+      '        - CLOCK: [2026-08-25 Tue 10:00]--[2026-08-25 Tue 10:30] => 0:30'].join('\n');
+    v.write('d.md', LIVE);
+    v.setStale(STALE);
+    const entry={ clockUid:'d.md:3', taskUid:'d.md:1', running:true,
+      start:new Date(2026,7,25,10,0) };
+    await assert.rejects(()=>T.deleteClock(entry), /changed|Aborting/i,
+      '目标行已变时必须拒删抛错；静默返回 true = 用户以为删了其实还在（乐观锁失效）');
+    assert.match(v.read('d.md'),/=> 0:30/,'用户手动闭合的记录必须原样保留');
+    v.cleanup();
+  });
+
+test('🔴 乐观锁：editor 通道同样必须拒写 —— 两个读之间 CLOCK 被改，deleteClock 不许静默成功',
+  async () => {
+    const dir=fs.mkdtempSync(path.join(os.tmpdir(),'nl-race-ed-'));
+    const abs=p=>path.join(dir,p);
+    const files=new Map();
+    // 🔴 两次 getValue 返回不同内容：第一次是「定位时」的快照，第二次是「写回时」已变的内容。
+    const seq=new Map();   // path -> [stale, live]
+    const counts=new Map();
+    const api={ dir,
+      write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,{path:p}); return files.get(p); },
+      read(p){ return fs.readFileSync(abs(p),'utf8'); },
+      setSeq(p,a,b){ seq.set(p,[a,b]); counts.set(p,0); },
+      cleanup(){ fs.rmSync(dir,{recursive:true,force:true}); } };
+    function makeEditor(p){
+      return {
+        getValue(){
+          const c=(counts.get(p)||0); counts.set(p,c+1);
+          const s=seq.get(p);
+          if(s && c<s.length) return s[c];
+          return fs.readFileSync(abs(p),'utf8');
+        },
+        lineCount(){ return this.getValue().split('\n').length; },
+        getLine(i){ return this.getValue().split('\n')[i] ?? ''; },
+        setLine(i,text){ const l=this.getValue().split('\n'); l[i]=text;
+          fs.writeFileSync(abs(p),l.join('\n')); },
+        replaceRange(text,from,to){
+          const v=this.getValue(); const lines=v.split('\n');
+          const off=(pos)=>pos.line>=0?lines.slice(0,pos.line).reduce((n,l)=>n+l.length+1,0)+pos.ch:0;
+          const a=off(from), b=to?off(to):a;
+          fs.writeFileSync(abs(p),v.slice(0,a)+text+v.slice(b));
+        },
+      };
+    }
+    const editors=new Map();
+    const vault={
+      getAbstractFileByPath:p=>files.get(p)||null,
+      getMarkdownFiles:()=>[...files.values()],
+      cachedRead:async f=>fs.readFileSync(abs(f.path),'utf8'),
+      read:async f=>fs.readFileSync(abs(f.path),'utf8'),
+      process:async()=>{ throw new Error('开着编辑器时不该走 vault.process'); } };
+    const app={vault,
+      workspace:{ iterateAllLeaves(cb){ for(const [p] of editors) cb({view:{file:{path:p},editor:editors.get(p)}}); },
+        getLeaf:()=>null, openLinkText:async()=>{} },
+      metadataCache:{on(){},off(){}}};
+    T.initTimingObsidian({app});
+    const STALE=['# 2026-08-25','- [ ] 写周报 45m','    - LOGBOOK::',
+      '        - CLOCK: [2026-08-25 Tue 10:00]'].join('\n');
+    const LIVE =['# 2026-08-25','- [ ] 写周报 45m','    - LOGBOOK::',
+      '        - CLOCK: [2026-08-25 Tue 10:00]--[2026-08-25 Tue 10:30] => 0:30'].join('\n');
+    api.write('d.md', LIVE);
+    editors.set('d.md', makeEditor('d.md'));
+    api.setSeq('d.md', STALE, LIVE);
+    const entry={ clockUid:'d.md:3', taskUid:'d.md:1', running:true,
+      start:new Date(2026,7,25,10,0) };
+    await assert.rejects(()=>T.deleteClock(entry), /changed|Aborting/i,
+      'editor 通道目标已变时同样必须拒删抛错，不得静默返回 true');
+    assert.match(api.read('d.md'),/=> 0:30/,'手动闭合的记录必须原样保留');
+    api.cleanup();
+  });
+
+test('🔴 通道等价：completeTask 经 vault.process 与经 editor 写回，产生的文件必须逐字节一致',
+  async () => {
+    const run=(maker)=>{
+      const v=maker(); v.write('d.md',NOTE);
+      return T.completeTask('d.md:3').then(()=>{ const out=v.read('d.md'); v.cleanup(); return out; });
+    };
+    const viaProcess=await run(makeVault);
+    const viaEditor =await run(makeVaultWithEditor);
+    assert.equal(viaEditor,viaProcess,
+      'replace 写在两条通道下必须一模一样（A1-202 只断言了 remove，这里补 replace）');
+  });
