@@ -733,3 +733,139 @@ test('定位高亮 __located：挂上 1200ms 再摘掉（上游 timing-roam.js �
     '1200ms 后必须摘掉 —— 不摘就再也触发不了第二次动画');
   v.cleanup();
 });
+
+/* ─────────── A1-066：CRLF 文件必须整份一致，不许混行尾 ───────────
+ * cachedLines（split('\n') 会残留 \r）与 blockconfig 的 extractPlanBody
+ * （/\r?\n/）两处切分规则不一致：同一个 CRLF 文件两边算出不同行集，
+ * 写回时新行被拼成裸 LF、与全文 CRLF 混在一起（git 整份飘红）。
+ * 🔴 修复前 readAllEntries 在纯 LF 上一切正常 —— 这就是它没被发现的
+ *    原因：夹具全是 LF。 */
+const CRLF_NOTE = [
+  '# 2026-08-25',          // 0
+  '```naut',               // 1
+  '```',                   // 2
+  '- [ ] 写周报 45m',       // 3
+  '    - LOGBOOK::',       // 4
+  '        - CLOCK: [2026-08-25 Tue 10:00]--[2026-08-25 Tue 10:30] => 0:30', // 5
+].join('\r\n');
+
+test('🔴 A1-066 readAllEntries/readPrimaryPlan 在 CRLF 文件上必须照常工作', async () => {
+  const v=makeVault(); v.write('2026-08-25.md',CRLF_NOTE);
+  await T.primeTimingCache();
+  const entries=T.readAllEntries();
+  assert.equal(entries.length,1,'CRLF 抽屉里的 CLOCK 必须被扫到');
+  assert.equal(entries[0].minutes,30,'解析不受 \\r 残留影响');
+  const snap=T.readPrimaryPlan(new Date(2026,7,25,9,0));
+  assert.equal(snap.tasks.length,1,'计划正文在 CRLF 下也能解析出弹性任务');
+  v.cleanup();
+});
+
+test('🔴 A1-066 CRLF 文件写回后必须【整份一致】：新行不许拼成裸 LF', async () => {
+  const v=makeVault(); v.write('2026-08-25.md',CRLF_NOTE);
+  await T.primeTimingCache();
+  await T.createRunningClock('2026-08-25.md:3', new Date(2026,7,25,11,0));
+  const out=v.read('2026-08-25.md');
+  // 🔴 全文的行尾必须是单一风格：要么 CRLF、要么 LF，绝不允许两种混在一个文件里。
+  const bareLf=(out.match(/(?<!\r)\n/g)||[]).length;
+  const crlf=(out.match(/\r\n/g)||[]).length;
+  assert.equal(bareLf,0,`不允许裸 LF 行尾（git 会整份飘红）。实测: CRLF=${crlf} 裸LF=${bareLf}`);
+  assert.ok(crlf>0,'CRLF 行尾本身不能丢（否则文件被静默转成 LF）');
+  const newClock=out.split(/\r?\n/).find(l=>l.includes('11:00'));
+  assert.ok(newClock,'新 CLOCK 行必须写进去');
+  assert.ok(!/[^\r]\r$/.test(newClock)&&newClock.length>0,'新行本身不该混入杂散 \\r');
+  v.cleanup();
+});
+
+/* ─────────── A1-003：buildEntry 的 end/minutes 字段直接钉子 ─────────── */
+test('🔴 A1-003 readAllEntries 对已闭合 CLOCK 返回正确的 end/minutes', async () => {
+  const v=makeVault();
+  v.write('d.md',['```naut','```','- [ ] 写周报 45m','    - LOGBOOK::',
+    '        - CLOCK: [2026-08-25 Tue 10:00]--[2026-08-25 Tue 10:30] => 0:30'].join('\n'));
+  await T.primeTimingCache();
+  const e=T.readAllEntries()[0];
+  assert.ok(e,'应扫到该 CLOCK');
+  assert.equal(e.running,false);
+  assert.equal(e.minutes,30,'minutes 必须由区间长度算出');
+  assert.equal(e.end.getTime(), new Date(2026,7,25,10,30).getTime(),'end 是闭合时刻');
+  assert.equal(e.title,'写周报','buildEntry 的 title 字段');
+  v.cleanup();
+});
+
+/* ─────────── A1-005：findParentTaskIndex 的直接钉子 ───────────
+ * scanFile 里 taskUid = `${path}:${findParentTaskIndex(...)}`，
+ * 即抽屉上方最近的非空小缩进行。这里直接断言任务行号。 */
+test('🔴 A1-005 readAllEntries 的 taskUid 还原到抽屉的缩进父任务行', async () => {
+  const v=makeVault();
+  v.write('d.md',[
+    '# 2026-08-25',                              // 0
+    '- [ ] 写周报 45m',                           // 1
+    '    - LOGBOOK::',                           // 2
+    '        - CLOCK: [2026-08-25 Tue 10:00]--[2026-08-25 Tue 10:30] => 0:30', // 3
+    '- [ ] 回邮件 30m',                           // 4  ← 同一文件里还有一个任务
+  ].join('\n'));
+  await T.primeTimingCache();
+  const e=T.readAllEntries()[0];
+  assert.ok(e,'应扫到该 CLOCK');
+  assert.equal(e.taskUid,'d.md:1',
+    '抽屉父任务必须还原到【任务行】而非 LOGBOOK 行、更不是后面的回邮件行');
+  v.cleanup();
+});
+
+/* ─────────── A1-145：openTaskInMainWindow 的直接钉子 ─────────── */
+test('🔴 A1-145 openTaskInMainWindow 在主编辑区打开并定位，不动侧栏', async () => {
+  const v=makeVaultWithLeaves();
+  v.write('主笔记.md','用户正在写的东西\n第二行\n第三行');
+  v.write('任务.md',NOTE);
+  const r=await T.openTaskInMainWindow('任务.md:3');
+  assert.equal(r.ok,true,'必须返回 {ok:true}（runtime 的调用方按这个判断）');
+  await sleep(120);
+  assert.deepEqual(v.mainLeaf.opened,['任务.md'],'必须用主编辑区 leaf openFile');
+  assert.deepEqual(v.mainLeaf.editor.cursor,{line:3,ch:0},'主编辑器定位到目标行');
+  assert.equal(v.rightLeaf.editor.cursor,null,'侧栏 leaf 不得被碰');
+  assert.equal(v.strayLeaf.editor.cursor,null,'active 那个 leaf 更不该被碰');
+  v.cleanup();
+});
+
+/* ─────────── A1-189 / T2-061：showToast 与 frontBlock 失败文案 ─────────── */
+function makeToastHost(){
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'nl-toast-'));
+  const abs=p=>path.join(dir,p);
+  const files=new Map();
+  const notify=[];   // 记录 (message, intent)
+  const api={ dir,
+    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,{path:p}); return files.get(p); },
+    cleanup(){ fs.rmSync(dir,{recursive:true,force:true}); } };
+  const vault={
+    getAbstractFileByPath:p=>files.get(p)||null, getMarkdownFiles:()=>[...files.values()],
+    cachedRead:async f=>fs.readFileSync(abs(f.path),'utf8'),
+    read:async f=>fs.readFileSync(abs(f.path),'utf8'),
+    process:async(f,fn)=>{ const cur=fs.readFileSync(abs(f.path),'utf8');
+      const next=fn(cur); fs.writeFileSync(abs(f.path),next); return next; } };
+  const app={vault, workspace:{iterateAllLeaves(){}, getLeaf:()=>null, openLinkText:async()=>{}, onLayoutReady(cb){ cb(); }},
+    metadataCache:{on(){},off(){}}};
+  T.initTimingObsidian({ app, notify:(msg,intent)=>notify.push({msg,intent}) });
+  return { notify, api };
+}
+
+test('🔴 A1-189 showToast 把 intent 透传给宿主 notify（部分调用方传 danger）', async () => {
+  const { notify, api }=makeToastHost();
+  T.showToast('Clock Out 失败','danger');
+  T.showToast('普通提醒');
+  assert.equal(notify.length,2);
+  assert.equal(notify[0].intent,'danger','intent 不能被丢掉（A1-183 的隐患在 main.ts 侧）');
+  assert.equal(notify[1].intent,'warning','缺省必须是 warning');
+  assert.equal(notify[0].msg,'Clock Out 失败');
+  api.cleanup();
+});
+
+test('🔴 T2-061 空 taskUid 的失败必须带自己的 message，绝不让 Roam 文案漏给 Obsidian 用户', () => {
+  const r=T.frontBlockInRightSidebar('');
+  assert.ok(r instanceof Promise);
+  return r.then((res)=>{
+    assert.equal(res.ok,false);
+    assert.equal(res.reason,'missing-uid');
+    assert.ok(res.message && res.message.length>0,'失败必须带 message，否则 vendor '
+      +'回落「The task started, but Roam could not show it…」这种 Roam 文案');
+    assert.ok(!/Roam/i.test(res.message),'message 不得再含 Roam 字样');
+  });
+});

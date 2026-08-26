@@ -286,7 +286,10 @@ function cachedLines(path: string): string[] | null {
   // 未命中就【顺手补一次】。同步调用这里拿不到结果，但下一次 refresh（tick 或
   //    任何写回）就能命中 —— 好过一直空着等用户去编辑那个文件。
   if (typeof text !== 'string') { void primeFile(path); return null; }
-  return text.split('\n');
+  // 🔴 必须与 src/blockconfig.ts 的 extractPlanBody 用同一套切分规则 /\\r?\\n/，
+  //    否则 CRLF 文件会在行尾残留 `\\r`，两边对同一篇笔记算出不同的行集。
+  //    （认证审计 A1-066：两处切分规则不一致）
+  return text.split(/\r?\n/);
 }
 
 /* ─────────────────────────── 扫描：把 LOGBOOK 抽屉里的 CLOCK
@@ -519,10 +522,10 @@ async function readFreshLines(path: string): Promise<string[] | null> {
   const f = a.vault.getAbstractFileByPath(path);
   if (!isFileLike(f)) return null;
   const editor = findEditorFor(path);
-  if (editor) return editor.getValue().split('\n');
+  if (editor) return editor.getValue().split(/\r?\n/);
   try {
     const text = await a.vault.read(f as TFile);
-    return text.split('\n');
+    return text.split(/\r?\n/);
   } catch {
     return null;
   }
@@ -536,7 +539,7 @@ async function writeChange(path: string, change: LineChange): Promise<void> {
   if (!isFileLike(f)) throw new Error(`Target file not found: ${path}`);
   const editor = findEditorFor(path);
   if (editor) {
-    const lines = editor.getValue().split('\n');
+    const lines = editor.getValue().split(/\r?\n/);
     const r = applyChange(lines, change);
     if (!r.ok) throw new Error('The target line changed while writing. Aborting to avoid corrupting the note.');
     if (change.kind === 'replace') {
@@ -573,10 +576,14 @@ async function writeChange(path: string, change: LineChange): Promise<void> {
     return;
   }
   const result = await a.vault.process(f as TFile, (data: string) => {
-    const lines = data.split('\n');
+    // 🔴 先探测文件的行尾风格（CRLF / LF），切分与回拼都用同一套，
+    //    否则对 CRLF 笔记做写回会把新行写成裸 LF、与全文 CRLF 混在一起
+    //    （认证审计 A1-066：两处切分规则不一致）。
+    const eol = data.includes('\r\n') ? '\r\n' : '\n';
+    const lines = data.split(/\r?\n/);
     const r = applyChange(lines, change);
     if (!r.ok) throw new Error('The target line changed while writing. Aborting to avoid corrupting the note.');
-    return r.lines.join('\n');
+    return r.lines.join(eol);
   });
   contentCache.set(path, result);
 }
@@ -950,7 +957,15 @@ export async function openTaskInMainWindow(taskUid: string): Promise<{ ok: boole
 }
 
 export function frontBlockInRightSidebar(taskUid: string): Promise<{ ok: boolean; skipped?: boolean; reason?: string; message?: string; error?: unknown }> {
-  if (!taskUid) return Promise.resolve({ ok: false, reason: 'missing-uid' });
+  if (!taskUid) return Promise.resolve({
+    ok: false,
+    reason: 'missing-uid',
+    // 🔴 必须有 message：vendor（timing-runtime.js:399）在失败且无 message 时
+    //    会回落 Roam 专属文案「The task started, but Roam could not show it
+    //    at the top of the right sidebar.」，会原样弹给 Obsidian 用户。
+    //    （认证审计 T2-061）
+    message: 'This task has no file path.',
+  });
   return Promise.resolve()
     .then(() => openTaskLeaf(taskUid, 'right'))
     .then(() => ({ ok: true }))
