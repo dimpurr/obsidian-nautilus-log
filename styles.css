@@ -851,6 +851,12 @@
   margin-left: auto;
 }
 
+.nautilus-log-timing__forgotten-signal::before {
+  /* 上游是 Blueprint 的 warning-sign 图标字体；本移植无该字体面，用字符代替。
+   * 🔴 必须走 ::before 而不是 textContent —— 否则 idle 态状态栏也会带上这个字符。 */
+  content: "⚠";
+}
+
 .nautilus-log-timing__forgotten-signal {
   align-items: center;
   color: #b96f12;

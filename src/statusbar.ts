@@ -156,7 +156,9 @@ export function renderTimingStatusBar(
   const forgottenSignalEl = document.createElement('span');
   forgottenSignalEl.className = 'nautilus-log-timing__forgotten-signal';
   forgottenSignalEl.setAttribute('aria-hidden', 'true');
-  forgottenSignalEl.textContent = '⚠';
+  // 🔴 图标走 CSS `::before`，不写 textContent —— 上游用的是 Blueprint 图标字体
+  //    （无文本节点）。写成 textContent 会让状态栏在 idle 态也带上 '⚠' 字符，
+  //    污染「idle 无文本」这条断言，也会被读屏当成内容读出来。
 
   const pomoCloseEl = document.createElement('button');
   pomoCloseEl.type = 'button';
