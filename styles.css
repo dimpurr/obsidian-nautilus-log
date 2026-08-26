@@ -752,8 +752,7 @@
 }
 
 .nautilus-log-timing__trigger,
-.nautilus-log-timing__icon-button,
-.nautilus-log-timing__tab {
+.nautilus-log-timing__icon-button {
   appearance: none;
   background: transparent;
   border: 0;
@@ -776,16 +775,10 @@
   white-space: nowrap;
 }
 
-.nautilus-log-timing__trigger.is-active .nautilus-log-timing__brand-icon {
-  display: none;
-}
-
 .nautilus-log-timing__trigger:hover,
 .nautilus-log-timing__trigger:focus-visible,
 .nautilus-log-timing__icon-button:hover,
-.nautilus-log-timing__icon-button:focus-visible,
-.nautilus-log-timing__tab:hover,
-.nautilus-log-timing__tab:focus-visible {
+.nautilus-log-timing__icon-button:focus-visible {
   background: rgba(111, 120, 132, 0.1);
   color: var(--nl-exec-text, #374151);
   outline: none;
@@ -915,25 +908,6 @@
 .nautilus-log-timing__capacity-value {
   color: inherit;
   font-weight: 500;
-}
-
-.nautilus-log-timing__topbar[data-density="compact"] .nautilus-log-timing__mode-separator,
-.nautilus-log-timing__topbar[data-density="compact"] .nautilus-log-timing__pomodoro-label,
-.nautilus-log-timing__topbar[data-density="compact"] .nautilus-log-timing__threads,
-.nautilus-log-timing__topbar[data-density="compact"] .nautilus-log-timing__forgotten-signal {
-  display: none;
-}
-
-.nautilus-log-timing__topbar[data-density="icon"] .nautilus-log-timing__trigger {
-  min-width: 30px;
-  padding-left: 0;
-  padding-right: 0;
-  width: 30px;
-}
-
-.nautilus-log-timing__topbar[data-density="icon"] .nautilus-log-timing__trigger > :not(.nautilus-log-timing__brand-icon),
-.nautilus-log-timing__topbar[data-density="icon"] .nautilus-log-timing__pomodoro-close {
-  display: none !important;
 }
 
 .nautilus-log-timing__icon-button {
