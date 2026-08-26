@@ -12,7 +12,7 @@
 |---|---|
 | 上游 | [`404KSG/roam-nautilus-log`](https://github.com/404KSG/roam-nautilus-log) |
 | vendor 基线 | `86b97c0`（2026-08-25 升级，原基线 `7bf19a1d`） |
-| 本移植版本 | `v1.0.0+` |
+| 本移植版本 | `0.1.0+` |
 | 已知欠账 | [`parity-audit-2026-08-25.md`](parity-audit-2026-08-25.md) |
 
 ---
