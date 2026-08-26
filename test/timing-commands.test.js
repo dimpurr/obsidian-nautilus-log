@@ -87,6 +87,40 @@ test("planTaskUids / focusedTaskUid 从快照里取，形状不对时不炸", ()
   assert.equal(M.focusedTaskUid({ activeWork: { focused: null } }), null);
 });
 
+/* ───────────── §D8 · `dHH:MM` 完成锚点（P1「契约漏洞 2」/ P1-068）───────────── */
+
+/** 语法的唯一权威是 parser.ts:89 的 DONE_AT_RE：**分钟可省、大小写不敏感**。
+ *  main.ts 的去重判断原先要求分钟且区分大小写 ⇒ 写了 `d14` 的行会被 parser
+ *  认成锚点、却在这里被判成「还没有锚点」而被**再追加一个**。 */
+test("🔴 hasDoneAtAnchor 与 parser 的 DONE_AT_RE 同语法：分钟可省、大小写不敏感", () => {
+  assert.equal(M.hasDoneAtAnchor("- [x] 已完成 30m d14:30"), true);
+  assert.equal(M.hasDoneAtAnchor("- [x] 已完成 30m d14"), true, "🔴 `d14` 也是合法锚点");
+  assert.equal(M.hasDoneAtAnchor("- [x] 已完成 30m D14:30"), true, "🔴 大小写不敏感");
+  assert.equal(M.hasDoneAtAnchor("- [x] 已完成 30m D9"), true);
+  assert.equal(M.hasDoneAtAnchor("- [x] 已完成 30m d14:5"), true, "分钟可以是一位");
+  assert.equal(M.hasDoneAtAnchor("- [x] 没有锚点 30m"), false);
+  assert.equal(M.hasDoneAtAnchor("- [x] dood 不是锚点"), false);
+  assert.equal(M.hasDoneAtAnchor("- [x] 2d14:30 不在词首"), false);
+});
+
+test("🔴 已有 `d14` 这类锚点的行不许被再追加一个（一行两个锚点）", () => {
+  assert.equal(M.completeWithTimestamp("- [x] 已完成 30m d14", "d16:40"), null);
+  assert.equal(M.completeWithTimestamp("- [x] 已完成 30m D14:30", "d16:40"), null);
+});
+
+test("completeWithTimestamp：勾上 + 追加锚点；非任务行静默不动（P1-070）", () => {
+  assert.equal(M.completeWithTimestamp("- [ ] 写简报 45m", "d16:40"), "- [x] 写简报 45m d16:40");
+  assert.equal(M.completeWithTimestamp("  * [ ] 缩进也认 30m ", "d16:40"), "  * [x] 缩进也认 30m d16:40");
+  assert.equal(M.completeWithTimestamp("- [x] 已勾但没锚点", "d16:40"), "- [x] 已勾但没锚点 d16:40");
+  assert.equal(M.completeWithTimestamp("随手写的一行", "d16:40"), null);
+  assert.equal(M.completeWithTimestamp("08:00-09:00 晨会", "d16:40"), null);
+});
+
+test("doneAtStamp 补零成 dHH:MM", () => {
+  assert.equal(M.doneAtStamp(new Date(2026, 7, 24, 9, 5)), "d09:05");
+  assert.equal(M.doneAtStamp(new Date(2026, 7, 24, 16, 40)), "d16:40");
+});
+
 /* ─────────────────── 条件显示（上游 display-conditional） ─────────────────── */
 
 const PLAN = ["today.md:3", "today.md:5"];
