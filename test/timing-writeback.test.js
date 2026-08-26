@@ -1262,3 +1262,238 @@ test('🔴 通道等价：completeTask 经 vault.process 与经 editor 写回，
     assert.equal(viaEditor,viaProcess,
       'replace 写在两条通道下必须一模一样（A1-202 只断言了 remove，这里补 replace）');
   });
+
+
+/* ═══════ 变异测试 · 第 5 组 ═══════ */
+
+/* ═══════ 寻址内核：写回落笔前文件被并发改了（乐观锁的用武之地）═══════
+ * 🔴 前面所有夹具的「读 → 写」之间文件从未变过，所以 locateLine /
+ *    applyChange 的 expected 校验永远命中、永远走 uid 快路径 ——
+ *    这正是乐观锁代码面从未被测到真实路径的原因。
+ *
+ *    这条夹具模拟的是最真实的损坏场景：适配器拿到快照（expected、行号）
+ *    之后、vault.process 落笔之前，另一个写者（用户在编辑器里、别的插件、
+ *    同步服务）改了同一份文件。含竞态的 writeback 必须：
+ *    · 行漂了 → 按【内容】重新定位（locateLine / applyChange 的回退路径）；
+ *    · 定位有歧义 → 拒写（宁可报错也不改错人）；
+ *    · 纯内容被改 → 拒写（乐观锁，绝不猜着写）。
+ *
+ *    具体做法：fake vault 的 process 在跑 applyChange 之前先按 raceFn
+ *    并发落一次盘 —— readFreshLines 读到的是改动前的快照，
+ *    applyChange 拿到的却是改动后的行集。文件与写回仍全部真实。 */
+function makeRacingVault_g5(raceFn){
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'nl-race-'));
+  const abs=p=>path.join(dir,p);
+  const files=new Map();
+  const api={ dir,
+    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,{path:p}); return files.get(p); },
+    read(p){ return fs.readFileSync(abs(p),'utf8'); },
+    cleanup(){ fs.rmSync(dir,{recursive:true,force:true}); } };
+  const vault={
+    getAbstractFileByPath:p=>files.get(p)||null,
+    getMarkdownFiles:()=>[...files.values()],
+    cachedRead:async f=>fs.readFileSync(abs(f.path),'utf8'),
+    read:async f=>fs.readFileSync(abs(f.path),'utf8'),
+    // 🔴 竞态注入点：先并发写盘，再读出内容喂给 applyChange。
+    process:async(f,fn)=>{ const raced=raceFn(fs.readFileSync(abs(f.path),'utf8'));
+      fs.writeFileSync(abs(f.path),raced);
+      const next=fn(fs.readFileSync(abs(f.path),'utf8'));
+      fs.writeFileSync(abs(f.path),next); return next; },
+  };
+  const app={vault, workspace:{iterateAllLeaves(){}, getLeaf:()=>null, openLinkText:async()=>{}},
+             metadataCache:{on(){},off(){}}};
+  T.initTimingObsidian({app});
+  return api;
+}
+
+/* ─────────── 行漂：CLOCK 上方插一行，closeClock 必须按内容追到新位置 ─────────── */
+const RACE_CLOCK_NOTE_g5=[
+  '# 2026-08-25',                               // 0
+  '```naut',                                    // 1
+  '```',                                        // 2
+  '- [ ] 写周报 45m',                            // 3
+  '    - LOGBOOK::',                            // 4
+  '        - CLOCK: [2026-08-25 Tue 10:00]',    // 5  ← running，全文唯一
+].join('\n');
+const RACE_ENTRY_g5={ clockUid:'2026-08-25.md:5', taskUid:'2026-08-25.md:3', running:true,
+  start:new Date(2026,7,25,10,0) };
+
+test('🔴 写回落笔前任务上方插进一行：closeClock 按内容追到漂移后的 CLOCK 合上，插入行不得受损', async () => {
+  const v=makeRacingVault_g5((cur)=>cur.replace('# 2026-08-25','# 2026-08-25\n如果有人在写'));
+  v.write('2026-08-25.md',RACE_CLOCK_NOTE_g5);
+  await T.primeTimingCache();
+  await T.closeClock(RACE_ENTRY_g5, new Date(2026,7,25,10,18));
+  const out=v.read('2026-08-25.md').split('\n');
+  // 并发插入的行在快照之后落盘（现在的第 1 行），本写回必须原样放它过去
+  assert.equal(out[1],'如果有人在写','并发插入的行必须完好（不得被我们的写回覆盖）');
+  assert.equal(out[4],'- [ ] 写周报 45m','任务行必须还在原位');
+  assert.equal(out[5],'    - LOGBOOK::','抽屉行必须还在原位');
+  assert.match(out[6],/--\[2026-08-25 [A-Za-z]{3} 10:18\] => 0:18/,
+    'CLOCK 从第 5 行漂到第 6 行，必须在【新位置】合上，而不是按旧行号写进抽屉行');
+  assert.equal(out.filter(l=>/CLOCK:/.test(l)).length,1,'不得写出第二条 CLOCK');
+  v.cleanup();
+});
+
+/* ─────────── 歧义：任务行被插入行挤走，且全文有两行同文本 ───────────
+ * completeTask 的 expected 是任务行原文。落笔时若行号已不再是它、
+ * 且这个文本在全文出现两次 ⇒ 只能拒写。早期的 locateLine 回退会取
+ * 第一个命中 → 勾到【另一个同名任务】头上（A1-127 的反向事故）。 */
+const RACE_DUP_NOTE_g5=[
+  '# 2026-08-25',          // 0
+  '- [ ] 写周报 45m',       // 1  ← 任务甲
+  '    - LOGBOOK::',       // 2
+  '        - CLOCK: [2026-08-25 Tue 10:00]--[2026-08-25 Tue 10:30] => 0:30', // 3
+  '- [ ] 写周报 45m',       // 4  ← 任务乙（与甲同文本）
+].join('\n');
+
+test('🔴 写回落笔前挤进一行且全文有两行同文本：completeTask 必须拒写，而不是勾到第一个同名任务', async () => {
+  const v=makeRacingVault_g5((cur)=>cur.replace('# 2026-08-25','# 2026-08-25\n- [ ] 别的任务 10m'));
+  v.write('2026-08-25.md',RACE_DUP_NOTE_g5);
+  await T.primeTimingCache();
+  const before=v.read('2026-08-25.md');
+  await assert.rejects(()=>T.completeTask('2026-08-25.md:4'), /changed while writing|Aborting|target line/i,
+    '落笔时发现 expected 已在两处出现（行号也不再指向任务行），必须拒写，不得勾掉任何一个同名任务');
+  const out=v.read('2026-08-25.md').split('\n');
+  assert.equal(out[2],'- [ ] 写周报 45m','任务甲不得被误勾（它现在在第 2 行）');
+  assert.equal(out[5],'- [ ] 写周报 45m','任务乙不得被误勾（它现在在第 5 行）');
+  assert.ok(!/\[x\]/.test(v.read('2026-08-25.md')),'全文不得出现任何勾选（已查 /\\[x\\]/）');
+  assert.equal(out[1],'- [ ] 别的任务 10m','并发插入的那行必须原样留下（这正是拒写的原因）');
+  assert.equal(out[4],'        - CLOCK: [2026-08-25 Tue 10:00]--[2026-08-25 Tue 10:30] => 0:30','CLOCK 行不得受损');
+  v.cleanup();
+});
+
+
+/* ═══════ 变异测试 · 第 6 组 ═══════ */
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * 变异证伪第 6 组 · 读侧（scanFile / readPrimaryPlan / taskLineMemo / CRLF）
+ * 每条都做过「打上变异 ⇒ 变红、还原 ⇒ 全绿」验证，见 report-6.md。
+ * 只改 test 文件，src/ 不动。
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+/* ─────────── 本组 M9：findParentTaskIndex 必须按【缩进】回退 ───────────
+ * 抽屉上方紧邻的一行可能是任务自己的缩进子项（笔记、备注），不是父任务。
+ * 只抓「紧邻上一非空行」会让 taskUid 指到子项行 —— 之后 createRunningClock
+ * 就跑去子项下面建抽屉、CLOCK 全记到别的东西头上（A1-005 只钉了
+ * 「不是 LOGBOOK 行、不是后面的任务」，没钉「不是紧邻的子项」）。 */
+const SUBITEM_DRAWER_g6=[
+  '# 2026-08-25',                                  // 0
+  '- [ ] 任务甲 30m',                               // 1
+  '    - 备注子项',                                  // 2  ← 抽屉上方最近的【非空】行，但不是父
+  '    - LOGBOOK::',                               // 3
+  '        - CLOCK: [2026-08-25 Tue 10:00]',       // 4
+].join('\n');
+
+test('🔴 本组-M9 抽屉的父任务按缩进回退，不得抓紧邻的缩进子项', async () => {
+  const v=makeVault(); v.write('d.md',SUBITEM_DRAWER_g6);
+  await T.primeTimingCache();
+  const e=T.readAllEntries()[0];
+  assert.ok(e,'应扫到该 CLOCK');
+  assert.equal(e.taskUid,'d.md:1',
+    '父任务是缩进更小的 任务甲（d.md:1），不是紧邻上方的 备注子项（d.md:2）—— '
+    +'否则新打卡的抽屉会建到子项下面，CLOCK 被记到子项头上');
+  v.cleanup();
+});
+
+/* ─────────── 本组 M6：scanFile 离开任务子树必须关闭抽屉 ───────────
+ * 抽屉的「作用域」到缩进不再大于它为止。用户删掉 LOGBOOK 行后、CLOCK 残留在
+ * 下一个任务的子树里时，若不关闭上一个抽屉，残留 CLOCK 会被算到上一个任务
+ * 头上（taskUid 指错人）。这喂给运行时谁拥有哪条 CLOCK，读错就写错。 */
+const STRAY_NOTE_g6=[
+  '# 2026-08-25',                                  // 0
+  '- [ ] 任务甲 30m',                               // 1
+  '    - LOGBOOK::',                               // 2
+  '        - CLOCK: [2026-08-25 Tue 10:00]',       // 3  ← 甲的
+  '- [ ] 任务乙 30m',                               // 4  ← 缩进 0，甲子树的终点
+  '    - 手动粘贴的残行',                            // 5
+  '        - CLOCK: [2026-08-25 Tue 11:00]',       // 6  ← 乙子树里的残留 CLOCK（抽屉被删了）
+].join('\n');
+
+test('🔴 本组-M6 离开任务子树后，残留 CLOCK 不得算到上一个任务头上', async () => {
+  const v=makeVault(); v.write('d.md',STRAY_NOTE_g6);
+  await T.primeTimingCache();
+  const entries=T.readAllEntries();
+  assert.equal(entries.length,1,
+    '只该收集任务甲抽屉里那一条；乙子树里没抽屉的 CLOCK 不得被兜进甲名下');
+  assert.equal(entries[0].start.getTime(), new Date(2026,7,25,10,0).getTime());
+  assert.equal(entries[0].taskUid,'d.md:1');
+  v.cleanup();
+});
+
+/* ─────────── 本组 M4：写回前的乐观锁必须按【内容】复核 ───────────
+ * locateLine 若只信行号、不信内容，那么「外层读完之后、落笔之前」文件被并发
+ * 改动（Obsidian 的 editor 写、另一个插件写）时，我们仍按旧行号把改动写进去，
+ * 把用户的并发编辑整个盖掉。上游 Tasks 插件的注释正是这句：
+ * "Obsidian would write after us and overwrite our change."
+ * 夹具模拟一次恰好落在两次读之间的并发修改：真实文件、真实写回、断言盘上内容。 */
+function makeTickVault_g6(){
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'nl-tick-'));
+  const abs=p=>path.join(dir,p);
+  const files=new Map();
+  const editors=new Map();
+  let reads=0;
+  // 从第 2 次读开始，磁盘上先被「并发」改掉任务行，再返回 —— 模拟用户在
+  // 我们读到之后、落笔之前的那一瞬改了同一行（Obsidian 自己就是这么写的）。
+  const tick=(p)=>{ const t=fs.readFileSync(abs(p),'utf8');
+    fs.writeFileSync(abs(p), t.replace('- [ ] 写周报 45m','- [ ] 写周报（正在被用户改写）45m')); };
+  const api={
+    dir,
+    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,{path:p});
+                   editors.set(p,makeEditor(p)); return files.get(p); },
+    read(p){ return fs.readFileSync(abs(p),'utf8'); },
+    cleanup(){ fs.rmSync(dir,{recursive:true,force:true}); },
+  };
+  function makeEditor(p){
+    return {
+      getValue(){ reads+=1; if(reads>=2) tick(p); return fs.readFileSync(abs(p),'utf8'); },
+      lineCount(){ return fs.readFileSync(abs(p),'utf8').split('\n').length; },
+      getLine(i){ return fs.readFileSync(abs(p),'utf8').split('\n')[i] ?? ''; },
+      setLine(i,text){ const l=fs.readFileSync(abs(p),'utf8').split('\n'); l[i]=text;
+                       fs.writeFileSync(abs(p),l.join('\n')); },
+      replaceRange(){ throw new Error('本场景不该走 insert 分支'); },
+    };
+  }
+  const vault={
+    getAbstractFileByPath:p=>files.get(p)||null,
+    getMarkdownFiles:()=>[...files.values()],
+    cachedRead:async f=>fs.readFileSync(abs(f.path),'utf8'),
+    read:async f=>fs.readFileSync(abs(f.path),'utf8'),
+    process:async()=>{ throw new Error('开着编辑器时不该走 vault.process'); },
+  };
+  const app={vault,
+    workspace:{
+      iterateAllLeaves(cb){ for(const [p,ed] of editors) cb({view:{file:{path:p},editor:ed}}); },
+      getLeaf:()=>null, openLinkText:async()=>{},
+    },
+    metadataCache:{on(){},off(){}}};
+  T.initTimingObsidian({app});
+  return api;
+}
+
+test('🔴 本组-M4 写回前有并发修改时按内容复核拒写，绝不按行号盲写', async () => {
+  const v=makeTickVault_g6(); v.write('d.md',NOTE);
+  // 任务行在「读后写前」被并发改成了别的文本 —— completeTask 必须察觉并放弃
+  await assert.rejects(()=>T.completeTask('d.md:3'), /changed while writing/,
+    '外层读与落笔之间内容已变，乐观锁必须拦下，不能按旧行号硬写');
+  const out=v.read('d.md');
+  assert.match(out,/- \[ \] 写周报（正在被用户改写）45m/,
+    '用户的并发编辑必须原封不动');
+  assert.ok(!/- \[x\] 写周报/.test(out),
+    '不得把完成动作落到被并发改过的行上 —— 那是把用户正在写的话整个盖掉');
+  assert.equal((out.match(/写周报/g)||[]).length,1,'不得凭空多出一行任务');
+  v.cleanup();
+});
+
+/* ─────────── 本组 M2：CRLF 读侧契约钉 ───────────
+ * cachedLines 必须与 extractPlanBody 用同一套切分规则（/\r?\n/），读侧的行
+ * 原文不得携带 \r 残留 —— 否则任务行原文喂给寻址 / taskLineMemo 重锚时全是
+ * 带 \r 的脏串。（M2「只按 \\n 切分」实测因读侧全在 trim 而呈现中性，这条
+ * 钉的是切分契约本身，不是先验的变异杀手。） */
+test('本组-M2 CRLF 读侧契约：readBlockString 的任务行原文不得带 \\r 残留', async () => {
+  const v=makeVault(); v.write('2026-08-25.md',CRLF_NOTE);
+  await T.primeTimingCache();
+  const s=T.readBlockString('2026-08-25.md:3');
+  assert.equal(s,'{{TODO}} 写周报 45m',
+    '读侧产出的任务串必须干净（无 \\r），否则寻址与 memo 重锚会带着 CRLF 脏尾比较');
+  v.cleanup();
+});
