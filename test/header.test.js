@@ -134,10 +134,18 @@ test("normal plan renders the six-item header with totals and a flame", () => {
   assert.strictEqual(caps.length, 2, "capacity row should hold two readings");
   assert.match(textOf(caps[0]), /Available/, "first reading is Available");
   assert.match(textOf(caps[0]), /5h11m/, "Available shows current minutes");
-  assert.match(textOf(caps[0]), /\/ 15h/, "Available shows the full-day total");
+  assert.strictEqual(
+    caps[0].querySelector(".nautilus-log-metric-total").textContent,
+    "/ 15h",
+    "Available full-day total reads '/ 15h' with no leading space (L2-129)",
+  );
   assert.match(textOf(caps[1]), /Events/, "second reading is Events");
   assert.match(textOf(caps[1]), /0m/, "Events shows current minutes");
-  assert.match(textOf(caps[1]), /\/ 0m/, "Events shows the full-day total");
+  assert.strictEqual(
+    caps[1].querySelector(".nautilus-log-metric-total").textContent,
+    "/ 0m",
+    "Events full-day total reads '/ 0m' with no leading space (L2-129)",
+  );
 
   // Flame: capacity burns Available, so only the Available reading carries it.
   const flames = container.querySelectorAll(".nautilus-log-burning-icon");
@@ -221,6 +229,15 @@ test("fragmented plan renders No fitting slot, distinct from Overload", () => {
   assert.match(html, /No fitting slot/, "fragmentation should appear in the summary row");
   assert.match(textOf(summaryItems(container)[1]), /30m/, "No-fitting-slot cell carries the unplaced share");
   assert.doesNotMatch(html, />Overload</, "fragmented must not render as Overload");
+
+  // 认证审计 L2-059：fragmented 态 tone:'warning'（log-core.js:1008-1012），
+  //   summary 项必须落 --warning class（与 overload 同一路径）。
+  assert.ok(
+    container.querySelector(
+      ".nautilus-log-metrics-summary .nautilus-log-metric-summary-item.nautilus-log-metric--warning",
+    ),
+    "fragmented status cell should carry the warning tone (L2-059)",
+  );
 });
 
 test("zh settings produce Chinese copy", () => {

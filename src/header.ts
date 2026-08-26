@@ -137,7 +137,9 @@ export function appendReading(row: HTMLElement, metric: MetricReading): void {
   if (readingLabel) reading.setAttribute("aria-label", readingLabel);
   appendTextChild(reading, "strong", "nautilus-log-metric-value", metric.value || "0m");
   if (metric.total) {
-    appendTextChild(reading, "span", "nautilus-log-metric-total", ` / ${metric.total}`);
+    // 认证审计 L2-129：上游 `component.cljs:1585` 是 `(str "/ " total)` → "/ 15h"，
+    //   没有前导空格。此前写 `` ` / ${total}` `` 多出一个空格，文本显示为 " / 15h"。
+    appendTextChild(reading, "span", "nautilus-log-metric-total", `/ ${metric.total}`);
   }
   if (metric.burning && metric.burningLabel) {
     reading.appendChild(burningFlameIcon(metric.burningLabel));

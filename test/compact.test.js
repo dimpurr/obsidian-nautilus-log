@@ -408,6 +408,12 @@ test("overflow panel is a collapsible details with total and count (P1-8)", () =
 
   const details = container.querySelector("details.nautilus-log-overflow-panel");
   assert.ok(details, "the panel is a real <details>, not a static div");
+  // 认证审计 L2-134 / C2-097：上游默认**折叠**（component.cljs:1682 无 :open）。
+  assert.strictEqual(
+    details.hasAttribute("open"),
+    false,
+    "overflow panel defaults collapsed, matching upstream",
+  );
   assert.strictEqual(
     textOf(details.querySelector("summary")),
     "Unscheduled today · 1h45m · 2 items",

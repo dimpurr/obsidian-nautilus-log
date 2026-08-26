@@ -323,7 +323,10 @@ export function renderOverflowPanel(
 
   const panels = copy?.panels || {};
   const total = capacity.unplacedMinutes || 0;
-  const { details, summary } = makeDetails("nautilus-log-overflow-panel", "", true);
+  // 认证审计 L2-134 / C2-097：上游 `component.cljs:1682` 是个默认**折叠**的
+  //   <details>（不写 :open）。此前硬编码 open ⇒ 溢出面板默认展开，与上游相反。
+  //   改成默认折叠，与其余面板（compact-event-list / compact-overview）一致。
+  const { details, summary } = makeDetails("nautilus-log-overflow-panel", "", false);
   summary.textContent = `${panels.overflow || "Unscheduled today"} · ${durationLabel(total)}`
     + ` · ${overflow.length} ${itemLabel(copy, overflow.length)}`;
 
