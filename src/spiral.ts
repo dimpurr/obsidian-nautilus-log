@@ -17,7 +17,7 @@
 import * as logCoreModule from "./vendor/log-core";
 import { createSvg } from "./svg-util";
 import { createTooltip, type TooltipTarget } from "./tooltip";
-import { renderCompactEventList } from "./compact";
+import { renderCompactEventList, type CompactState } from "./compact";
 // P1-1：盘上标签必须用【清洗后】的文本，不能是整行原始 markdown。
 // 上游的清洗链是 parse-URLs + parse-rest（component.cljs:638-665），切片只用
 // 清洗结果 `:description`。本移植的等价物是 parser.ts 的 taskDescription()。
@@ -1239,6 +1239,10 @@ export interface SpiralOptions {
    *  按第一个逗号切两段、每段截 16 字）。本移植的等价物是笔记名。
    *  宿主不传时退化到从块容器的 data-nl-key 里取笔记名（见 resolvePageTitle）。 */
   pageTitle?: string;
+  /** C2-075：紧凑日程清单的折叠态宿主（宿主 Map，跨重渲染存活）。
+   *  由 main.ts / sidebar.ts 传入；不传则退回历史行为（每次重渲染按
+   *  `open: !compact` 重置）。 */
+  compactState?: Map<string, boolean>;
 }
 
 /** 供外部（main.ts）在重渲染前清理上一次的监听。 */
@@ -1493,7 +1497,13 @@ export function renderSpiral(
   //    「keep the Schedule section folded」，实现见 component.cljs:1730
   //    `(reset! compact-list-open-state (not sidebar?))`（认证审计 G1-049）。
   renderCompactEventList(container, allEvents,
-    copy as unknown as Parameters<typeof renderCompactEventList>[2], { open: !compact });
+    copy as unknown as Parameters<typeof renderCompactEventList>[2],
+    {
+      open: !compact,
+      state: options.compactState
+        ? { key: "schedule", states: options.compactState }
+        : undefined,
+    });
 
   // ── 紧凑模式 ──────────────────────────────────────────────────────────
   // 上游 guide：「Compact sidebar charts omit hover tooltips」——
