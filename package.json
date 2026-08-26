@@ -1,6 +1,6 @@
 {
   "name": "obsidian-nautilus-log",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "description": "Nautilus Log for Obsidian — spiral day planner with explicit time capacity",
   "main": "main.js",
   "scripts": {

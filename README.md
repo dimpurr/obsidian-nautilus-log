@@ -6,16 +6,91 @@ A visual day planner for [Obsidian](https://obsidian.md/). Nautilus Log turns on
 note into a living spiral schedule: fixed events stay fixed, flexible tasks flow
 into the time that remains, and overload never disappears from view.
 
-**A port of [Nautilus Log for Roam Research](https://github.com/404KSG/roam-nautilus-log)**
-— see [Credits](#credits) for the full lineage.
+## Where this comes from
 
-> ⚠️ **Status: early development.** Not yet packaged for distribution. The
-> scheduling engine, spiral renderer, capacity header, chart controls, sidebar
-> view, and the optional execution layer are implemented.
+This is a port of one specific project:
+
+> ### 🧭 [**Nautilus Log for Roam Research**](https://github.com/404KSG/roam-nautilus-log) by [404KSG](https://github.com/404KSG)
+>
+> Not "inspired by" — **ported**. Its scheduling and capacity engine
+> (`log-core.js`, `timing-core.js`, `timing-runtime.js`, `timing-topbar.js`)
+> lives in this repository **byte-for-byte unchanged** under
+> [`src/vendor/`](src/vendor/). Every scheduling decision, every capacity number,
+> every CLOCK format you see here was designed there.
+>
+> What this project adds is an Obsidian **adapter**: the same engine, fed from
+> Markdown files instead of a Roam graph.
+
+That project in turn descends from earlier work, which is acknowledged separately
+in [Credits](#credits) — but they are **ancestors of the upstream**, not sources
+of this port.
+
+> ⚠️ **Status: not in the Obsidian community plugin store yet.**
+> See [Installation](#installation) for how to install it today.
 
 > **Contributing / re-porting?** Read [`docs/PORTING-DECISIONS.md`](docs/PORTING-DECISIONS.md) first —
 > it is the single source of truth for every place this port deliberately diverges from upstream,
 > and is written so that *upstream + that document* is enough to redo the port from scratch.
+
+## Installation
+
+> Not in the community plugin store yet. Three ways to install today —
+> **BRAT is the one to pick if you want updates.**
+
+### Option 1 — BRAT (recommended, auto-updates)
+
+1. Install [**BRAT**](https://github.com/TfTHacker/obsidian42-brat) from
+   Obsidian's Community Plugins.
+2. BRAT settings → **Add Beta plugin** → paste:
+   ```
+   dimpurr/obsidian-nautilus-log
+   ```
+3. Enable **Nautilus Log** in Community Plugins.
+
+BRAT tracks this repo's GitHub releases and updates the plugin for you.
+
+### Option 2 — Manual
+
+1. Download `main.js`, `manifest.json` and `styles.css` from the
+   [latest release](https://github.com/dimpurr/obsidian-nautilus-log/releases/latest).
+2. Create the folder `<your vault>/.obsidian/plugins/nautilus-log/`.
+3. Put the three files in it.
+4. Restart Obsidian (or **Reload app without saving**), then enable the plugin
+   in Community Plugins.
+
+### Option 3 — One-liner (macOS / Linux)
+
+Run from **inside your vault folder**:
+
+```bash
+mkdir -p .obsidian/plugins/nautilus-log && cd .obsidian/plugins/nautilus-log && \
+  curl -LO https://github.com/dimpurr/obsidian-nautilus-log/releases/latest/download/main.js && \
+  curl -LO https://github.com/dimpurr/obsidian-nautilus-log/releases/latest/download/manifest.json && \
+  curl -LO https://github.com/dimpurr/obsidian-nautilus-log/releases/latest/download/styles.css
+```
+
+Then reload Obsidian and enable the plugin.
+
+### Getting started
+
+After enabling, run the command **"Create Nautilus Log test note"** from the
+command palette — it writes a small example note so you can see the spiral
+immediately. Or add this to today's Daily Note:
+
+````markdown
+```naut
+start: 8:30
+```
+- 09:00-10:00 Standup
+- [ ] Write the report 90m
+- [ ] Answer email 30m
+````
+
+### Updating
+
+- **BRAT**: automatic.
+- **Manual / one-liner**: re-download the three files, then
+  **Reload app without saving**.
 
 ## What it gives you
 
@@ -197,26 +272,29 @@ The scheduling and capacity engine is reused **unchanged** from the Roam version
 
 ## Credits
 
-This project stands on four generations of prior work. Each layer is
-acknowledged, in order:
+**The direct source of this port is [404KSG/roam-nautilus-log](https://github.com/404KSG/roam-nautilus-log)**
+— see [Where this comes from](#where-this-comes-from). Everything below is the
+lineage *that project* descends from. They are acknowledged here because the MIT
+license and the idea both travel down this chain, but this port did not take code
+from them directly.
 
 - **[roam-depot-render-template](https://github.com/8bitgentleman/roam-depot-render-template)**
   by [Matt Vogel](https://github.com/8bitgentleman) — the Roam extension
   scaffolding the whole lineage descends from, and the copyright holder named in
   the MIT license this project still carries.
 - **[Nautilus](https://github.com/tombarys/roam-depot-nautilus)**
-  by [Tomáš Barys](https://github.com/tombarys) — the original spiral-planning
+  by [Tomáš Baránek](https://github.com/tombarys) — the original spiral-planning
   concept. The spiral is not decoration: its narrowing coils mirror one's
   diminishing energy for creative work over a day.
 - **[Nautilus Enhanced](https://github.com/hopeserena/nautilus-enhanced)**
   by [hopeserena](https://github.com/hopeserena) — eliminated the timer memory
   leak, added bilingual settings, Bézier connectors, and CJK typography fixes.
-- **[Nautilus Log](https://github.com/404KSG/roam-nautilus-log)**
-  by [404KSG](https://github.com/404KSG) — the direct parent of this port. Added
-  the capacity model (Planned / Available / Overload / No fitting slot), the
-  optional execution layer with `LOGBOOK::` / `CLOCK:` tracking, Planned-vs-Actual
-  review, overnight chart windows, and a test suite. **This port reuses its
-  scheduling engine verbatim.**
+- 🧭 **[Nautilus Log](https://github.com/404KSG/roam-nautilus-log)**
+  by [404KSG](https://github.com/404KSG) — **the project this one is ported from.**
+  It turned the spiral into a real planner: the capacity model
+  (Planned / Available / Overload / No fitting slot), the optional execution layer
+  with `LOGBOOK::` / `CLOCK:` tracking, Planned-vs-Actual review, overnight chart
+  windows, and a test suite. Its engine runs here unmodified.
 - **[Roam Logbook](https://github.com/forrestchang/roam-logbook)**
   by [forrestchang](https://github.com/forrestchang) — the inspiration upstream
   drew on for compatible CLOCK tracking.
