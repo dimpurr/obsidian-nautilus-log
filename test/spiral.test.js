@@ -189,6 +189,24 @@ const settings = {
   urgentTrigger: "",
 };
 
+/* 🔴 dayState 夹具一律由【引擎】生成，不手搓。
+ *    手搓的夹具连 `showAvailableSlots` / `interactive` 都可以漏填，
+ *    正好掩盖「返回值字段从来没人读」这类 bug（认证审计 L1-066/L1-109）。 */
+const { timelineDayState } = require("../src/vendor/log-core.js");
+
+function dayStateFor({ dayOffset = 0, nowMinutes, playback = false }) {
+  const currentDate = new Date(2026, 7, 26, 12, 0, 0);
+  const displayDate = new Date(2026, 7, 26 + dayOffset, 12, 0, 0);
+  return timelineDayState({
+    displayDate,
+    currentDate,
+    startMinutes: 300,
+    endMinutes: 1260,
+    nowMinutes,
+    playback,
+  });
+}
+
 /* ------------------------------------------------------------------ */
 /* Tests                                                               */
 /* ------------------------------------------------------------------ */
@@ -418,15 +436,7 @@ test("空闲时段：过去的日子不给预览", () => {
   globalThis.document = documentShim;
   const container = makeContainer();
   renderSpiral(container, plan, capacity, settings, 600, {
-    dayState: {
-      relation: "past",
-      timelineMinutes: 1260,
-      scheduleFromMinutes: 300,
-      capacityFromMinutes: 1260,
-      elapsedThroughMinutes: 1260,
-      showNow: false,
-      showElapsed: true,
-    },
+    dayState: dayStateFor({ dayOffset: -1, nowMinutes: 600 }),
   });
   assert.equal(slotGroups(container.innerHTML).length, 0,
     "「昨天还剩多少空档」没有意义");
@@ -436,15 +446,7 @@ test("空闲时段：未来的日子整天都算空着", () => {
   globalThis.document = documentShim;
   const container = makeContainer();
   renderSpiral(container, plan, capacity, settings, 600, {
-    dayState: {
-      relation: "future",
-      timelineMinutes: 300,
-      scheduleFromMinutes: 300,
-      capacityFromMinutes: 300,
-      elapsedThroughMinutes: 300,
-      showNow: false,
-      showElapsed: false,
-    },
+    dayState: dayStateFor({ dayOffset: 1, nowMinutes: 600 }),
   });
   const labels = slotLabels(container.innerHTML);
   assert.ok(/^Available slot 05:00–08:00/.test(labels[0]),
@@ -508,4 +510,161 @@ test("RQ-6 documentShim 覆盖真实 document 的必需面（createElement + can
   assert.equal(canvas.getContext("2d"), null,
     "Node 里拿不到 2d 上下文 —— 返回 null 让引擎按【字符数】兜底，"
     + "真实 Electron 里拿得到、按【像素】量（parser.test.js 那条钉的就是这个差异）");
+});
+
+/* ------------------------------------------------------------------ */
+/* 认证审计 W2/render 收口：时间轴口径、占用集合、平台                 */
+/* ------------------------------------------------------------------ */
+
+function unplannedSegmentCount(html) {
+  return (html.match(/fill="url\(#nautilus-log-unplanned-/g) || []).length;
+}
+
+test("L1-064 看历史日期时，已过去的会议与已完成任务必须变灰", () => {
+  globalThis.document = documentShim;
+  const container = makeContainer();
+  const donePlan = {
+    events: plan.events,
+    tasks: [{ uid: "tk-done", string: "写周报 30m", duration: 30, done: true, doneAt: 600 }],
+    malformed: [],
+  };
+  // 真实时钟 06:40（=400），看的却是【昨天】：那一天早已整天过完。
+  renderSpiral(container, donePlan, capacity, settings, 400, {
+    dayState: dayStateFor({ dayOffset: -1, nowMinutes: 400 }),
+  });
+  const html = container.innerHTML;
+  assert.match(html, /--nautilus-log-past-event-fill/,
+    "昨天 08:00 的会议早就过去了；用真实时钟当 now 会让它还是彩色的");
+  assert.match(html, /--nautilus-log-completed-fill/,
+    "昨天完成的任务同样必须是灰的（上游 timeline-minute = elapsedThroughMinutes）");
+});
+
+test("L1-109 看明天时，任何任务都不许被标成「当前任务」", () => {
+  globalThis.document = documentShim;
+  const container = makeContainer();
+  const morning = {
+    ...capacity,
+    // 起点恰好压在明天的 elapsedThroughMinutes（= 工作日起点 300）上：
+    // 只有 dailyPage 这道闸能拦住它，时间比较拦不住。
+    scheduledTasks: [
+      { uid: "tk-early", string: "- [ ] Morning 60m", duration: 60, done: false, start: 300, end: 360 },
+    ],
+  };
+  renderSpiral(container, { events: [], tasks: [], malformed: [] }, morning, settings, 570, {
+    dayState: dayStateFor({ dayOffset: 1, nowMinutes: 570 }),
+  });
+  const html = container.innerHTML;
+  assert.ok(!/nautilus-log-current-task/.test(html),
+    "log-core.js:533 的 docstring：非日记页 must not claim that any task is current");
+  assert.ok(!/aria-current/.test(html),
+    "屏幕阅读器会把明天的任务读成「当前」");
+});
+
+test("L1-077 关掉「显示已完成」不该把干过的时间标成「什么都没记录」", () => {
+  globalThis.document = documentShim;
+  const donePlan = {
+    events: [],
+    tasks: [{ uid: "tk-done", string: "写周报 60m", duration: 60, done: true, doneAt: 600 }],
+    malformed: [],
+  };
+  const noTasks = { ...capacity, scheduledTasks: [] };
+  const shown = makeContainer();
+  renderSpiral(shown, donePlan, noTasks, settings, 700, { showDone: true });
+  const hidden = makeContainer();
+  renderSpiral(hidden, donePlan, noTasks, settings, 700, { showDone: false });
+
+  assert.ok(unplannedSegmentCount(shown.innerHTML) > 0, "夹具本身要有斜纹，否则这条测试是空的");
+  assert.equal(
+    unplannedSegmentCount(hidden.innerHTML),
+    unplannedSegmentCount(shown.innerHTML),
+    "上游 component.cljs:1299 的 past-occupied-events 与「眼睛」开关无关",
+  );
+});
+
+test("L1-138/L2-006 历史页的 CLOCK 汇总要用【被显示那天】的整日窗口", () => {
+  globalThis.document = documentShim;
+  const donePlan = {
+    events: [],
+    // 没有 doneAt —— 只能靠 CLOCK 的结束时刻反推位置
+    tasks: [{ uid: "tk-done", string: "写周报 60m", duration: 60, done: true }],
+    malformed: [],
+  };
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  yesterday.setHours(0, 0, 0, 0);
+  const ms = (min) => yesterday.getTime() + min * 60000;
+  const container = makeContainer();
+  renderSpiral(container, donePlan, { ...capacity, scheduledTasks: [] }, settings, 400, {
+    displayDate: yesterday,
+    dayState: dayStateFor({ dayOffset: -1, nowMinutes: 400 }),
+    clockEntries: [
+      // 04:00–04:30 落在 workdayStart(05:00) 之前：上游窗口是整个日历日，
+      // 收窄到工作日区间会把它裁掉（L2-006 第 ① 条）。
+      { taskUid: "tk-done", start: ms(240), end: ms(270), running: false },
+      { taskUid: "tk-done", start: ms(600), end: ms(645), running: false },
+    ],
+  });
+  assert.match(container.innerHTML, /nautilus-log-event-slice-group/,
+    "用今天的午夜去截昨天的 CLOCK 段 => actualMinutes=0 / latestEndMinutes=null => 整条画不出来");
+});
+
+test("L1-066 空闲预览的判据是引擎的 showAvailableSlots，不是自造公式", () => {
+  globalThis.document = documentShim;
+  const container = makeContainer();
+  // 回放历史日、游标 01:40 落在工作日窗口【之前】：
+  // 引擎 showAvailableSlots = (!past || simulated) = true；
+  // 自造公式 (showNow || !showElapsed) = false —— 两者在这里分叉。
+  const ds = dayStateFor({ dayOffset: -1, nowMinutes: 100, playback: true });
+  assert.equal(ds.showAvailableSlots, true, "夹具前提：引擎在回放历史日时是给预览的");
+  assert.equal(ds.showNow, false, "夹具前提：游标在窗口外，红针不画");
+  renderSpiral(container, plan, capacity, settings, 600, {
+    playbackMinute: 100,
+    dayState: ds,
+  });
+  assert.ok(slotGroups(container.innerHTML).length > 0,
+    "自造公式会在回放历史日时静默吞掉整层空闲预览");
+});
+
+test("L1-085 clampToNow 取 interactive||playback，不取 showNow", () => {
+  globalThis.document = documentShim;
+  const container = makeContainer();
+  // 今天 23:20（=1400），工作日窗口 05:00–21:00：今天已经过完了。
+  const ds = dayStateFor({ dayOffset: 0, nowMinutes: 1400 });
+  assert.equal(ds.interactive, true, "夹具前提：这仍是今天");
+  assert.equal(ds.showNow, false, "夹具前提：此刻落在窗口外，红针不画");
+  assert.equal(ds.showAvailableSlots, true, "夹具前提：不是过去的日子，引擎照给预览");
+  renderSpiral(container, plan, capacity, settings, 1400, { dayState: ds });
+  assert.equal(slotGroups(container.innerHTML).length, 0,
+    "用 showNow 当 clampToNow 会把已经过完的一整天当成还空着（上游 (or daily-page? playback?)）");
+});
+
+test("C1-102 紧凑模式不发空闲靶区（有 tabindex 却没有 tooltip）", () => {
+  globalThis.document = documentShim;
+  const compact = makeContainer();
+  compact.clientWidth = 360;   // <= 520 => isCompactChartWidth
+  renderSpiral(compact, plan, capacity, settings, 600);
+  assert.equal(slotGroups(compact.innerHTML).length, 0,
+    "紧凑时 hover 被关掉，空档组会变成一串没有任何反馈的空焦点");
+
+  const wide = makeContainer();
+  renderSpiral(wide, plan, capacity, settings, 600);
+  assert.ok(slotGroups(wide.innerHTML).length > 0, "宽容器仍要有空闲预览");
+});
+
+test("L2-104 移动端几何量由 SpiralOptions.mobile 决定（默认桌面）", () => {
+  globalThis.document = documentShim;
+  const desktop = makeContainer();
+  renderSpiral(desktop, plan, capacity, settings, 600);
+  assert.match(desktop.innerHTML, /<svg[^>]*font-size="14"/,
+    "上游 component.cljs:55 桌面 font-size = 14");
+
+  const mobile = makeContainer();
+  renderSpiral(mobile, plan, capacity, settings, 600, { mobile: true });
+  assert.match(mobile.innerHTML, /<svg[^>]*font-size="12"/,
+    "上游移动端 font-size = 12；写死 MOBILE=false 时这里恒为 14");
+
+  // 桌面渲染必须能从移动端状态恢复 —— 模块级 let 最容易在这里漏。
+  const again = makeContainer();
+  renderSpiral(again, plan, capacity, settings, 600);
+  assert.match(again.innerHTML, /<svg[^>]*font-size="14"/, "平台状态不能粘住");
 });
