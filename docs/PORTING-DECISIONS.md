@@ -22,7 +22,7 @@
 1. 读上游 `docs/guide.md` 建立特性全景。
 2. 读本文档 §1（概念映射）—— 这决定了整个数据层怎么写。
 3. 把上游 `src/{log-core,timing-core,timing-runtime,timing-topbar}.js` **原样 vendor**（§2 纪律）。
-4. 按 §3 实现数据层（上游 `timing-roam.js` 的 17 个函数的 Obsidian 版）。
+4. 按 §3 实现数据层（上游 `timing-roam.js` 的 16 个函数的 Obsidian 版）。
 5. 按 §4 逐条落实偏离决策。
 6. 按 §5 重排挂载面。
 7. 按 §6 决定超集特性要不要一起做。
@@ -35,14 +35,83 @@
 | Roam 概念 | Obsidian 对应 | 实现位置 | 备注 |
 |---|---|---|---|
 | Daily Note page | Daily Notes 插件配置的今日笔记 | `sidebar.ts resolveDailyNoteInfo` | 🔴 配置可能**只有 `folder` 没有 `format`**（用户没改日期格式时 Obsidian 不写这个键），两者有其一即视为有效配置 |
-| block uid（不透明标识符） | `filepath:line` | `timing-obsidian.ts splitUid` | 引擎里 uid 只作不透明标识符使用，实测仅 5 处，全部不解释内容 |
+| （同上，第二条路） | 🔴 **执行层不走 `resolveDailyNoteInfo`** | `timing-obsidian.ts dailyNotePath()` | 走 `internalPlugins.getPluginById('daily-notes').instance.getDailyNote()`，失败才退到仓库根的 `YYYY-MM-DD.md`。**两条路在「daily-notes 内置插件被禁用 + 用户配了 folder」时会得出不同结果**：侧栏找得到计划、执行层找不到。重做移植时这两处必须一起看（认证审计 P1-011） |
+| block uid（不透明标识符） | `filepath:line` | `timing-obsidian.ts splitUid` | 引擎里 uid 只作不透明标识符使用，实测仅 5 处，全部不解释内容。🔴 **`line` 是 0 起**（与 `editor` 行号同基准）；`path` 用 **`lastIndexOf(':')`** 切 —— 所以**文件名里含冒号会被切错**（`a:b.md`、Windows 风格路径）。两条都推不出来（认证审计 P1-013） |
 | block tree（父子关系天然存在） | **按缩进还原** | `timing-obsidian.ts readPrimaryPlan` | 父 = 往前最近的一行缩进更小的非空行；找不到则为计划块本身。🔴 见 §D5 |
-| `{{[[TODO]]}}` / `{{[[DONE]]}}` | `- [ ]` / `- [x]` | `timing-obsidian.ts normalizeTaskString` | 单向归一：喂给引擎前转成 Roam 形态；写回时转回 markdown |
-| block children（LOGBOOK 抽屉） | 缩进的子行 | `timing-obsidian.ts createRunningClock` | 首次 Clock In 时自动建 `- LOGBOOK::`，缩进 = 任务缩进 + 4 |
-| CLOCK 行 | 逐字相同的文本行 | 引擎的 `parseClockLine` / `formatClockLine` 原样可用 | Org-mode 格式，跨生态兼容 |
+| （缩进单位） | 🔴 **space 与 tab 各计 1** | `timing-obsidian.ts leadingSpaces()` | 不做 tab 宽度归一 ⇒ 「1 个 tab」严格小于「2 个空格」，用 tab 缩进的笔记层级会被错误还原。而**写回新行一律用空格**（`' '.repeat(...)`）。重做移植的人几乎必然做成「tab = 4」，那与现实现不等价（认证审计 P1-016） |
+| `{{[[TODO]]}}` / `{{[[DONE]]}}` | `- [ ]` / `- [x]` | `timing-obsidian.ts normalizeTaskString` | 单向归一：喂给引擎前转成 Roam 形态；写回时转回 markdown。实测比这行字宽：**`-` / `*` / `+` 三种 marker 都认**；`[…]` 里**任何含 `x`/`X` 的字符**都算 DONE；非 checkbox 行剥掉 marker 原样返回。🔴 推论：Tasks 插件的 `- [/]`、`- [>]` 等自定义状态会被判成 **TODO**（不含 x），而不是被忽略 —— 与 Obsidian 生态的常见约定冲突（认证审计 P1-017/018） |
+| block children（LOGBOOK 抽屉） | 缩进的子行 | `timing-obsidian.ts createRunningClock` | 首次 Clock In 时自动建 `- LOGBOOK::`，缩进 = 任务缩进 + 4。抽屉行的识别正则是 **`/^:?LOGBOOK:{1,2}$/i`**（剥掉列表 marker 之后）—— 同时接受 `LOGBOOK:`、`LOGBOOK::`、`:LOGBOOK:`，且大小写不敏感（认证审计 P1-021） |
+| CLOCK 行 | 逐字相同的文本行 | 引擎的 `parseClockLine` / `formatClockLine` 可用，但**先剥列表 marker 再喂**（`parseClockLineFromLine`），不是「原样」 | Org-mode 格式，跨生态兼容 |
+| （新 CLOCK 行的形状） | 🔴 **从「上一条 CLOCK」继承缩进与列表 marker** | `timing-obsidian.ts createRunningClock` | 锚点 = 抽屉下最后一条 CLOCK，**复用它的缩进与 marker**；抽屉下一条 CLOCK 都没有时才用 `drawerIndent + 4` 与 `'- '`。这条推不出来，且直接决定写回结果的形状（认证审计 P1-020） |
 | Roam 右侧栏 | `workspace.getRightLeaf()` | `timing-obsidian.ts openTaskInRightSidebar` | |
 | Toast | `new Notice()` | `timing-obsidian.ts showToast` | |
 | 图数据库同步可查 | ❌ **无对应** | 见 §D6 | Obsidian vault API 全异步，引擎却同步调 —— 必须自建同步缓存 |
+
+### 1.1 🔴 块内配置的完整语法（上游零线索）
+
+上游把设置烘焙成 renderer 的**位置参数**（§D4），所以这一整套语法**从上游代码里一个字都推不出来**，而它又是用户每天要敲的东西。实现在 `src/blockconfig.ts`。
+
+**解析规则**（`parseBlockConfig`）：
+
+- 每行 `key: value`，**第一个 `:` 之前**是 key（所以 value 里可以再有冒号，`start: 09:00` 成立）。
+- key **小写归一**（`Start` / `START` 都认），前后空白剥掉。
+- 空行跳过；**`#` 开头整行是注释**（YAML 风格）。
+- 一行里没有 `:` ⇒ 整行进 `unknown`。
+- **空块完全合法**，语义是「全用全局设置」—— 这是常见写法，不是错误。
+- 🔴 **未知键不吞掉**：进 `unknown[]` 并**原样报给 UI**（⚠ 警告），而不是静默忽略。这是有意的：静默忽略会让打错的键看起来「生效了」。
+
+**识别的键与别名**（每组内部完全等价）：
+
+| 归一到 | 别名 |
+|---|---|
+| `workdayStartHour` | `start` · `start-time` · `workday-start` |
+| `workdayEndHour` | `end` · `end-time` · `workday-end` |
+| `todoDuration` | `default-duration` · `todo-duration` |
+| `descLength` | `legend-length` · `desc-length` |
+| `urgentTrigger` | `urgent` · `urgent-trigger` |
+| `language` | `language` · `lang` |
+
+**取值规则**：
+
+- 小时（`parseHour`）：`5` / `05:00` / `5:30` 都认，但**分钟被丢弃（向下取整到小时）**；范围 0–24，越界 ⇒ 进 `unknown`。
+- `language` 只认字面量 `en` / `zh`，其它值 ⇒ 进 `unknown`。
+- `urgent` **不做任何校验**，原样取字符串（空串 = 关闭）。
+- 🔴 **数值键没有任何范围钳制**：`parseInt_` 只查 `isFinite`。而上游 `resolveRendererSettings` 用 `boundedInteger` 钳到 `[5,60]` / `[15,30]`（`log-core.js`），本移植的设置页也用 slider 钳。⇒ **块内 `default-duration: 99999` 是唯一能绕过钳制的入口**。这是一处对上游的偏离，登记在此（认证审计 P1-058）。
+
+**围栏与正文边界**：
+
+- 围栏正则要求语言标识**独占一行、行尾无其它字符**：<code>^\s*```+\s*(?:nautilus|naut)\s*$</code>。
+- **未闭合的围栏不算合法块**。
+- 正文边界：从围栏结束行往下，**先跳过所有空行**，再收集到**第一个空行**为止（`extractPlanBody`）。⇒ 「止于首个空行」只对**结尾**成立，**开头不成立** —— 块与计划之间多敲几个回车不会失效（认证审计 P1-043）。
+- **侧栏与执行层只认笔记里的第一个** nautilus 块；而代码块渲染器是**每块各自渲染各自下方的正文**。⇒ 一篇笔记里放多个块时，两侧语义不同（认证审计 P1-059）。
+
+### 1.2 🔴 `dHH:MM` 完成锚点的精确语法
+
+`d` 前缀的完成时刻锚点是本移植发明的（§D8）。它的正则**三处互不一致**，这是已知的实现分歧，重做移植时应当**统一成一份**：
+
+| 用途 | 位置 | 正则 | 分钟 | 大小写 |
+|---|---|---|---|---|
+| 解析（读） | `parser.ts` `DONE_AT_RE` | `/(?:^\|\s)d(\d{1,2})(?::(\d{1,2}))?(?=\s\|$)/i` | **可省**（`d14` 合法） | **不敏感**（`D14:30` 合法） |
+| 从标题里剥离 | `compact.ts` | `/\s*\bd\d{1,2}:\d{2}\b/g` | **必须有** | **敏感** |
+| 命令的去重判断 | `main.ts` | `/(?:^\|\s)d\d{1,2}:\d{2}(?=\s\|$)/` | **必须有** | **敏感** |
+
+⇒ 已知后果：写成 `d14` 的行**会被解析成锚点**，但**不会被剥离**（标题里留着 `d14`），而且命令还会**再追加一个** `d14:30`（认证审计 P1-068）。
+
+一律以**空白或行首/行尾**分隔（同 §D8c 的理由）。
+
+### 1.3 `src/contract.ts` —— 跨模块钉死的类型契约
+
+台账此前完全没有提到这个文件，但它是本移植特有的结构：`NautilusSettings` / `DEFAULT_SETTINGS` / `ParsedPlan` / `CapacityMetric` 等**跨模块共享的形状**全部集中在 `src/contract.ts`，其它模块只 import 类型，不各自重新声明。
+
+🔴 **冲突处理规则**（与 `CLAUDE.md` 一致）：契约与实际实现分歧时，**按实际实现改契约、并把分歧报上来**，不许反过来「按契约把实现改掉」——契约是描述，不是命令。
+
+⚠️ 当前已知的**注释侧**错误（`contract.ts` 由源码 agent 负责，不在本文件的可改范围内，登记在此待修）：
+
+| 位置 | 现状 | 应为 |
+|---|---|---|
+| `NautilusSettings` 上方注释 | 「8 base + 5 execution」= 13 | 实际 **11** 个字段（6 base + 5 execution）；§D12 的 11 项是对的 |
+| `descLength` 行内注释 | `// 15..30` | **`14..28`**（`settings.ts` 的 `DESC_LENGTH_SLIDER`，端点与上游列表对齐） |
+| `pomodoroMinutes` 行内注释 | `// 0 = off` | **关不掉**。滑块量程 `POMODORO_SLIDER = {min:15, max:90}`，UI 到不了 0；设置描述自己写的就是 "It cannot be switched off."（认证审计 G1-K05） |
 
 ---
 
@@ -71,9 +140,9 @@ npm test
 
 ---
 
-## 3. 数据层契约（上游 `timing-roam.js` 的 17 个函数）
+## 3. 数据层契约（上游 `timing-roam.js` 的 16 个函数）
 
-`timing-runtime.js` 从数据层 import 固定的 17 个函数，实现它们即可让 runtime + topbar 直接跑：
+`timing-runtime.js` 从数据层 import 固定的 **16** 个函数（⚠️ 本节曾写「17 个」，与下面自己列的名单数不上 —— 名单一直是对的，数字错了；认证审计 P1-030），实现它们即可让 runtime + topbar 直接跑：
 
 ```
 readAllEntries · readEntriesForTaskUids · readBlockString · readPrimaryPlan ·
@@ -84,7 +153,9 @@ openPrimaryPlan · warmRightSidebarWindowCache · legacyLogbookIsRunning · show
 
 对应实现全在 `src/timing-obsidian.ts`。
 
-🔴 **签名会随上游变**。`openPrimaryPlan(planUid)` 在上游 `d807ea4` 变成 `(planUid, { sidebar })` —— 升级时必须核对这 17 个函数的调用签名，否则新参数被静默丢弃（不报错、不炸测试）。
+🔴 **「16 个」只是 runtime 那条线**。上游 `timing-commands.js` 还额外 import 了 **`getFocusedBlockUid`**。本移植的三条执行层命令是**自己重写**的（`main.ts registerTimingCommands`，靠 `editor.getCursor()` 直接拿行号），所以不需要它；但如果重做移植时想**原样复用上游的 `timing-commands.js`**，就得再实现这一个 —— 只按「固定 16 个」实现会卡住（认证审计 P1-034）。
+
+🔴 **签名会随上游变**。`openPrimaryPlan(planUid)` 在上游 `d807ea4` 变成 `(planUid, { sidebar })` —— 升级时必须核对这 16 个函数的调用签名，否则新参数被静默丢弃（不报错、不炸测试）。⚠️ §7 曾把这条写成「第 6 号检测器」，但**那个检测器从来没有实现过**；实际的第 6 号是怪癖钉子。见 §7 的订正。
 
 ---
 
@@ -109,7 +180,9 @@ openPrimaryPlan · warmRightSidebarWindowCache · legacyLogbookIsRunning · show
 | **上游** | 挂在 topbar trigger 上：⌥ Alt-click 主界面定位、⇧ Shift-click 送右侧栏 |
 | **本移植** | 本移植没有独立 top bar（见 §D3）。手势挂在**状态栏计时 token** 与**侧栏 `Locate Primary Nautilus` 按钮**上，两处都支持 |
 | **状态栏三态** | 普通点击 → 打开侧栏（Obsidian 这边最有用的默认，上游没有这个动作）· ⌥ → 主编辑区定位 · ⇧ → 送右侧栏 |
+| **侧栏按钮只有两态** | ⚠️ 订正：`exec-panel.ts` 的 identity 按钮**普通点击本来就是「主编辑区定位」**，所以 ⌥ 与普通点击**同义**，只有 ⇧ 有区分。按钮 `title` 写「⌥ / ⇧」是为了让用户知道 ⇧ 另有行为，不是承诺 ⌥ 另有语义 —— 代码注释已就地澄清（认证审计 P1-046） |
 | **实现** | `main.ts` 的 `renderTimingStatusBar` 回调 · `exec-panel.ts` 的 identity 按钮 |
+| 🔴 **已知欠账** | 状态栏那三态**没有任何提示**。引擎自带的提示文案 `EXECUTION_COPY.actions.openPanelHint`（"Click: panel · ⌥/Alt: main · ⇧: sidebar"）只被死代码 topbar 引用，`statusbar.ts` 未接（它的 `title` 是任务全名）。⇒ 检测器把它报成孤儿文案，baseline 里标的是 🔴 真欠账而不是豁免（认证审计 P1-047） |
 
 ### §D3 top bar 整体并入右侧栏
 
@@ -118,8 +191,8 @@ openPrimaryPlan · warmRightSidebarWindowCache · legacyLogbookIsRunning · show
 | **上游** | 一个常驻 top bar trigger，点开是 Timing / Plan / Review 的 popover。插入点靠 `querySelector('.rm-find-or-create-wrapper')` 扒 Roam 内部 DOM |
 | **本移植** | 不做独立 top bar。三视图直接渲染进右侧栏面板；只在状态栏留一个计时 token |
 | **为什么** | 用户决策（2026-08-24）：「top bar 那个因为有交互，我觉得一起丢进侧栏里面好」。且 Obsidian 有正经的 `registerView` / `addStatusBarItem` API，不需要扒 DOM |
-| **🔴 已知代价** | 上游 `timing-topbar.js`（879 行）因此**未被 import**，功能是手写重实现的。审计确认因此丢失：Plan 的 Scheduled/Unscheduled 分节与折叠、每行的预计区间 meta、三 tab 常驻 capacity strip。详见 audit §P1-2。**这三项已于 2026-08-25 补回**（`exec-panel.ts`），仍缺快捷键 popover |
-| ⚠️ **一处订正（2026-08-25）** | 本条曾写「零 Roam 耦合、应当直接复用」。实测**只有渲染逻辑是 Roam-free，挂载与生命周期不是**：`ensureMounted` / `placeAfterNavigation` / `syncResponsiveDensity` / `watchTopbar` 共 5 处被 `document.querySelector('.rm-topbar')` 门控（`timing-topbar.js:728,740,799,805,814`），图标还依赖 Blueprint `bp3-icon-*` 字体。复用它必须伪造一个 `.rm-topbar` 宿主，且它的形态是 `document.body` 上绝对定位的 popover —— 正是本条决策否决掉的那个挂载面。**⇒ 手写重实现在这里是合理的**，代价是必须靠 §7 的检测器盯住「重写丢了什么」，而不是靠人记 |
+| **🔴 已知代价** | 上游 `timing-topbar.js`（879 行）因此**未被 import**，功能是手写重实现的。审计确认因此丢失：Plan 的 Scheduled/Unscheduled 分节与折叠、每行的预计区间 meta、三 tab 常驻 capacity strip。详见 audit §P1-2。**这三项已于 2026-08-25 补回**（`exec-panel.ts`）。⚠️ 订正：本条曾写「仍缺快捷键 popover」—— 上游 topbar 的键盘面只有「`Escape` 关闭 popover」一件事，而本移植是**常驻面板、根本没有 popover**，⇒ 这不是欠账，是**在新形态下不适用**（认证审计 P1-052） |
+| ⚠️ **一处订正（2026-08-25）** | 本条曾写「零 Roam 耦合、应当直接复用」。实测**只有渲染逻辑是 Roam-free，挂载与生命周期不是**：`ensureMounted` / `placeAfterNavigation` / `syncResponsiveDensity` / `watchTopbar` 共 5 处被 `document.querySelector('.rm-topbar')` 门控（`timing-topbar.js:728,740,799,805,814`），图标还依赖 Blueprint `bp3-icon-*` 字体。复用它必须伪造一个 `.rm-topbar` 宿主，且它的形态是 `document.body` 上绝对定位的 popover —— 正是本条决策否决掉的那个挂载面。**⇒ 手写重实现在这里是合理的**，代价是必须靠 §7 的检测器盯住「重写丢了什么」，而不是靠人记。🔴 **这条保障一度不成立**：检测器 3 原先只认 CJS `module.exports = {…}`，而 `timing-topbar.js` 用 ESM `export function` ⇒ 它的导出面**完全在检测范围之外**；同时检测器 1/2 把这个**零 import 的死模块算作发射面/消费者**，凡是只被 topbar 用的 CSS 类与文案 key 都被判成「有人用」。三处已于 2026-08-26 修好（认证审计 P1-053/102），修完后欠账从 8 条暴露到 55 条 —— **死模块不是发射面** |
 
 ### §D4 渲染载体：Roam renderer block → 代码块
 
@@ -129,7 +202,18 @@ openPrimaryPlan · warmRightSidebarWindowCache · legacyLogbookIsRunning · show
 | **本移植** | ` ```nautilus ` 或 ` ```naut ` 代码块。块**内**是 YAML 风格的当天配置覆盖；计划正文在块**下方**，到首个空行为止 |
 | **为什么这样切** | 判据：「Obsidian 代码块可以吞掉自己的源码，只有当它装的是*查询/配置*而不是*数据*时」。计划正文是数据，必须留在块外保持可编辑、可被其它插件索引 |
 | **为什么不扫兄弟列表** | 边界零歧义。代价是不进 Tasks 插件的全局索引（B 方案留后手，一期不做） |
-| **别名** | `naut` 是短写。🔴 新增别名必须同步改 `main.ts` 的 `BLOCK_LANGS` 与 `locateByFile()` 的围栏正则，否则兜底定位失效 |
+| **别名** | `naut` 是短写。🔴 **新增别名必须同步改 3 处**，见下 |
+| **块内配置语法** | 完整契约见 **§1.1**（别名表 / `#` 注释 / key 小写归一 / 未知键上报 / 数值不钳制 / 正文边界）—— 上游是位置参数，这一整套零线索 |
+
+🔴 **别名注册点实为 3 处**（⚠️ 本条曾写「`main.ts` 的 `BLOCK_LANGS` 与 `locateByFile()` 的围栏正则」—— **`locateByFile` 这个函数在仓库里根本不存在**，已查 `grep -rn locateByFile src/` 只命中那条注释本身。这与 §D3 已订正的那类错误同型；认证审计 P1-055）：
+
+| # | 位置 | 是否自动跟随 |
+|---|---|---|
+| 1 | `main.ts` `BLOCK_LANGS` | 是（同文件的 `FENCE_OPEN_RE` 由它派生，`registerMarkdownCodeBlockProcessor` 也按它循环注册） |
+| 2 | `sidebar.ts` `FENCE_OPEN_RE` | 🔴 **否**，硬编码的独立正则 |
+| 3 | `timing-obsidian.ts` `FENCE_OPEN_RE` | 🔴 **否**，硬编码的独立正则 |
+
+漏掉 2 或 3 的后果是**静默的**：代码块照样渲染，但侧栏与执行层认不出这个块 ⇒ 面板说「今天没有 Nautilus Log」。
 
 ### §D5 层级靠缩进还原
 
@@ -158,6 +242,10 @@ openPrimaryPlan · warmRightSidebarWindowCache · legacyLogbookIsRunning · show
 | **本移植** | `NautilusSettings` 用 **camelCase**（`workdayStartHour` …） |
 | **🔴 必须有映射表** | 喂给 vendored runtime 的 `extensionAPI` shim **必须做 kebab→camel 转换**。直接透传会让所有 `settings.get()` 返回 `undefined` |
 | **为什么会静默** | 引擎的兜底值 `?? 5 / ?? 21 / \|\| 15 / ?? 45` **恰好等于 `DEFAULT_SETTINGS`** ⇒ 默认配置下行为完全正确，只有改过设置的用户会撞上，测试必绿。审计 §P0-1 |
+| **shim 的第三层兜底** | 映射表未命中时：先查 `this.settings[k]`、再查 `this.runtimeState[k]`。后者专为 **`POMODORO_STATE_KEY` 这类变量键**而设 —— 它不是字面量，§7 的键名空间检测器**抓不到它**，只能靠这条兜底（认证审计 P1-066） |
+| 🔴 **`settings.set` 必须存在** | shim 只做 `get` 是不够的：Clock Out 会写回 runtime 状态，缺 `set` 直接抛 `settings.set is not a function` |
+
+⚠️ 数字订正：本条正文举了 4 个 kebab 键、§7 曾写「曾抓到 §D7 的 5 个键」。实测 vendor 里 `settings.get('...')` 的字面量共 **8 个**（`forgotten-timer-minutes` · `language` · `pomodoro-minutes` · `recent-retention-minutes` · `timing-line-sidebar` · `todo-duration` · `workday-end` · `workday-start`），其中需要 kebab→camel 转换的 **7 个**。「5 个」对不上任何一种数法（认证审计 P1-065）。
 
 ### §D8 完成时刻锚点 `dHH:MM`
 
@@ -167,7 +255,9 @@ openPrimaryPlan · warmRightSidebarWindowCache · legacyLogbookIsRunning · show
 | **本移植** | Obsidian 没有对应生态。**自行发明** `dHH:MM` token（`d13:45`），并提供命令「勾选并打完成时间戳」 |
 | **为什么需要** | 没有锚点的已完成任务在盘上画不出来 —— 引擎的明确立场是 "does not invent history" |
 | **默认不绑快捷键** | 由用户在 设置 → 快捷键 自行指定 |
-| **🔴 已知泄漏** | 引擎的 `taskTitle()` 不认识这个 token（它是我们发明的），会把 `d14:30` 留在标题里。`parser.ts` 那条路剥了，执行层那条路没剥。审计记录在案 |
+| **🔴 已知泄漏** | 引擎的 `taskTitle()` 不认识这个 token（它是我们发明的），会把 `d14:30` 留在标题里。`parser.ts` 那条路剥了，执行层那条路没剥（`timing-obsidian.ts` / `statusbar.ts` 直接用 `timingCore.taskTitle`）。审计记录在案 |
+| **精确语法** | 见 **§1.2** —— 三处正则不一致（分钟可省 / 大小写），`d14` 会被解析但不会被剥离 |
+| **静默不动的两种情况** | 命令只对 `- [ ]` / `- [x]` 行生效；**非任务行直接 return**，**已有锚点也直接 return**。两种情况都**没有任何提示** —— 用户按了没反应（认证审计 P1-070） |
 
 ### §D8b `d50%` 进度：不预折减，把 progress 交给引擎
 
@@ -188,6 +278,8 @@ openPrimaryPlan · warmRightSidebarWindowCache · legacyLogbookIsRunning · show
 | 🔴 **为什么不能用 `\b`** | JS 的 `\b` 定义在 ASCII `\w` 上，**CJK 字符不属于 `\w`** ⇒ `\b紧急\b` 在任何位置都不匹配，中文触发词会**彻底失效**（实测验证）。空白/行首尾分隔与文字系统无关，中英文同时成立 |
 | **已知后果** | 中文不用空格分词，所以 `紧急处理这件事` 里的 `紧急` **不会**命中 —— 这与上游行为一致（不是本移植引入的），但中文用户需要显式空格分隔 |
 | **偏离** | 额外做了**正则转义**（上游没有）。上游把设置值直塞 pattern，触发词含 `(` 或 `+` 会抛异常连带整张图渲染失败 |
+| **键名** | 上游这个设置的键叫 **`color-1-trigger`**（`index.js`），本移植叫 `urgentTrigger`。🔴 它**不在** `SETTINGS_KEY_MAP` 里，也**不该**加进去 —— vendor 从不问这个键，只有本移植自己的 `parser.ts` 用它（认证审计 P1-073） |
+| **渲染结果** | 命中的**弹性任务**画成红色（`spiral.ts` 的 `URGENT_FILL` / `URGENT_LEGEND`）。🔴 **固定事件的黄色优先**：`meeting` 分支排在 `urgent` 前面，事件不会被改红 |
 
 ### §D8d 合成探针产生的告警不上报
 
@@ -202,6 +294,7 @@ openPrimaryPlan · warmRightSidebarWindowCache · legacyLogbookIsRunning · show
 | **为什么** | 现实中用户几乎总开着今天的笔记。只走 `vault.process` 会和编辑器状态打架 |
 | **🔴 血的教训** | editor 分支曾把新行写成 `内容\n` 追加在锚点**行尾**，产出 `- [ ] 任务 20m    - LOGBOOK::` 脏行。正确是 `\n内容`，与 `applyChange` 的 `splice(idx + 1, 0, next)` 语义对齐 |
 | **乐观锁** | 写回按**内容**定位而非行号（`expected` / `locateLine`），行漂移不影响、内容变了则拒写 |
+| 🔴 **乐观锁的作用域边界** | 它保护的是「**落笔期间那一行没变**」，**不保护「定位选错了人」**。定位挑错行之后 `expected` 当然匹配，锁一点防护都不构成。⇒ 真正防错写的是**定位侧**的歧义拒写（`locateClockLine` 命中多行就拒绝），不是这把锁。评估「外部并发写」风险时别把这条算成防线（认证审计 A1-194） |
 
 ### §D10 ⛔ 不移植：Roam 块引用的「每日实例」模型
 
@@ -224,6 +317,17 @@ Roam 专有的「组件前缀文本」，Obsidian 无对应概念。**这是上�
 
 上游第二代（`hopeserena/nautilus-enhanced`）就已砍掉，第三代没有。记在这里只是为了让读上游第一代代码的人不困惑。
 
+### §D14 Roam 生态专属的探测与预热：降级为「形状兼容的空实现」
+
+数据层 16 个函数里有两个在 Obsidian 侧**没有可实现的语义**。它们不是漏做，是有意做成空壳；按「台账里没有的不许自认为有意不做」的规矩登记在此（认证审计 A1-174 / A1-180）。
+
+| 函数 | 上游做什么 | 本移植 | 为什么这样是对的 |
+|---|---|---|---|
+| `warmRightSidebarWindowCache()` | 读 `getWindows()` 预热右侧栏窗口缓存，带 revision 守卫 | **恒返回 `Promise.resolve({ ok: false, reason: 'unavailable' })`** —— 与上游「API 不可用」那个分支**逐字相同**，形状兼容不是杜撰 | Obsidian 的右侧栏是**单个 leaf**，没有 Roam 那种多窗口栈，无缓存可预热。✅ 已核实**确无后果**：① runtime 调用点是 `void warmRightSidebarWindowCache()`，返回值被丢弃、无 `.then`/`.catch` 消费者；② 它预热的 `knownSidebarWindows` 只服务上游 `frontBlockInRightSidebar` 的去重快路径，而本移植的 `frontBlockInRightSidebar` 根本没有那套缓存；③ 返回 resolved promise，不会 unhandled reject |
+| `legacyLogbookIsRunning()` | 探测 Roam Logbook 扩展：`#roam-logbook-topbar, .rlb-topbar` DOM + `window.roamLogbookExtensionData?.running` | **恒返回 `false`** | 那两个信号是 Roam Logbook 扩展专属的，Obsidian 侧**没有任何等价的可靠探测信号**。runtime 里这个守卫为 true 时会 `showToast(…, 'danger')` **并抛错**，`initialize()` 整个失败 ⇒ 强行猜测并返回 true 就会**误伤到执行层连启动都不行**，那是比漏报严重得多的失败模式 |
+
+🔴 **代价（必须让用户知道）**：上游那条「检测到第二个 CLOCK 写入者就拒绝启动」的安全承诺，在本移植里**不存在**。如果 vault 里还有别的插件在写 `LOGBOOK::` 抽屉（Day Planner 之类），Nautilus Log 不会察觉。真正的兜底不在这里，而在**定位侧**：`locateClockLine` 命中多行时**歧义拒写**、`locateLine` 的内容乐观锁拒写变化过的行（注意 §D9 里那条边界 —— 锁不防「选错人」）。
+
 ---
 
 ## 5. 挂载面重排
@@ -233,10 +337,13 @@ Roam 专有的「组件前缀文本」，Obsidian 无对应概念。**这是上�
 | renderer 组件本体 | `{{[[roam/render]]}}` 块 | 代码块处理器 | `registerMarkdownCodeBlockProcessor`（§D4） |
 | top bar trigger + popover | 扒 `.rm-find-or-create-wrapper` | 右侧栏面板 | `registerView` + `addRibbonIcon`（§D3） |
 | — | — | ➕ 状态栏计时 token | `addStatusBarItem`（超集，§S6） |
-| 命令面板 | `extensionAPI.ui.commandPalette` | `addCommand` × 5 | 🔴 上游的 3 条尚未移植（audit §P1-6） |
-| 块右键菜单 | `blockContextMenu` | 🔴 **未做** | 应挂 `workspace.on('editor-menu')`（audit §P1-6） |
+| 命令面板 | `extensionAPI.ui.commandPalette` | `addCommand` × **8** | ✅ 上游那 3 条（`focus-current-block` / `clock-out-timing-line` / `locate-primary-plan`）**已于 2026-08-25 补回**，在 `registerTimingCommands()` 里。⚠️ 本行曾写「× 5 · 上游 3 条尚未移植」，与 §D3 自己写的「已补回」直接矛盾（认证审计 P1-093 / G1-K07） |
+| 块右键菜单 | `blockContextMenu` | ✅ **已做**：`workspace.on('editor-menu')` + `timingMenuActions` 决定条件显示，两项（Clock In / Clock Out） | ⚠️ 本行曾写「🔴 未做」（认证审计 P1-094 / G1-K07） |
+| 设置面板 | Roam `extensionAPI.settings.panel` | `addSettingTab` | 本行此前漏登（§D7 / §D12） |
 | `;;` 模板菜单 | Roam 原生 | 命令「创建测试笔记」 | 超集 §S4 |
 | Toast | Roam toast | `new Notice()` | |
+
+🔴 **一条推不出来的行为闸**：**总开关 `actualTimeTracking` 关闭时，执行层的命令与右键菜单一个都不许出现**。实现是 `main.ts` 的 `liveRuntime()` —— 它同时看「runtime 起没起」和「开关是不是真的开着」，任何执行层入口都必须过这道闸（`checkCallback` 返回 `false` ⇒ 命令面板里根本搜不到）。重做移植时只按「runtime 存在与否」判会漏掉一半（认证审计 P1-097）。
 
 ---
 
@@ -255,26 +362,38 @@ Roam 专有的「组件前缀文本」，Obsidian 无对应概念。**这是上�
 | S7 | ` ```naut ` 短别名 | 好记 |
 | S8 | 溢出列表条目可点跳转 | 走 `MarkdownRenderer` |
 | S9 | 图渲染失败降级 | 图挂了不带走容量数字 |
-| S10 | 跨日 `dayState` | 看昨天 = 无指针 / 斜纹铺满 / 容量算整天；看明天 = 完全不铺斜纹。上游只有「今天」的概念 |
+| S10 | 跨日 `dayState` | 看昨天 = 无指针 / 斜纹铺满 / 容量算整天；看明天 = 完全不铺斜纹。⚠️ **订正**：这些**规则本身全是引擎给的** —— 上游 `log-core.js` 的 `timelineDayState({displayDate, currentDate, …})` 早就把 past/today/future 三种情况想透了（`daystate.ts` 的文件头注释也是这么写的：「一条规则都不自己发明」）。**真正的超集只有一件事：从 vault 路径里认出 `YYYY-MM-DD` 并喂进去**（`daystate.ts dateFromPath`）。本行曾把引擎的能力记成本移植的发明 —— 与 §D3 那次订正完全同型（认证审计 P1-129） |
 | S11 | 写回按内容校验（乐观锁） | §D9 |
 | S12 | 设置变更立即广播重绘 | §D11 |
+| S13 | **图表回放**（`chartState.playback` + `controls.ts` 的播放按钮） | 从窗口起点回放到当前时刻后自动停止；纯视觉，**绝不写回 Markdown**。上游没有这个交互（认证审计 P1-132） |
+| S14 | **紧凑列表 / 溢出条目**（`compact.ts`） | 窄容器（侧栏）用列表代替悬停提示；溢出条目走 `MarkdownRenderer` 可点跳转（= 原 S8 的实现载体） |
+| S15 | **独立番茄钟**（`pomo.ts`） | 没有任何任务 CLOCK 在跑时，面板表头可启动一个正计时番茄钟；它不写任何块，也不影响 Actual/Planned/Review/螺旋；一旦开始任务 CLOCK 立即被清除 —— CLOCK 永远优先 |
+
+📄 **用户文档覆盖**（认证审计 G1 的 L 区）：S5 / S6 / S10 一度**两份用户文档都没写**，已于 2026-08-26 补进 `README.md` 与 `docs/guide.md`。S6 尤其要紧 —— 它是 §D2 修饰键手势**唯一的挂载面**，用户不可能猜到要按修饰键。
 
 ---
 
 ## 7. 防复发检测器
 
-这些**全是机械判定**，应该固化成 CI 而不是靠人记。理由见 audit §7。
+这些**全是机械判定**，应该固化成 CI 而不是靠人记。可执行版本是 [`scripts/audit-detectors.mjs`](../scripts/audit-detectors.mjs)（`npm test` 会先跑它）。
 
-| 检测器 | 规则 | 曾抓到 |
-|---|---|---|
-| **孤儿 CSS** | `styles.css` 里每个 `.nautilus-log-*` 类必须有代码发射点 | compact 列表族 17 类、图例 6 类、警告面板 2 类、available-slot 3 类 |
-| **孤儿文案** | `UI_COPY` / `EXECUTION_COPY` 每个叶子 key 必须可达 | 26 个 key，直接指向 topbar 未接 |
-| **引擎导出面** | `src/vendor/*.js` 每个 `module.exports` 符号必须可达 | `availableSlotGroups` · `completedTaskClockSummary` · `capacitySummary` · `taskProgress` · `createTimingTopbar` |
-| **键名空间** | vendor 里所有 `settings.get('...')` 字面量必须在 shim 映射表里有条目 | §D7 的 5 个键 |
-| **上游漂移** | 定期 `git log <基线>..HEAD`，vendor 行数差异告警 | 13 commits / +224 行 |
-| **17 函数签名** | 数据层契约的调用签名与上游比对 | `openPrimaryPlan` 加了第二参 |
+⚠️ **本表此前与实现对不上**（认证审计 P1-100 / P1-107 / P1-108）：表里列的第 6 号「17 函数签名」**从来没有实现过**，而实现里的第 6 号「怪癖钉子」表里没有 —— 同时 §8 又管怪癖检查叫「检测器 §7 第 6 号」，台账内部自相矛盾。下表以**实现为准**。
 
-> ⭐ 这几个检测器之所以有效，是因为本移植**CSS 与 i18n 是整份搬的、代码是逐个写的**。两者之差就是一张现成的欠账清单。
+| # | 检测器 | 规则 | 曾抓到 |
+|---|---|---|---|
+| 1 | **孤儿 CSS** | `styles.css` 里每个 `.nautilus-log-*` 类必须有代码发射点（发射面 = `src/*.ts` + **接线过的** vendor 模块，剥注释后匹配） | compact 列表族 17 类、图例 6 类、警告面板 2 类、available-slot 3 类；修掉三处假阴性后又暴露出 `nautilus-log-container/-content/-shell/-collapsed` 这 4 个**真欠账** |
+| 2 | **孤儿文案** | `UI_COPY` / `EXECUTION_COPY` 每个叶子 key 必须可达（消费者同样**排除死模块**） | 26 个 key 直接指向 topbar 未接；正则修好后当场抓到真孤儿 `openPanelHint` |
+| 3 | **引擎导出面** | `src/vendor/*.js` 的导出符号必须可达（CJS `module.exports` **与 ESM `export function` 都认**） | `availableSlotGroups` · `completedTaskClockSummary` · `capacitySummary` · `taskProgress` · `createTimingTopbar` |
+| 4 | **键名空间** | vendor 里所有 `settings.get('...')` 字面量必须在 shim 映射表里有条目 | §D7 那一族（实测 8 个字面量 / 7 个需转换，见 §D7 的订正）。⚠️ 只能抓**字面量**，`POMODORO_STATE_KEY` 这类变量键抓不到 —— 靠 §D7 的第三层兜底 |
+| 5 | **上游漂移** | 设 `UPSTREAM_DIR=<上游 clone>` 后，`src/vendor/*` 与上游同名文件**逐字节比对**；没给就明说「未检查」，不假装通过 | ⚠️ 订正：本行曾写「`git log` + 行数差异告警」，而原实现**只打印一条命令字符串，永远不会红**（认证审计 P1-106）。已改成真比对 |
+| 6 | **怪癖钉子** | [`test/reality-quirks.md`](../test/reality-quirks.md) 里每条 `## RQ-n` 都必须有一行「钉住它的测试」，且那个文件真的存在、真的含那个测试名。**没有豁免** —— 怪癖表只许变长 | 断链即红 |
+| 7 | **测试必须接触被测代码** | 每个 `test/*.test.js` 至少引用一次 `src/`（`require` / esbuild `entryPoints` / `readFileSync` 皆可） | 🔴 `test/locate.test.js`：**把 `main.ts` 的定位算法在测试文件里重写了一遍，然后测那份重写** —— 100% 通过，而被测代码一行都没跑到 |
+
+> 🔴 **「17 函数签名检测器」不在表里，因为它不存在。** 数据层签名的核对方式见 §3 的说明（升级时人工核对 16 个函数 + `getFocusedBlockUid`）。要么有人把它实现出来再加回本表，要么就别在文档里假装有这道保障 —— **假保障比没保障更危险**（同 §8 的结论）。
+
+> ⭐ 前 3 个检测器之所以有效，是因为本移植**CSS 与 i18n 是整份搬的、代码是逐个写的**。两者之差就是一张现成的欠账清单。第 7 个是另一类：它不比较两份东西，只是把「测试有没有碰到产品代码」这件本该不言自明的事变成机械判定。
+
+**baseline 纪律**：已知欠账走 [`scripts/audit-baseline.json`](../scripts/audit-baseline.json)。**新增**的孤儿让退出码非 0，存量不会；修掉一条就从 baseline 里删掉 —— **baseline 只许变短，不许变长**（脚本会把「已修好却还留在 baseline 里」的条目也报成回归）。`__why` 里每条豁免**必须给出真实理由**；给不出来的就标 🔴 真欠账，不许用「待评估」占位。
 
 ---
 
@@ -288,14 +407,22 @@ Roam 专有的「组件前缀文本」，Obsidian 无对应概念。**这是上�
 | Daily Notes 配置 `{format, folder}` 两键齐全 | 真实 Obsidian 在用户没改日期格式时**只给 `{folder}`** |
 | `iterateAllLeaves` 空实现 | 永远走 `vault.process` 分支，而现实中几乎总走 `editor` 分支 |
 | `getMarkdownFiles()` 立即可用 | 真机 `onload` 时 vault 还没索引完（§D6） |
+| jsdom 的 CSSOM **静默丢弃**自定义属性 | 见 `reality-quirks.md` RQ-5 |
+| `createElementNS` 与 `createElement` 在夹具里可互换 | 见 `reality-quirks.md` RQ-6 |
+
+⚠️ 本表此前**停在 4 条**，而 `reality-quirks.md` 已有 6 条（认证审计 P1-141）。**以 `reality-quirks.md` 为准**：那份表是棘轮、只许变长，本表只是导读。
 
 ⇒ **写夹具时先问：现实里这个假设什么时候不成立？** 然后按不成立的那一面写。
+
+### 还有一类：**测试根本没碰到被测代码**
+
+夹具理想化是「喂进去的东西太干净」；这一类更狠 —— **被测代码压根没被加载**。`test/locate.test.js` 把 `main.ts` 的定位算法在测试文件里**重写了一遍**，然后测那份重写：断言全绿、覆盖的却是测试自己。**机械可判**，已固化成 §7 的第 7 号检测器。
 
 ### 三道防线（2026-08-26 立）
 
 | | 是什么 | 抓什么 | 不抓什么 |
 |---|---|---|---|
-| **[`test/reality-quirks.md`](../test/reality-quirks.md)** | 现实怪癖登记表 + 钉子链接检查（检测器 §7 第 6 号） | **棘轮**：已发现的怪癖永远丢不掉 | 发现不了新怪癖 |
+| **[`test/reality-quirks.md`](../test/reality-quirks.md)** | 现实怪癖登记表 + 钉子链接检查（§7 的第 6 号检测器 —— ⚠️ 此处此前与 §7 表冲突，因为那张表里列的第 6 号是个不存在的检测器，见 §7 的订正） | **棘轮**：已发现的怪癖永远丢不掉 | 发现不了新怪癖 |
 | **生产自检** | 预热后缓存仍为空就 `console.warn`（`timing-obsidian.ts`）+ 命令「Diagnose execution layer」 | 真机上的**静默降级**当场出声 | 得有人看 console |
 | **[`scripts/smoke.sh`](../scripts/smoke.sh)** | 装插件 → Force Reload → 读 AX 树断言 → 截图 | **跨模块的组合失效** | 细粒度行为 |
 

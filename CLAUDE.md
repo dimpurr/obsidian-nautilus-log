@@ -49,8 +49,20 @@ git log --format=%ae | grep -vc 'dimpurr@live.com'
 **一个字都不许改**。要适配就在自己的新文件里做。改了它，上游一更新就无法对齐，
 也就没法再拿上游自己的测试当验收。升级流程见该文档 §2。
 
-`src/contract.ts` 是跨模块钉死的类型契约。发现它与实际实现不符时：
+`src/contract.ts` 是跨模块钉死的类型契约（登记在
+[`PORTING-DECISIONS.md`](docs/PORTING-DECISIONS.md) §1.3）。发现它与实际实现不符时：
 **按实际实现写代码 + 把分歧报上来**，不要擅自改契约、也不要将错就错。
+
+## ✅ 改完必须跑
+
+```bash
+UPSTREAM_DIR=<上游 clone> npm test
+```
+
+`npm test` 会先跑 [`scripts/audit-detectors.mjs`](scripts/audit-detectors.mjs)（7 个机械检测器，
+规则见台账 §7）。**新增**的欠账会让退出码非 0；`scripts/audit-baseline.json` 里的存量不会。
+修掉一条就把它从 baseline 删掉 —— **baseline 只许变短**，而且每条豁免都得有**真实理由**，
+「待评估」不算理由。不设 `UPSTREAM_DIR` 时 vendor 漂移检测器会明说「未检查」，不会假装通过。
 
 ## ⚖️ 许可与血统
 
