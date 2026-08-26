@@ -144,7 +144,7 @@ new Function("module", "exports", "require", result.outputFiles[0].text)(
   moduleShim.exports,
   require,
 );
-const { renderSpiral, TOOLTIP_ANCHOR_RADIUS } = moduleShim.exports;
+const { renderSpiral, TOOLTIP_ANCHOR_RADIUS, eventTooltipLines, legendColorFromBg } = moduleShim.exports;
 
 /* ------------------------------------------------------------------ */
 /* Fixtures                                                            */
@@ -667,4 +667,104 @@ test("L2-104 移动端几何量由 SpiralOptions.mobile 决定（默认桌面）
   const again = makeContainer();
   renderSpiral(again, plan, capacity, settings, 600);
   assert.match(again.innerHTML, /<svg[^>]*font-size="14"/, "平台状态不能粘住");
+});
+
+/* ------------------------------------------------------------------ */
+/* C1-047 红针外发光                                                   */
+/* ------------------------------------------------------------------ */
+
+test("C1-047 红针带 4px 红色外发光（上游 component.cljs:1353）", () => {
+  globalThis.document = documentShim;
+  const container = makeContainer();
+  renderSpiral(container, plan, capacity, settings, 600);
+  assert.match(
+    container.innerHTML,
+    /drop-shadow\(0px 0px 4px rgba\(233, 79, 79, 0\.4\)\)/,
+    "红针 <line> 缺这层 filter drop-shadow，与网格线叠在一起时没有光晕可读性",
+  );
+});
+
+/* ------------------------------------------------------------------ */
+/* C1-084 浮层必须含「种类」                                            */
+/* ------------------------------------------------------------------ */
+
+test("C1-084 事件/任务浮层行包含 Event/Task 种类（同 aria 口径）", () => {
+  const copy = { tooltips: { task: "Task", event: "Event" } };
+  const task = eventTooltipLines(
+    { text: "Write report", start: 540, end: 600, meeting: false }, copy);
+  assert.deepEqual(task, ["Write report", "Task · 09:00–10:00 · 1h"],
+    "上游 component.cljs:422 的 meta = kind · time-range · duration —— 种类行曾是缺失的");
+
+  const mtg = eventTooltipLines(
+    { text: "Standup", start: 480, end: 510, meeting: true }, copy);
+  assert.deepEqual(mtg, ["Standup", "Event · 08:00–08:30 · 30m"]);
+});
+
+test("C1-084 浮层的目标接线真的走带种类的行（只修 helper 等于没接上）", () => {
+  // 同 P1-9① 的教训：浮层目标在 renderSpiral 里一份一份喂给 tooltip.attach（
+  // spiral.ts:1530-1534），只让 helper 自带种类、调用处却还原不成器 = 白修。
+  const src = require("node:fs").readFileSync(
+    require("node:path").join(__dirname, "..", "src", "spiral.ts"), "utf8");
+  assert.match(src, /lines: eventTooltipLines\(ev, copy\)/,
+    "renderSpiral 喂给浮层的行必须是 eventTooltipLines 的产物");
+});
+
+/* ------------------------------------------------------------------ */
+/* C1-024 图例缺省色的 update-opacity-str 兜底                          */
+/* ------------------------------------------------------------------ */
+
+test("C1-024 图例缺省色不复产出非法五分量（rgba 换透明度、var(…) 不动）", () => {
+  assert.equal(
+    legendColorFromBg("rgba(255,255,255,0)"),
+    "rgba(255,255,255,1)",
+    "曾产出 rgba(255,255,255,0, 1) —— 五分量非法值",
+  );
+  assert.equal(
+    legendColorFromBg("rgba(233, 79, 79, 0.4)"),
+    "rgba(233, 79, 79,1)",
+    "带空格的 alpha 也一样命中（上游 update-opacity-str 同样把空格吞掉，见 component.cljs:545）",
+  );
+  assert.equal(
+    legendColorFromBg("var(--nautilus-log-task-fill)"),
+    "var(--nautilus-log-task-fill)",
+    "CSS 变量引用一个字符都不能动 —— 一动就成了 var(--x, 1) 这种 fallback 语法",
+  );
+});
+
+test("C1-024 图例兜底真的走 legendColorFromBg（只修 helper 等于没接上）", () => {
+  const src = require("node:fs").readFileSync(
+    require("node:path").join(__dirname, "..", "src", "spiral.ts"), "utf8");
+  assert.match(src, /legendColorFromBg\(resolvedBg\)/,
+    "renderSlice 的缺省图例色必须过 update-opacity-str 兜底");
+});
+
+/* ------------------------------------------------------------------ */
+/* L1-078 空闲预览的占用集合与「眼睛」开关无关                           */
+/* ------------------------------------------------------------------ */
+
+test("L1-078 关掉 showDone 不该把干完的时间标成 Available slot（同 L1-077）", () => {
+  globalThis.document = documentShim;
+  // done 任务锚定 900（15:00）、时长 60 → 引擎反推占用 [840,900]。
+  // 此刻 600、clampToNow 只裁「过去」→ 该区间落在窗口【内】，
+  // 是「占用」还是「空档」只剩占用集合这一道闸在决定 —— 正好钉住它。
+  const donePlan = {
+    events: [],
+    tasks: [{ uid: "tk-done", string: "写周报 60m", duration: 60, done: true, doneAt: 900 }],
+    malformed: [],
+  };
+  const noTasks = { ...capacity, scheduledTasks: [] };
+  const shown = makeContainer();
+  renderSpiral(shown, donePlan, noTasks, settings, 600, { showDone: true });
+  const hidden = makeContainer();
+  renderSpiral(hidden, donePlan, noTasks, settings, 600, { showDone: false });
+
+  const strip = (l) => l.replace(/^Available (slot|now) /, "").replace(/ \S+$/, "");
+  const labels = slotLabels(hidden.innerHTML).map(strip);
+  assert.deepEqual(labels, ["10:00–14:00", "15:00–21:00"],
+    "done 任务的 [840,900] 是【占用】，关掉眼睛也不许它变成可插的空档");
+  assert.deepEqual(
+    slotLabels(shown.innerHTML).map(strip),
+    labels,
+    "占用集合不受 showDone 门控（同 L1-077；上游 component.cljs:1294/1333 不喂 done）",
+  );
 });

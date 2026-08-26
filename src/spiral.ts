@@ -478,6 +478,15 @@ interface SliceOptions {
   progress?: number;
 }
 
+/** 认证审计 C1-024：图例缺省色的兜底 = 上游 `update-opacity-str`
+ * （component.cljs:543-546）：颜色以「,<透明度>)」结尾就把透明度换掉，
+ * 否则原样返回 —— `var(--…)` 引用绝不能动。
+ * 曾用 `replace(")", ", 1)")`：`rgba(255,255,255,0)` ⇒ 非法五分量
+ * `rgba(255,255,255,0, 1)`；`var(--x)` ⇒ 被改成语义完全不同的 CSS fallback。 */
+export function legendColorFromBg(bg: string, opacity = "1"): string {
+  return /,\s*[\d.]+\)$/.test(bg) ? bg.replace(/,\s*[\d.]+\)$/, `,${opacity})`) : bg;
+}
+
 function renderSlice(opts: SliceOptions): Element {
   const {
     startAngle, endAngle, innerRadius, outerRadius, center, settings,
@@ -540,7 +549,7 @@ function renderSlice(opts: SliceOptions): Element {
   const resolvedDash = strokeDasharray === undefined ? "2,2" : strokeDasharray;
   const resolvedBg = bgColor === undefined ? "rgba(255,255,255,0)" : bgColor;
   const resolvedLegend = legendColor === undefined
-    ? resolvedBg.replace(")", ", 1)").replace("rgba(", "rgba(")
+    ? legendColorFromBg(resolvedBg)
     : legendColor;
   const resolvedWeight = fontWeight === undefined ? "normal" : fontWeight;
 
@@ -884,6 +893,9 @@ function nowNeedleComponent(center: Point, timelineMinute: number, label: string
       "stroke-width": 2,
       "stroke-linecap": "round",
       class: "nautilus-log-now-needle-line",
+      // 认证审计 C1-047：上游 component.cljs:1353 给 <line> 挂红色外发光 ——
+      // 没有它红针和盘上的密网格叠在一起时缺一层可读性光晕。
+      style: { filter: "drop-shadow(0px 0px 4px rgba(233, 79, 79, 0.4))" },
     }));
 }
 
@@ -1388,10 +1400,13 @@ export function renderSpiral(
   // 🔴 认证审计 L1-066：判据用引擎的 `showAvailableSlots`（log-core.js:342
   //    `!past || simulated`），不自造公式。自造的 `showNow || !showElapsed` 在
   //    「今天但此刻已过收工时间」和「回放游标落在窗口外」两处与上游分叉。
+  // 🔴 认证审计 L1-078：占用集合与 L1-077（pastOccupiedEvents）同一口径——
+  //    **恒含已完成任务**，不受「眼睛」开关门控。用受门控的 `allEvents` 会在
+  //    关掉 showDone 时把刚干完的时间标成「Available slot」（同源的显示谎言）。
   const offerFreeSlots = ds ? ds.showAvailableSlots === true : true;
   const freeSlots = offerFreeSlots
     ? core.availableSlotGroups({
-      events: freeGaps(allEvents, workdayStart, workdayEnd)
+      events: freeGaps(pastOccupiedEvents, workdayStart, workdayEnd)
         .map(([a, b]) => ({ start: a, end: b, freetime: true })),
       startMinutes: workdayStart,
       endMinutes: workdayEnd,
@@ -1531,11 +1546,7 @@ export function renderSpiral(
       el,
       startMinutes: ev.start,
       endMinutes: ev.end,
-      lines: [
-        truncate(ev.text, 60),
-        `${minutesToTime(ev.start)}–${minutesToTime(ev.end)}`,
-        durationLabel(ev.end - ev.start),
-      ],
+      lines: eventTooltipLines(ev, copy),   // C1-084
     });
   });
 
@@ -1568,4 +1579,25 @@ export function renderSpiral(
 function truncate(text: string, max: number): string {
   const t = text.replace(/^[-*+]\s*(\[[ xX]\]\s*)?/, "").trim();
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+}
+
+/** 事件/任务浮层的内容行，与上游 hover-tooltip-content 对齐
+ * （component.cljs:418-423 的 meta = `kind-label · time-range · duration`）：
+ * 第一行标题、第二行「种类 · 区间 · 时长」。
+ * 认证审计 C1-084：种类行曾整个丢失（只活在 aria-label 里）。
+ * 第二行空段（如学不到 kind-label）不出现时不会留下孤立的「 · 」。 */
+export function eventTooltipLines(
+  ev: { text: string; start: number; end: number; meeting: boolean },
+  copy: Record<string, Record<string, string>>,
+): string[] {
+  const kindLabel = copy.tooltips?.[ev.meeting ? "event" : "task"] || "";
+  const meta = [
+    kindLabel,
+    `${minutesToTime(ev.start)}–${minutesToTime(ev.end)}`,
+    durationLabel(ev.end - ev.start),
+  ].filter(Boolean).join(" · ");
+  return [
+    truncate(ev.text, 60),
+    meta,
+  ];
 }
