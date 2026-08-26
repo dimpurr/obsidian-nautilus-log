@@ -105,7 +105,10 @@ export const DESC_LENGTH_SLIDER = { min: 14, max: 28, step: 1 } as const;
  *  `0 disables`。所以下界必须是 15，不能是 0：
  *  滑块允许 0 而 `clampMinutes(…, false)` 又把 0 退回 45，
  *  用户拖到 0 保存后回来看见 45，UI 文案与实现自相矛盾（audit §P1-8）。 */
-export const POMODORO_SLIDER = { min: 15, max: 180, step: 5 } as const;
+// 上游列表是 [15, 20, 25, 30, 45, 50, 60, 90] —— 端点 15/90。
+// 🔴 曾误写成 max: 180，与本节注释「量程必须与上游列表端点一致」自相矛盾
+//    （认证审计 E1-020 抓到）。滑块 step 5 是有意的超集（上游是离散选项）。
+export const POMODORO_SLIDER = { min: 15, max: 90, step: 5 } as const;
 
 /** 结束整点的显示标签。上游 index.js:376-380：结束 ≤ 开始（且不是 24）时
  *  追加「· 次日 / · next day」，否则用户无从知道 21→2 是跨午夜。 */
@@ -225,7 +228,7 @@ export class NautilusLogSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
           // 立刻生效：开则起 runtime + 状态栏，关则全部拆掉（不留定时器/订阅）。
           if (value) this.plugin.startExecutionLayer();
-          else this.plugin.stopExecutionLayer();
+          else this.plugin.stopExecutionLayer({ closeActive: true });
           // 🔴 已打开的侧栏必须一并刷新，否则用户开了开关却什么也没发生，
           //    要关掉侧栏再打开才出现 —— 看起来就像开关坏了。
           this.plugin.refreshSidebars();

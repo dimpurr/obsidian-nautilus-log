@@ -646,7 +646,12 @@ export async function updateGraphBlock(clockUid: string, newContent: string): Pr
   if (!lines) throw new Error('CLOCK block not found.');
   const newParsed = parseClockLineFromLine(newContent);
   if (!newParsed) throw new Error('Invalid CLOCK update.');
-  const idx = findClockIndexByStart(lines, toMs(newParsed.start), true);
+  // 🔴 必须走 locateClockLine —— 它的唯一调用者是 reconcileLegacyOverlap
+  //    （timing-runtime.js:375），场景定义就是「同文件多条 running CLOCK」。
+  //    旧的 findClockIndexByStart 全文件扫、取首个命中、歧义不拒写，会把
+  //    该保留的那条关掉；而写回乐观锁在这里【不构成防护】：expected 取自
+  //    已经选错的那一行，内容当然匹配（认证审计 A1-113 抓到，P0-3 只修了一半）。
+  const idx = locateClockLine(lines, { clockUid, start: newParsed.start } as TimingEntry, true);
   if (idx < 0) throw new Error('The CLOCK block changed while updating. Aborting.');
   const rawCurrent = lines[idx];
   const next = clockPrefix(rawCurrent) + newContent;
@@ -654,7 +659,11 @@ export async function updateGraphBlock(clockUid: string, newContent: string): Pr
   return true;
 }
 
-/** 勾选完成任务：`- [ ]` → `- [x]`。 */
+/** 勾选完成任务：`- [ ]` → `- [x]`。
+ *  🔴 不能只 `replace('[ ]','[x]')` —— `normalizeTaskString` 把**任何非 x 标记**
+ *  （`- [/]` 进行中、`- [-]` 取消…）都判成 TODO，于是它们进 Plan、吃容量、
+ *  能 Clock In，但完成时却无从下手、必抛错。上游同一情形走前缀路径会成功。
+ *  （认证审计 A1-127） */
 export async function completeTask(taskUid: string): Promise<boolean> {
   const parsed = splitUid(taskUid);
   if (!parsed) throw new Error('Task not found.');
@@ -665,7 +674,9 @@ export async function completeTask(taskUid: string): Promise<boolean> {
   if (timingCore.taskStatus(normalizeTaskString(rawTask)) !== 'TODO') {
     throw new Error('Only unfinished TODO tasks can be completed.');
   }
-  const next = rawTask.replace(/\[ \]/, '[x]');
+  // `- [ ]` / `- [/]` / `- [-]` … 任何非 x 的标记都当成未完成（与
+  // normalizeTaskString 的判定一致），统一改写成 `[x]`。
+  const next = rawTask.replace(/\[[^\]]?\]/, '[x]');
   if (next === rawTask) throw new Error('Could not check off the task.');
   await writeChange(parsed.path, { kind: 'replace', line: parsed.line, expected: rawTask, next });
   // 按内容确认（行号可能漂移）。
@@ -782,14 +793,25 @@ function defer(fn: () => void, ms: number): void {
   if (typeof timer === 'function') timer(fn, ms);
 }
 
+/** 从指定 leaf 取 editor（拿不到就返回 null，由调用方决定要不要回落）。 */
+function leafEditor(leaf?: { view?: unknown } | null): Editor | null {
+  return (leaf?.view as { editor?: Editor } | undefined)?.editor || null;
+}
+
 function activeEditor(): Editor | null {
   const a = getApp();
   const leaf = (a.workspace as unknown as { getActiveLeaf?: () => { view?: unknown } }).getActiveLeaf?.();
   return (leaf?.view as { editor?: Editor } | undefined)?.editor || null;
 }
 
-function revealLine(line: number): void {
-  const editor = activeEditor();
+/** 把光标定位到某一行。
+ *  🔴 `leaf` 必须传 —— 早期实现取的是 `getActiveLeaf()` 的 editor，
+ *  而 `getRightLeaf(false).openFile()` **不设 active** ⇒ 光标跳进用户当前
+ *  正在编辑的主笔记，行号还属于另一个文件。且 startTask 默认带侧栏意图
+ *  （timing-runtime.js:396），**每次 Clock In 都会撞一次**，60ms 后再来一遍。
+ *  （认证审计 A1-152 / 上一轮 P1-7） */
+function revealLine(line: number, leaf?: { view?: unknown } | null): void {
+  const editor = leafEditor(leaf) || activeEditor();
   if (!editor) return;
   const target = Math.max(0, Math.min(line, editor.lineCount() - 1));
   editor.setCursor({ line: target, ch: 0 });
@@ -805,8 +827,8 @@ async function openTaskLeaf(taskUid: string, side: 'main' | 'right'): Promise<vo
   const leaf = side === 'right' ? a.workspace.getRightLeaf(false) : a.workspace.getLeaf(false);
   if (!leaf) throw new Error('Could not open the task: no workspace leaf available.');
   await leaf.openFile(f as TFile);
-  revealLine(parsed.line);
-  window.setTimeout(() => revealLine(parsed.line), 60);
+  revealLine(parsed.line, leaf);
+  window.setTimeout(() => revealLine(parsed.line, leaf), 60);
 }
 
 export async function openTaskInMainWindow(taskUid: string): Promise<{ ok: boolean }> {

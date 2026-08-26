@@ -104,3 +104,33 @@ test('P1-9③ 锚点走 getScreenCTM 换算，而不是「viewBox 缩放 = 1」'
     `锚点应落在屏幕坐标上（≈366.6px），实际 ${left} —— 未换算时会是 ≈178.3`);
   tt.destroy();
 });
+
+/* ─────────── RQ-8：jsdom 的布局尺寸恒为 0 ───────────
+ * `getBoundingClientRect()` 全 0、`offsetWidth/Height` 恒 0。于是引擎的
+ * 翻面与安全边距分支在这条路上**一次都没执行过**，宿主相对定位整段删掉
+ * 也不会红（V1 变异实验实测）。形态比 RQ-1 更隐蔽：分支进对了，只是数据
+ * 是退化值。见 test/reality-quirks.md RQ-8。 */
+test('🔴 RQ-8 定位必须减去宿主偏移（jsdom 尺寸恒 0，掩盖了这段）', () => {
+  const {host, el, tt} = setup();
+  const tip = host.querySelector('.nautilus-log-tooltip');
+
+  // 同一次 hover，用两个只有原点不同的宿主各算一次：
+  // 减了宿主偏移 => 两次的 style.left/top 应当【相同】（都是宿主内坐标）；
+  // 没减 => 两次会差出宿主偏移量。这样断言与引擎算出的具体数值无关。
+  const at = (left, top) => {
+    host.getBoundingClientRect = () => ({ left, top, width: 600, height: 400,
+      right: left + 600, bottom: top + 400, x: left, y: top });
+    el.dispatchEvent(new dom.window.Event('mouseleave'));
+    el.dispatchEvent(new dom.window.Event('mouseenter'));
+    return [parseFloat(tip.style.left), parseFloat(tip.style.top)];
+  };
+  const [l0, t0] = at(0, 0);
+  const [l1, t1] = at(120, 60);
+  assert.ok(Number.isFinite(l0) && Number.isFinite(t0), '必须算出具体坐标');
+  assert.equal(l1, l0,
+    '浮层坐标是【宿主内】坐标 —— 宿主整体平移不该改变它。差值 '
+    + `${l1 - l0} 说明没减 hostBox.left`);
+  assert.equal(t1, t0,
+    `同上，差值 ${t1 - t0} 说明没减 hostBox.top`);
+  tt.destroy();
+});

@@ -340,6 +340,15 @@ test("P1-8 盘心第一行是页名（逗号切两段、每段截 16 字）", ()
 /* ------------------------------------------------------------------ */
 
 test("P1-9① hover 锚点半径 = 8 + 最大外径，不是内圈 50", () => {
+  // 🔴 只断言常量值是空转的 —— V1 变异实验证明：把 spiral.ts:1456 的
+  //    `radius: TOOLTIP_ANCHOR_RADIUS` 改回 `radius: 50`，这条照样绿。
+  //    必须断言它**真的被传给了 tooltip.attach**。
+  {
+    const src = require("node:fs").readFileSync(
+      require("node:path").join(__dirname, "..", "src", "spiral.ts"), "utf8");
+    assert.match(src, /radius:\s*TOOLTIP_ANCHOR_RADIUS/,
+      "tooltip.attach 的 radius 必须用 TOOLTIP_ANCHOR_RADIUS，不能写死内圈半径");
+  }
   assert.strictEqual(TOOLTIP_ANCHOR_RADIUS, 158,
     "上游 component.cljs:427 传 (+ 8 max-outer-radius)；传内圈 50 会把提示锚在盘面【内部】");
 });

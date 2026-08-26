@@ -550,6 +550,9 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
     // 🔴 底层 openTaskInRightSidebar 早就有，之前只是没接线。
     identity.title = `${text.identity.locate} · ⌥ / ⇧`;
     identity.addEventListener('click', (ev: MouseEvent) => {
+      // ⌥ 与普通点击在这里【本来就同义】（都是主编辑区定位）——
+      // title 写着「⌥ / ⇧」是为了让用户知道 ⇧ 有别的行为，不是说 ⌥ 另有语义。
+      // 状态栏那边不同：普通点击是「打开侧栏」，所以 ⌥ 在那里才有区分意义（§D2）。
       runAction(() => runtime.locate({ sidebar: ev.shiftKey }));
     });
 

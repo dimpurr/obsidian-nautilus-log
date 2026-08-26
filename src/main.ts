@@ -751,7 +751,14 @@ export default class NautilusLogPlugin extends Plugin {
           },
         },
       }) as unknown as TimingRuntime;
-      void this.timingRuntime.initialize();
+      // 🔴 必须 await + catch：initialize() 是异步的，`void` 会让 rejection
+      //    逃出上面那个 try/catch —— 状态栏已经挂上、runtime 却永停 'loading'，
+      //    没有 ticker、用户零提示（认证审计 T2-019 / E1-054）。
+      void this.timingRuntime.initialize().catch((err: unknown) => {
+        console.error('[Nautilus Log] 执行层初始化失败', err);
+        new Notice('[Nautilus Log] 执行层初始化失败，已停用。详见 console。');
+        this.stopExecutionLayer();
+      });
       const el = this.addStatusBarItem();
       // 状态栏点击三态（见 PORTING-DECISIONS.md §D2）：
       //   普通点击 → 打开侧栏（Obsidian 这边最有用的默认）
@@ -784,11 +791,22 @@ export default class NautilusLogPlugin extends Plugin {
     }
   }
 
-  stopExecutionLayer(): void {
+  /** 拆掉执行层。
+   *  🔴 `closeActive` 区分两种场景 —— 上游 index.js:235-263 的 stopTiming：
+   *    - **用户关主开关** => `disable()`：先把所有【在跑的 CLOCK 关掉】、
+   *      清两套番茄钟持久态，再 destroy。不这么做就会把一条永不闭合的
+   *      running CLOCK 永久留在用户笔记里（认证审计 T2-107 / E1-017 双路命中）。
+   *    - **插件卸载** => 只 `destroy()`：用户没说要结束工作，下次启动还要接着算。 */
+  stopExecutionLayer({ closeActive = false }: { closeActive?: boolean } = {}): void {
     this.statusBar?.destroy();
     this.statusBar = null;
-    try { this.timingRuntime?.destroy(); } catch { /* ignore */ }
+    const rt = this.timingRuntime;
     this.timingRuntime = null;
+    if (!rt) return;
+    try {
+      if (closeActive) rt.disable();   // disable() 内部会 destroy
+      else rt.destroy();
+    } catch { /* 拆不干净也不能把插件带崩 */ }
   }
 
   async activateSidebar(): Promise<void> {

@@ -12,6 +12,11 @@
   --nautilus-log-event-fill: #fee18a;
   --nautilus-log-task: #0899c8;
   --nautilus-log-task-fill: rgba(8, 153, 200, 0.28);
+  /* 🔴 spiral.ts:158,162 一直引用这两个变量，而它们从没被定义过 —— var() 无
+   * fallback 时在 computed-value time 直接失效，紧急切片退回继承色（认证审计
+   * C1-021 抓到）。取值对齐上游 extension.css:275 的 #ea0f0f。 */
+  --nautilus-log-urgent: #ea0f0f;
+  --nautilus-log-urgent-fill: rgba(234, 15, 15, 0.26);
   --nautilus-log-control-icon: #888;
   --nautilus-log-now: #d44b4b;
   --nautilus-log-past-overlay: rgba(86, 101, 116, 0.08);
@@ -32,6 +37,8 @@
   --nautilus-log-warning: #f4b75d;
   --nautilus-log-event: #f2c14e;
   --nautilus-log-event-fill: #6d570f;
+  --nautilus-log-urgent: #ff6b6b;
+  --nautilus-log-urgent-fill: rgba(255, 107, 107, 0.3);
   --nautilus-log-task: #47b8df;
   --nautilus-log-task-fill: rgba(71, 184, 223, 0.32);
   --nautilus-log-control-icon: #aaa;

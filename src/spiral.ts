@@ -1396,7 +1396,11 @@ export function renderSpiral(
   // 紧凑日程清单：无条件渲染，显示与否交给 styles.css 的 @container 查询
   //   （同上游 component.cljs:1221）。🔴 少了它，窄容器下 slice-group 被
   //   CSS 隐藏、hover 又被关掉 => 侧栏里读不出任何精确时间。
-  renderCompactEventList(container, allEvents, copy as unknown as Parameters<typeof renderCompactEventList>[2]);
+  // 🔴 紧凑（侧栏）时默认【折叠】—— 上游 guide 中英两版都明写
+  //    「keep the Schedule section folded」，实现见 component.cljs:1730
+  //    `(reset! compact-list-open-state (not sidebar?))`（认证审计 G1-049）。
+  renderCompactEventList(container, allEvents,
+    copy as unknown as Parameters<typeof renderCompactEventList>[2], { open: !compact });
 
   // ── 紧凑模式 ──────────────────────────────────────────────────────────
   // 上游 guide：「Compact sidebar charts omit hover tooltips」——

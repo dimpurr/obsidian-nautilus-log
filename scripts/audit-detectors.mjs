@@ -43,6 +43,35 @@ function vendorSources() {
     .map((f) => ({ path: `src/vendor/${f}`, text: read(`src/vendor/${f}`) }));
 }
 
+/** 真正**接线过**的 vendor 模块（从 src/*.ts 的 require 出发做传递闭包）。
+ *  🔴 2026-08-26 修：孤儿 CSS 检测器原先把 `src/vendor/*.js` 全体当作「发射面」，
+ *  于是只出现在 `timing-topbar.js` 里的类看起来「有人发射」—— 而那个模块
+ *  **零 import**（§D3：挂载被 .rm-topbar 门控，改为手写重实现）。
+ *  结果是检测器把大约 24 个 `.nautilus-log-timing__*` 孤儿全藏了起来 ——
+ *  正是它本该抓的那一类欠账。**死模块不是发射面。** */
+function reachableVendorSources() {
+  const all = vendorSources();
+  const byName = new Map(all.map((v) => [v.path.replace('src/vendor/', '').replace(/\.js$/, ''), v]));
+  const own = ownSources().map((f) => f.text).join('\n');
+  const seen = new Set();
+  const queue = [];
+  for (const [name] of byName) {
+    if (new RegExp(`vendor/${name}['"\`]`).test(own)) queue.push(name);
+  }
+  while (queue.length) {
+    const name = queue.shift();
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const mod = byName.get(name);
+    if (!mod) continue;
+    for (const [other] of byName) {
+      if (seen.has(other)) continue;
+      if (new RegExp(`\\./${other}['"\`]`).test(mod.text)) queue.push(other);
+    }
+  }
+  return all.filter((v) => seen.has(v.path.replace('src/vendor/', '').replace(/\.js$/, '')));
+}
+
 /* ── 1. 孤儿 CSS ─────────────────────────────────────────────────────────── */
 function orphanCss() {
   const css = read('styles.css');
@@ -51,13 +80,24 @@ function orphanCss() {
     [...css.matchAll(/\.(nautilus-log-[a-zA-Z0-9_-]+)/g)].map((m) => m[1]),
   );
   // 发射面 = 我们的 TS + vendor 的 JS（vendor 也发射 class）。
-  const emitted = [...ownSources(), ...vendorSources()].map((f) => f.text).join('\n');
+  // 🔴 注释不是发射面。`nautilus-log-container` 只在 header.ts 的一段注释里
+  //    出现过（那段注释恰恰是在解释「这个类从没被发射过」），却因此逃出了
+  //    检测 —— 认证审计 C2-056/057 就是这么漏的。剥注释再匹配。
+  const stripComments = (t) => t
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
+  const emitted = [...ownSources(), ...reachableVendorSources()]
+    .map((f) => stripComments(f.text)).join('\n');
   const orphans = [];
   for (const cls of classes) {
-    // 类名常常是拼出来的（模板字符串 / BEM 修饰），所以用「去掉修饰后缀」再匹配一次。
+    // 类名常常是拼出来的（模板字符串 / BEM 修饰），所以「去掉修饰后缀」再匹配一次。
+    // 🔴 2026-08-26 修：这里原先还有第三条兜底 `emitted.includes(suffix)`
+    //    —— 把 `nautilus-log-` 前缀剥掉再匹配。后果是 `container` / `collapsed`
+    //    / `content` / `shell` 这类**普通英文词**在源码里随处可见，于是这几个
+    //    类永远「命中」，逃出了 baseline。认证审计 C2-056/057/091 正是这么漏的。
+    //    前缀是这套类名唯一的身份，剥掉它就没有身份了 —— 该兜底整条删除。
     const base = cls.replace(/--[a-zA-Z0-9_-]+$/, '');
-    const suffix = cls.replace(/^nautilus-log-/, '');
-    if (emitted.includes(cls) || emitted.includes(base) || emitted.includes(suffix)) continue;
+    if (emitted.includes(cls) || emitted.includes(base)) continue;
     orphans.push(cls);
   }
   return orphans.sort();
@@ -68,13 +108,19 @@ function orphanCopy() {
   const out = [];
   for (const { path, text } of vendorSources()) {
     // 文案表形如：  key: 'value',  —— 只取看起来像用户可见字符串的行。
-    const table = /(?:UI_COPY|EXECUTION_COPY)\s*=\s*\{/.exec(text);
+    // 🔴 原正则只认 `X = {`，而 timing-core 写的是 `X = Object.freeze({` ——
+    //    整张 EXECUTION_COPY 从来没被检查过（认证审计 P1-102 抓到，
+    //    手工补检当场发现真孤儿 openPanelHint）。
+    const table = /(?:UI_COPY|EXECUTION_COPY)\s*=\s*(?:Object\.freeze\()?\{/.exec(text);
     if (!table) continue;
     const body = text.slice(table.index);
     const keys = new Set(
       [...body.matchAll(/^\s{4,}([a-zA-Z][a-zA-Z0-9]*)\s*:\s*['"]/gm)].map((m) => m[1]),
     );
-    const consumers = [...ownSources(), ...vendorSources()]
+    // 🔴 消费者一侧也必须排除【死模块】：timing-topbar.js 消费了大量文案 key，
+    //    但它零 import（§D3）。把它算作消费者就等于宣布那些 key「有人用」——
+    //    与孤儿 CSS 检测器犯过的是同一个错（认证审计 P1-102 / S1）。
+    const consumers = [...ownSources(), ...reachableVendorSources()]
       .filter((f) => f.path !== path)
       .map((f) => f.text)
       .join('\n')
@@ -96,9 +142,13 @@ function unreachableExports() {
   const own = ownSources().map((f) => f.text).join('\n');
   const vendors = vendorSources();
   for (const { path, text } of vendors) {
+    // 🔴 原先只认 CJS `module.exports = {}`；timing-topbar.js 是 ESM
+    //    `export function …`，于是整个模块的导出面从没被检查过（P1-053）。
     const block = /module\.exports\s*=\s*\{([\s\S]*?)\n\};/.exec(text);
-    if (!block) continue;
-    const names = [...block[1].matchAll(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*,?\s*$/gm)].map((m) => m[1]);
+    const names = block
+      ? [...block[1].matchAll(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*,?\s*$/gm)].map((m) => m[1])
+      : [...text.matchAll(/^export\s+(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)/gm)].map((m) => m[1]);
+    if (!names.length) continue;
     // 可达 = 我们直接调 || 别的 vendor 文件调（那条链的入口另有检测器管）
     const others = vendors.filter((v) => v.path !== path).map((v) => v.text).join('\n');
     for (const n of names) {
@@ -130,11 +180,25 @@ function unmappedSettingKeys() {
 
 /* ── 5. 上游漂移 ─────────────────────────────────────────────────────────── */
 function upstreamDrift() {
+  // 🔴 原实现只 return 一句提示字符串，**永远不会红**（P1-106）。
+  //    真正能机械判定的是：本地 vendor 与 UPSTREAM_DIR 里同名文件是否逐字节相同。
+  //    没给 UPSTREAM_DIR 就明说「未检查」，不假装通过。
   const doc = exists('docs/PORTING-DECISIONS.md') ? read('docs/PORTING-DECISIONS.md') : '';
   const baseline = /vendor 基线 \| `([0-9a-f]{7,40})`/.exec(doc)?.[1] || null;
-  return { baseline, note: baseline
-    ? `对照命令：git -C <upstream> log --oneline ${baseline}..HEAD`
-    : '未在 PORTING-DECISIONS.md 里找到 vendor 基线（已查：正则 /vendor 基线 \\| `sha`/）' };
+  const up = process.env.UPSTREAM_DIR;
+  if (!up) {
+    return { baseline, checked: false, diffs: [],
+      note: `未检查（设 UPSTREAM_DIR=<上游 clone> 可启用逐字节比对）。基线 ${baseline || '未登记'}` };
+  }
+  const diffs = [];
+  for (const { path } of vendorSources()) {
+    const name = path.replace('src/vendor/', '');
+    const theirs = join(up, 'src', name);
+    if (!existsSync(theirs)) { diffs.push(`${name}: 上游没有同名文件`); continue; }
+    if (readFileSync(theirs, 'utf8') !== read(path)) diffs.push(`${name}: 与上游不一致`);
+  }
+  return { baseline, checked: true, diffs,
+    note: diffs.length ? `vendor 与上游有 ${diffs.length} 处不一致` : 'vendor 与上游逐字节相同' };
 }
 
 /* ── 6. 怪癖钉子 ─────────────────────────────────────────────────────────

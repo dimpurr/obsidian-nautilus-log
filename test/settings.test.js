@@ -98,7 +98,18 @@ test('clampMinutes: 范围内的值原样保留', () => {
  *  上游 index.js:412 的选项是 [15,20,25,30,45,50,60,90]，**没有 0**。
  *  这条测试把「滑块能拖到的每一个值都必须原样存下来」钉死 —— 只要下界回到 0 就红。 */
 test('P1-8 番茄钟：滑块量程内的每个值都能原样保存（不再拖得到、存不下）', () => {
-  assert.equal(POMODORO_SLIDER.min, 15, '上游最小选项是 15，不是 0');
+  // 🔴 真相源必须是【上游的字面量列表】，不能拿 POMODORO_SLIDER 自己喂自己 ——
+  //    V1 变异实验证明：把 max 改成 240 时这条测试照样全绿，因为它把常量
+  //    喂进 clampMinutes 当上界，永远自洽（认证审计 V1）。
+  const UPSTREAM_POMODORO_ITEMS = [15, 20, 25, 30, 45, 50, 60, 90];  // index.js:413
+  assert.equal(POMODORO_SLIDER.min, UPSTREAM_POMODORO_ITEMS[0],
+    '滑块下界必须等于上游列表的第一项');
+  assert.equal(POMODORO_SLIDER.max, UPSTREAM_POMODORO_ITEMS.at(-1),
+    '滑块上界必须等于上游列表的最后一项 —— 否则用户能拖到上游选不到的值');
+  for (const v of UPSTREAM_POMODORO_ITEMS) {
+    assert.equal(clampMinutes(v, POMODORO_SLIDER.max, 45), v,
+      `上游列表里的 ${v} 必须原样保留`);
+  }
   for (let v = POMODORO_SLIDER.min; v <= POMODORO_SLIDER.max; v += POMODORO_SLIDER.step) {
     assert.equal(clampMinutes(v, POMODORO_SLIDER.max, 45), v,
       `滑块能选到 ${v}，clampMinutes 却把它改掉了`);

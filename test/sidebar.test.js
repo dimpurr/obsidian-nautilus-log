@@ -78,7 +78,14 @@ function makeDom() {
   globalThis.window = dom.window;
   globalThis.document = dom.window.document;
   // Pin "today" so path resolution is deterministic regardless of wall clock.
-  dom.window.moment = () => ({ format: () => "2026-08-24" });
+  // 🔴 RQ-7：早期这里是 `format: () => "2026-08-24"` —— **不看参数**。
+  //    于是 sidebar.ts 里 `formatDate(opts.format || 'YYYY-MM-DD')` 就算把用户
+  //    配置的格式整个丢掉，测试也照样绿（V1 变异实验实测）。
+  //    现在按真实 moment 的语义实现最小 token 集，夹具**不再比现实宽容**。
+  dom.window.moment = () => ({
+    format: (fmt) => String(fmt ?? "YYYY-MM-DD")
+      .replace(/YYYY/g, "2026").replace(/MM/g, "08").replace(/DD/g, "24"),
+  });
   return dom;
 }
 
@@ -305,4 +312,17 @@ test("🔴 P1-8 侧栏空态：没有 Daily Notes 配置时的兜底提示也双
   assert.match(zh, /没找到 Daily Notes 插件配置/);
   const en = await renderEmptyState({ ...SETTINGS, language: "en" }, null);
   assert.match(en, /No Daily Notes plugin config found/);
+});
+
+/* ─────────── RQ-7：用户自定义日期格式必须被真正使用 ───────────
+ * 见 test/reality-quirks.md RQ-7。夹具的 moment 曾经**不看 format 参数**，
+ * 于是「把用户配置的格式整个丢掉」这种实现也能全绿（V1 变异实验实测）。 */
+test('🔴 RQ-7 Daily Notes 配了非默认日期格式时，路径必须按它来算', async () => {
+  const app = makeApp({ 'Journal/24-08-2026.md': MULTI_BLOCK },
+                       { folder: 'Journal', format: 'DD-MM-YYYY' });
+  const found = await resolvePrimaryPlan(app, SETTINGS);
+  assert.ok(found,
+    '丢掉 opts.format 会退回 YYYY-MM-DD，路径指向一个不存在的文件 —— '
+    + '用户看到「今天没有 Nautilus Log」，而他明明配置好了');
+  assert.equal(found.path, 'Journal/24-08-2026.md');
 });
