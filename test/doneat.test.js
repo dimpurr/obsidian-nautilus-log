@@ -86,3 +86,8 @@ test('🔑 d18 有锚点 => 引擎能算出历史区间', () => {
   const slice=core.historicalDoneSlice({done:true,doneAt:t.doneAt,duration:t.duration,defaultDuration:15});
   assert.ok(slice); assert.equal(slice.end,1080); assert.equal(slice.start,1040);
 });
+
+test('P1-068 分钟省略的锚点也不进图例（解析认 d11，剥离就必须认）', () => {
+  assert.equal(P('- [x] 学术社交 40m d11').tasks[0].doneAt, 660);
+  assert.equal(taskDescription('- [x] 学术社交 40m d11', 22), '学术社交');
+});

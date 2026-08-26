@@ -445,3 +445,82 @@ test("warning panel degrades safely when plan.warnings is absent (P1-8)", () => 
     assert.strictEqual(container.children.length, 0);
   }
 });
+
+/* ------------------------------------------------------------------ */
+/* 认证审计 L1-031 / P1-068 · 标题清洗统一到 parser.stripTaskTokens      */
+/* ------------------------------------------------------------------ */
+
+test("L1-031 紧凑行：标题不含时间段，时间段只出现在独立的 <time> 列", () => {
+  // 上游的形状是「标题栏不含区间、时间列单独显示」——两边都要钉住，
+  // 否则统一实现时很容易连 <time> 列一起剥没。
+  const container = host();
+  renderCompactEventList(
+    container,
+    [{ uid: "n.md:1", text: "- 08:30-09:30 起床", start: 510, end: 570, meeting: true }],
+    copyEn,
+  );
+  assert.strictEqual(textOf(container.querySelector(".nautilus-log-compact-title")), "起床");
+  assert.strictEqual(textOf(container.querySelector(".nautilus-log-compact-time")), "08:30–09:30");
+});
+
+test("L1-031 紧凑行的标题与盘上图例同源（引擎 token 文法，非自写正则）", () => {
+  const container = host();
+  renderCompactEventList(
+    container,
+    [
+      { uid: "n.md:1", text: "9am-10am Standup", start: 540, end: 600, meeting: true },
+      { uid: "n.md:2", text: "13:00 to 14:00 Review", start: 780, end: 840, meeting: true },
+    ],
+    copyEn,
+  );
+  assert.deepStrictEqual(
+    Array.from(container.querySelectorAll(".nautilus-log-compact-title"), textOf),
+    ["Standup", "Review"],
+    "自写的 HH:MM-HH:MM 正则盖不住 am/pm 与 'to' 这两种引擎认的写法",
+  );
+});
+
+test("P1-068 紧凑行也剥分钟省略 / 大写的 dHH:MM（此前只认小写且要求分钟）", () => {
+  const container = host();
+  renderCompactEventList(
+    container,
+    [
+      { uid: "n.md:1", text: "- [x] Write report 30m d14", start: 810, end: 840, done: true },
+      { uid: "n.md:2", text: "- [x] Ship it 30m D9:05", start: 840, end: 870, done: true },
+    ],
+    copyEn,
+  );
+  assert.deepStrictEqual(
+    Array.from(container.querySelectorAll(".nautilus-log-compact-title"), textOf),
+    ["Write report", "Ship it"],
+    "解析侧认 d14 / D9:05，剥离侧就必须也认（认证审计 P1-068）",
+  );
+});
+
+test("L1-031 紧凑行保留 Obsidian 的 [/] [-] 自定义复选框状态剥离", () => {
+  const container = host();
+  renderCompactEventList(
+    container,
+    [
+      { uid: "n.md:1", text: "- [/] In progress 30m", start: 600, end: 630 },
+      { uid: "n.md:2", text: "- [-] Cancelled 30m", start: 660, end: 690 },
+    ],
+    copyEn,
+  );
+  assert.deepStrictEqual(
+    Array.from(container.querySelectorAll(".nautilus-log-compact-title"), textOf),
+    ["In progress", "Cancelled"],
+  );
+});
+
+test("C2-107 警告左栏拿到解析层给的标题就不再显示 L{n} 行号", () => {
+  const container = host();
+  renderWarningPanel(
+    container,
+    { warnings: [{ line: 11, uid: "n.md:11", code: "sameTime", text: "每日站会" }] },
+    copyEn,
+  );
+  const row = container.querySelector("li");
+  assert.strictEqual(textOf(row.firstChild), "每日站会");
+  assert.doesNotMatch(textOf(row), /L12/, "左栏恒为行号正是 C2-107 的症状");
+});

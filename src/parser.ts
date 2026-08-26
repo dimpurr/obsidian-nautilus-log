@@ -61,9 +61,13 @@ const logCore = require('./vendor/log-core') as unknown as {
 };
 
 const CHECKBOX_RE = /^[-*+]\s*\[( |x|X)\]\s*/;
-/** 裸列表标记（无复选框）。事件行推荐写成 `- 08:30-09:30 起床`，
- *  与 `- [ ]` 在阅读模式下缩进一致；不写 `- ` 也仍然接受。 */
-const LIST_MARKER_RE = /^[-*+]\s+/;
+/** 显示用的宽松列表标记 / 复选框（认证审计 L1-031：紧凑列表此前用自己的一套
+ *  正则，比这里多认 `[/]` `[-]` 两种 Obsidian 自定义状态）。合并到一处后
+ *  两条路的「标记剥离」宽度必须取【并集】，否则紧凑列表会退化。
+ *  ⚠️ 只用于显示清洗（stripTaskTokens），**不参与** parsePlan 的分类判定 ——
+ *  分类仍走 CHECKBOX_RE，行为一个字不变。 */
+const DISPLAY_LIST_MARKER_RE = /^\s*[-*+]\s*/;
+const DISPLAY_CHECKBOX_RE = /^\[[^\]]?\]\s*/;
 /* ────────────────────────────────────────────────────────────────────────────
  * `d…` token 家族：优先级与互斥（audit §P1-3 / §P1-8，锚点语义见 §D8）
  *
@@ -175,18 +179,47 @@ function displayWidth(text: string): number {
   return w;
 }
 
-export function taskDescription(line: string, descLength: number): string {
-  const { cleanedText } = logCore.parseDurationToken({ text: line });
-  // 先剥复选框，再剥裸列表标记 —— 否则 `- 08:30-09:30 起床` 的图例会带着 "- "。
-  const description = cleanedText
-    .replace(CHECKBOX_RE, '')
-    .replace(LIST_MARKER_RE, '')
+/** 一行原文 → 纯标题（**不截断**）。全仓唯一的「标题清洗」实现。
+ *
+ *  认证审计 L1-031 🔴：此前有两份实现 ——
+ *    · 这里（`taskDescription`）**不剥时间区间** ⇒ 螺旋图例 / 溢出面板显示
+ *      `08:30-09:30 起床`，而上游 `component.cljs:698` 的 `:description`
+ *      来自 `parse-time-range` 的 `:cleaned-str`，显示的是 `起床`；
+ *    · `compact.ts` 自写了一条 `TIME_RANGE_RE` 把它剥掉了 ⇒ 紧凑列表对、盘上错。
+ *  两处不一致本身就是症状，故统一到这一处，并且**用引擎自己的 cleanedText**
+ *  剥区间，永不与引擎的 token 文法漂移（引擎认 `9-10` / `9am-10am` / `–` / `to`，
+ *  自写正则一条都覆盖不到）。
+ *
+ *  认证审计 P1-068（契约漏洞 2）：`dHH:MM` 的分钟可省 + 大小写不敏感，
+ *  剥离一律走 `DONE_AT_STRIP_RE`（＝解析用正则的同源 `gi` 版），
+ *  所以 `d14` 能解析就一定能剥掉，不会再出现「解析了却剥不掉」。
+ *
+ *  ⚠️ 紧凑列表要显示时间段，但那是它**单独的 `<time>` 列**（`compact.ts`
+ *  的 `minutesToTime(start)–minutesToTime(end)`），来自已解析的分钟数，
+ *  不是标题里的原文 token —— 与上游「标题栏不含区间、时间列单独显示」一致。 */
+export function stripTaskTokens(line: string): string {
+  // 先剥标记：`- [ ] ` / `- ` / `[x] `。放在最前面，后面的 token 剥离才不受影响。
+  let text = String(line ?? '')
+    .replace(DISPLAY_LIST_MARKER_RE, '')
+    .replace(DISPLAY_CHECKBOX_RE, '');
+  // 时间区间 → 交给引擎（L1-031）。没有区间时 parseTimeRangeToken 返回 null，
+  // 此时保持原文不动。
+  const range = logCore.parseTimeRangeToken({ text });
+  if (range) text = range.cleanedText;
+  // 时长 token → 同样交给引擎。
+  text = logCore.parseDurationToken({ text }).cleanedText;
+  const description = text
     // 先剥进度再剥锚点：`d50%` 的 `%` 让锚点正则失配，顺序其实无关，
     // 但两条都必须剥 —— 少剥一条就会像 §D8 记的那样把 token 漏进图例。
     .replace(PROGRESS_STRIP_RE, ' ')
     .replace(DONE_AT_STRIP_RE, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+  return description;
+}
+
+export function taskDescription(line: string, descLength: number): string {
+  const description = stripTaskTokens(line);
   // 🔴🔴 不能直接把 descLength 交给 truncateTextToWidth。
   //    它默认用 canvas 按【像素】测量（measureText().width），
   //    而 descLength 语义是【字符数】（上游 15-30）=> 22 会被当成 22 像素，
@@ -203,6 +236,24 @@ export function taskDescription(line: string, descLength: number): string {
     measure: displayWidth,
   });
 }
+
+/** 认证审计 L1-042：上游 `log-core.js:222` `resolveRendererSettings` 里有
+ *  `runtime.language === 'zh' ? 'zh' : 'en'` 这道归一化，本移植没有 ——
+ *  `data.json` 被手改成 `language: "de"` 时会把 `"de"` 直接喂 `uiCopy`，
+ *  而引擎的 `uiCopy` 对未知语言退【中文】、本移植的 `LOCAL_COPY` 退英文，
+ *  两边口径当场分叉（同一块里一半中文一半英文）。归一化后未知语言一律 `'en'`。 */
+export function normalizeLanguage(language: unknown): 'en' | 'zh' {
+  return language === 'zh' ? 'zh' : 'en';
+}
+
+/** 解析层产出的告警。比 `contract.ts` 的 `PlanWarning` 多一个 `text`：
+ *  认证审计 C2-107 —— 警告面板左栏上游显示的是**任务标题**
+ *  （`component.cljs:1699` 的 `(:description event)`），而本移植的 parser
+ *  从不产 `text`，`compact.ts describeWarning` 的 `warning.text` 分支是死路，
+ *  左栏恒为 `L12` 这样的行号。
+ *  ⚠️ `contract.ts` 归别的工作线所有，本轮没改；等它给 `PlanWarning` 补上
+ *  `text?: string` 之后这个本地类型就可以删掉（见报告）。 */
+export type PlanWarningWithText = PlanWarning & { text?: string };
 
 function lineUid(sourcePath: string, lineIndex: number): LineId {
   return `${sourcePath}:${lineIndex}`;
@@ -264,15 +315,26 @@ export function parsePlan(source: string, options: ParseOptions): ParsedPlan {
   const events: FixedEvent[] = [];
   const tasks: FlexTask[] = [];
   const malformed: ParsedPlan['malformed'] = [];
-  const warnings: PlanWarning[] = [];
+  const warnings: PlanWarningWithText[] = [];
   const lines = source.split('\n');
 
   // 告警文案一律取引擎自己的 i18n 表（audit §P1-8），别在本移植里再写一份 ——
   // 上游 component.cljs:578-583 就是这么把 warningCode 换成文案的。
-  const warningCopy = (logCore.uiCopy(settings.language) || {}).warnings || {};
-  const pushWarning = (code: string, line: number, uid: LineId) => {
+  // 语言先归一（认证审计 L1-042）。
+  const warningCopy = (logCore.uiCopy(normalizeLanguage(settings.language)) || {}).warnings || {};
+  /** 认证审计 C2-103：上游的警告面板吃的是 `text-events`，
+   *  而 `text-events` 只装【未完成】的待办与事件（`component.cljs:1890`）——
+   *  已经勾掉的行不再报排期问题。本移植此前对【所有】解析到的行都报，
+   *  于是昨天勾完的会议还在刷「起止时间不能相同」。
+   *  认证审计 C2-107：左栏带上标题（＝上游 `(:description event)`）。 */
+  const pushWarning = (code: string, line: number, uid: LineId, lineText: string) => {
     if (!code) return;
-    warnings.push({ line, uid, code, message: warningCopy[code] || code });
+    if (DONE_RE.test(lineText)) return;
+    warnings.push({
+      line, uid, code,
+      message: warningCopy[code] || code,
+      text: stripTaskTokens(lineText),
+    });
   };
 
   // 计划正文的【顶层缩进】：以第一条非空行为准。比它更深的行是【子项】，
@@ -310,7 +372,7 @@ export function parsePlan(source: string, options: ParseOptions): ParsedPlan {
         meeting: true,
         done: DONE_RE.test(text),
       });
-      pushWarning(range.warningCode || '', index, uid);
+      pushWarning(range.warningCode || '', index, uid, text);
       continue;
     }
 
@@ -331,7 +393,7 @@ export function parsePlan(source: string, options: ParseOptions): ParsedPlan {
           meeting: true,
           done: DONE_RE.test(text),
         });
-        pushWarning(pinned.warningCode, index, uid);
+        pushWarning(pinned.warningCode, index, uid, text);
         continue;
       }
       const anchorMinutes = parseDoneAt(text);

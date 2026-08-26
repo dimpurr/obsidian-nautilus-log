@@ -28,6 +28,7 @@
 
 import * as logCoreModule from "./vendor/log-core";
 import type { Capacity, FlexTask, NautilusSettings } from "./contract";
+import { stripTaskTokens } from "./parser";
 import {
   appendPercentItem,
   appendReading,
@@ -39,8 +40,6 @@ import {
 
 interface CompactCore {
   formatDuration(minutes: number): string;
-  parseDurationToken(args: { text?: string }):
-    { minutes: number; token: string; cleanedText: string } | null;
 }
 const core = (logCoreModule as unknown) as CompactCore;
 
@@ -98,34 +97,28 @@ function makeDetails(
   return { details, summary };
 }
 
-/** 行首列表标记 / 复选框 / `HH:MM-HH:MM` 时间段 token。 */
+/** 行首列表标记 / 复选框。**只**用于警告面板的左栏（`describeWarning`）——
+ *  标题清洗已经统一到 `parser.ts stripTaskTokens`（认证审计 L1-031）。 */
 const LIST_MARKER_RE = /^\s*[-*+]\s*/;
 const CHECKBOX_RE = /^\[[ xX/\-]\]\s*/;
-const TIME_RANGE_RE = /^\d{1,2}:\d{2}\s*[-–~]\s*\d{1,2}:\d{2}\s*/;
-/** §D8 自创的完成时刻锚点 `d13:45`。引擎的 taskTitle() 不认识它（§D8「已知泄漏」），
- *  紧凑列表这条路自己剥干净，别让 `d14:30` 跟着标题跑到侧栏里。 */
-const DONE_AT_RE = /\s*\bd\d{1,2}:\d{2}\b/g;
 
 /** 把一行原文变成可读标题 —— 对齐上游事件上的 `:description`。
  *
- *  剥掉列表标记 / 复选框 / 时间段 token / 时长 token / 完成锚点：时间与时长在
- *  这一行的 `<time>` 单元格里已经有了，紧凑列的宽度只够放标题本身。
+ *  剥掉列表标记 / 复选框 / 时间段 token / 时长 token / 进度 / 完成锚点：时间与
+ *  时长在这一行的 `<time>` 单元格里已经有了，紧凑列的宽度只够放标题本身。
+ *  🔴 认证审计 L1-031 / P1-068：此前这里自写了 `TIME_RANGE_RE` + 一条**要求
+ *  分钟、区分大小写**的 `dHH:MM` 正则，与 `parser.ts` 的解析正则不一致
+ *  （`d14` 会被解析成锚点却剥不掉）。现在整条清洗都委托给
+ *  `parser.ts stripTaskTokens` —— 全仓一份实现，盘上图例与紧凑列表同源。
  *  ⚠️ 只清理不截断：截断交给 CSS 的 text-overflow（`.nautilus-log-compact-title`
  *  本来就是单行省略号），不像盘上的图例那样按 descLength 硬截 —— 侧栏里读时间
  *  与标题是这个列表存在的唯一理由，能多显示一个字是一个字。 */
 function cleanTitle(text: string): string {
-  const stripped = String(text ?? "")
-    .replace(LIST_MARKER_RE, "")
-    .replace(CHECKBOX_RE, "")
-    .replace(TIME_RANGE_RE, "")
-    .replace(DONE_AT_RE, "");
-  let cleaned = stripped;
   try {
-    cleaned = core.parseDurationToken({ text: stripped })?.cleanedText ?? stripped;
+    return stripTaskTokens(text);
   } catch {
-    cleaned = stripped;
+    return String(text ?? "").trim();
   }
-  return cleaned.trim();
 }
 
 /* ------------------------------------------------------------------ */
@@ -179,7 +172,11 @@ export function renderCompactEventList(
   const { details, summary } = makeDetails(
     "nautilus-log-compact-details",
     "nautilus-log-compact-summary",
-    options.open !== false,          // 上游侧栏默认展开（render-context-probe）
+    // 认证审计 G1-049：这条注释原先写着「上游侧栏默认展开」，**把上游语义写反了**：
+    // 上游 `component.cljs:1730` 是 `(reset! compact-list-open-state (not sidebar?))`
+    // —— 侧栏（紧凑）默认**折叠**，主视图才展开。默认值留作展开只是
+    // 调用方不传时的兑底；真正的判据由 `spiral.ts` 传 `{open: !compact}`。
+    options.open !== false,
   );
   summary.textContent =
     `${panels.schedule || "Schedule"} · ${items.length} ${itemLabel(copy, items.length)}`;
@@ -373,11 +370,15 @@ export function renderWarningPanel(
   return details;
 }
 
-/** 左栏是「哪一行出的问题」。解析层的 warning 不带正文，所以用 `uid`
- *  （`filepath:line`，见 PORTING-DECISIONS.md §1）的行号部分，退回 `line`。 */
+/** 左栏是「哪一行出的问题」。
+ *  认证审计 C2-107：上游放的是 `(:description event)` ＝**任务标题**，
+ *  `parser.ts` 现在会把它塞进 `warning.text`（此前从不产这个字段，
+ *  于是这里恒走 `L12` 行号那条兜底，上游语义整个丢了）。
+ *  没有 `text` 时仍退回 `uid`（`filepath:line`，见 PORTING-DECISIONS.md §1）
+ *  的行号部分，再退回 `line` —— 别的调用方直接递原文也不会炸。 */
 function describeWarning(warning: PlanWarning): string {
-  // ⚠️ 这里【不】走 cleanTitle：出问题的正是那个时间段 token（跨午夜 / 起止相同），
-  //    把它剥掉，用户就看不出是哪一条了。只剥列表标记与复选框。
+  // ⚠️ 这里【不】再清洗一遍：`text` 已经是解析层给的标题。调用方若直接递原文
+  //    （测试里就有），只剥列表标记与复选框，其余原样保留。
   if (warning.text) {
     return String(warning.text)
       .replace(LIST_MARKER_RE, "")

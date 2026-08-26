@@ -271,3 +271,87 @@ test('正常计划 warnings 为空数组（不是 undefined）', () => {
   const plan = parser.parsePlan('09:00-10:00 会议\n- [ ] 写周报 30m', { sourcePath: 'f.md', settings: DEFAULTS });
   assert.deepEqual(plan.warnings, []);
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// 认证审计 L1-031 · 图例/溢出面板不得显示时间段 token
+// ────────────────────────────────────────────────────────────────────────────
+
+test('L1-031 taskDescription 剥掉时间区间（上游 :description 就是 cleaned-str）', () => {
+  // 回退验证：把 stripTaskTokens 里的 parseTimeRangeToken 那两行删掉 => 这条挂。
+  assert.equal(parser.taskDescription('- 08:30-09:30 起床', 22), '起床');
+  assert.equal(parser.taskDescription('08:30-09:30 起床', 22), '起床');
+  assert.equal(parser.taskDescription('- [x] 12:30-14:00 Lunch with Ada', 22), 'Lunch with Ada');
+});
+
+test('L1-031 区间剥离走引擎的 token 文法，不是自写正则', () => {
+  // 自写的 /\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}/ 一条都盖不住这些形状 ——
+  // 这正是「两份实现」必然漂移的证据（引擎 TIME_RANGE_TOKEN_RE）。
+  assert.equal(parser.taskDescription('9am-10am Standup', 22), 'Standup');
+  assert.equal(parser.taskDescription('9–10 Deep work', 22), 'Deep work');
+  assert.equal(parser.taskDescription('13:00 to 14:00 Review', 22), 'Review');
+});
+
+test('L1-031 区间被剥掉后 descLength 预算全给正文', () => {
+  // 带区间时旧实现要用 11 格宽去放 "08:30-09:30 "，正文当场被截。
+  const out = parser.taskDescription('- 08:30-09:30 Nautilus Log 插件完善', 22);
+  assert.equal(out, 'Nautilus Log 插件完善');
+});
+
+test('L1-031 没有区间的行原样保留（parseTimeRangeToken 返回 null 时不动）', () => {
+  assert.equal(parser.taskDescription('- [ ] 写周报 30m', 22), '写周报');
+  assert.equal(parser.taskDescription('- [ ] 09:00 写周报 30m', 22), '09:00 写周报');
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// 认证审计 P1-068（契约漏洞 2）· dHH:MM 解析与剥离必须同一套语法
+// ────────────────────────────────────────────────────────────────────────────
+
+test('P1-068 能解析成锚点的写法一定能被剥掉（分钟可省 / 大小写不敏感）', () => {
+  for (const line of ['- [x] 写稿 30m d14:30', '- [x] 写稿 30m d14', '- [x] 写稿 30m D14:30', '- [x] 写稿 30m D9']) {
+    const { tasks } = parser.parsePlan(line, { sourcePath: 'f.md', settings: DEFAULTS });
+    assert.ok(typeof tasks[0].doneAt === 'number', `${line} 应被解析成锚点`);
+    assert.equal(parser.taskDescription(line, 22), '写稿', `${line} 的锚点没剥干净`);
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// 认证审计 C2-107 / C2-103 · 警告面板的左栏与数据面
+// ────────────────────────────────────────────────────────────────────────────
+
+test('C2-107 warning 带上任务标题（上游 component.cljs:1699 的 :description）', () => {
+  const plan = parser.parsePlan('- 09:00-09:00 每日站会', { sourcePath: 'f.md', settings: DEFAULTS });
+  assert.equal(plan.warnings.length, 1);
+  assert.equal(plan.warnings[0].text, '每日站会',
+    'text 缺失 ⇒ compact.ts describeWarning 恒退回 L{n} 行号');
+});
+
+test('C2-107 钉住事件（只写开始时刻）的 warning 同样带标题', () => {
+  const plan = parser.parsePlan('- [ ] 09:00 写周报 0m', { sourcePath: 'f.md', settings: { ...DEFAULTS, todoDuration: 0 } });
+  for (const w of plan.warnings) assert.equal(typeof w.text, 'string');
+});
+
+test('C2-103 已完成的行不进警告面板（上游只喂未完成的 text-events）', () => {
+  const plan = parser.parsePlan(
+    '- [x] 09:00-09:00 已开完的会\n- [ ] 10:00-10:00 还没开的会',
+    { sourcePath: 'f.md', settings: DEFAULTS },
+  );
+  assert.equal(plan.warnings.length, 1, '勾掉的行不该再报排期问题');
+  assert.equal(plan.warnings[0].uid, 'f.md:1');
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// 认证审计 L1-042 · language 归一化（非 'zh' 一律 'en'）
+// ────────────────────────────────────────────────────────────────────────────
+
+test('L1-042 未知语言归一到 en（引擎 uiCopy 未知语言会退中文）', () => {
+  assert.equal(parser.normalizeLanguage('de'), 'en');
+  assert.equal(parser.normalizeLanguage(undefined), 'en');
+  assert.equal(parser.normalizeLanguage('zh'), 'zh');
+  // 端到端：data.json 被手改成 "de" 时，警告文案必须是英文，
+  // 否则同一个块里 LOCAL_COPY 出英文、引擎文案出中文，当场分叉。
+  const plan = parser.parsePlan('09:00-09:00 会议', {
+    sourcePath: 'f.md', settings: { ...DEFAULTS, language: 'de' },
+  });
+  assert.equal(plan.warnings[0].message, logCore.uiCopy('en').warnings.sameTime);
+  assert.notEqual(plan.warnings[0].message, logCore.uiCopy('zh').warnings.sameTime);
+});
