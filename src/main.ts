@@ -60,7 +60,10 @@ const BLOCK_LANGS = ['nautilus', 'naut'] as const;
 const FENCE_OPEN_RE = new RegExp(`^\\s*\`\`\`+\\s*(?:${BLOCK_LANGS.join('|')})\\s*$`);
 const FENCE_CLOSE_RE = /^\s*```+\s*$/;
 
-class NautilusLogView extends MarkdownRenderChild {
+/** 🔴 导出是为了**可测**：这个类是代码块渲染的全部，历史上零覆盖
+ *  （认证审计 V1「把 locateInText 改成 return null，320 条测试一条不红」）。
+ *  test/block-render.test.js bundle 的就是它本体。 */
+export class NautilusLogView extends MarkdownRenderChild {
   private timer: number | null = null;
   private metadataListener: ((file: TFile) => void) | null = null;
 
@@ -240,12 +243,20 @@ class NautilusLogView extends MarkdownRenderChild {
     //    看昨天 => 从当天【终点】算（＝那天原本的完整容量，"还剩多少"没有意义）
     //    看明天 => 从当天【起点】算
     //    看今天 => 从此刻算
+    // 🔴 认证审计 L1-063：回放时的「此刻」必须是**回放帧**，不是真实时钟。
+    //    上游 component.cljs:1456 把 `now-time-atom` 直接 reset 成 simulated-minute，
+    //    :1836 再以它作 `:nowMinutes` 喂 timelineDayState —— 于是 elapsedThrough /
+    //    scheduleFrom / capacityFrom 三者全都随帧走。
+    //    本移植原先只把帧喂给 `renderSpiral(..., {playbackMinute})`，dayState 仍吃
+    //    真实时钟 ⇒ 流逝斜纹冻在真实 now、跑在针**前面**，弹性任务也不随帧重排
+    //    （回放动画只剩针在动）。
+    const playbackMinute = this.chartState.playback?.minute ?? null;
     const dayState = resolveDayState({
       sourcePath: this.sourcePath,
       startMinutes: schedule.startMinutes,
       endMinutes: schedule.endMinutes,
-      nowMinutes: nowMinutes(),
-      playback: this.chartState.playback !== null,
+      nowMinutes: playbackMinute ?? nowMinutes(),
+      playback: playbackMinute !== null,
     });
     const capacityBase = logCore.calculateCapacity({
       startMinutes: schedule.startMinutes,
@@ -338,7 +349,7 @@ class NautilusLogView extends MarkdownRenderChild {
       this.spiral?.destroy();
       this.spiral = renderSpiral(chart, plan, capacity, settings, nowMinutes(), {
         showDone: this.chartState.showDone,
-        playbackMinute: this.chartState.playback?.minute ?? null,
+        playbackMinute,
         dayState,
         // P0-4：把执行层的 CLOCK 记录喂进去，已完成任务才画得出【实际】耗时。
         clockEntries: this.plugin.timingRuntime?.getSnapshot?.()?.entries ?? [],
@@ -420,6 +431,40 @@ export function focusedTaskUid(snapshot: TimingSnapshot | null): string | null {
   return typeof uid === 'string' && uid ? uid : null;
 }
 
+/* ── §D8 · `dHH:MM` 完成锚点 ─────────────────────────────────────────────────
+ * 🔴 P1「契约漏洞 2」/ P1-068：语法的**唯一权威**是 parser.ts:89 的
+ *    `DONE_AT_RE = /(?:^|\s)d(\d{1,2})(?::(\d{1,2}))?(?=\s|$)/i`
+ *    —— **分钟可省**（`d14` 合法）、**大小写不敏感**（`D14:30` 合法）。
+ *    这里的去重判断原先写成 `/(?:^|\s)d\d{1,2}:\d{2}(?=\s|$)/`（要求分钟、
+ *    区分大小写）⇒ 写了 `d14` 的行会被 parser 认成锚点，却在这里被判成
+ *    「还没有锚点」而被**再追加一个** `d16:40`，一行两个锚点。现已对齐。
+ * 抽成导出的纯函数是为了可测 —— 命令回调里的分支没有任何办法从外部触达。 */
+const DONE_AT_ANCHOR_RE = /(?:^|\s)d\d{1,2}(?::\d{1,2})?(?=\s|$)/i;
+
+/** 一行是否已经带了完成锚点（语法同 parser.ts 的 DONE_AT_RE）。 */
+export function hasDoneAtAnchor(line: string): boolean {
+  return DONE_AT_ANCHOR_RE.test(String(line ?? ''));
+}
+
+/** `Date` → `dHH:MM`。 */
+export function doneAtStamp(now: Date): string {
+  return `d${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+}
+
+/** 勾选当前行并追加完成锚点。返回新行；不该改动时返回 `null`
+ *  （非任务行 / 已有锚点 —— 见 P1-070：静默不动是有意的）。 */
+export function completeWithTimestamp(line: string, stamp: string): string | null {
+  if (typeof line !== 'string') return null;
+  if (hasDoneAtAnchor(line)) return null;                 // 已有锚点，不重复追加
+  let next = line;
+  if (/^\s*[-*+]\s*\[ \]/.test(next)) {
+    next = next.replace(/^(\s*[-*+]\s*)\[ \]/, '$1[x]');    // 未勾选 => 勾上
+  } else if (!/^\s*[-*+]\s*\[[xX]\]/.test(next)) {
+    return null;                                          // 不是任务行，不动
+  }
+  return `${next.replace(/\s+$/, '')} ${stamp}`;
+}
+
 export type TimingMenuAction = 'clock-in' | 'clock-out';
 
 export interface TimingMenuContext {
@@ -471,6 +516,64 @@ const SETTINGS_KEY_MAP: Record<string, keyof NautilusSettings> = {
   'recent-retention-minutes': 'recentRetentionMinutes',
   'forgotten-timer-minutes': 'forgottenTimerMinutes',
 };
+
+/* ── 设置版本戳 + 一次性迁移（认证审计 E1-039 / E1-040）────────────────────────
+ * 上游 index.js:197-204 / :275-286 有两条版本化迁移（`product-defaults-version`
+ * = "timing-v1"、`language-default-version` = "en-v1"）。本移植此前**整类没有**
+ * 这个机制（`grep -rni "migrat|defaults-version|schemaVersion"` 零命中）。
+ *
+ * 🔴 有意偏离：**只建机制，不照抄那两条迁移**。理由：
+ *   · `prefix-str` 在本移植里根本不存在（Roam 组件前缀，无对应物）。
+ *   · `workday-end === 24 → 21` 修的是上游自己历史上写坏的默认值；本移植的
+ *     DEFAULT_SETTINGS 从来就是 21，而 24 在本移植的滑块上是**合法选择**
+ *     （setLimits(1,24,1)）—— 照抄会静默毁掉用户主动选的「到 24:00」。
+ *   · `initializeLanguage` 的「首次强制写 en」同理：本移植默认已是 en，
+ *     强写只会把老用户主动选的 zh 抹掉。
+ *   它**仍然必要**的那一半是「非 en/zh 一律重置」这条**净化**——与版本戳无关，
+ *   每次 load 都该做，见 sanitizeSettings。
+ */
+
+/** 当前设置结构版本。数据里的 `_settingsVersion` 落后于它时按表补跑迁移。 */
+export const SETTINGS_VERSION = 1;
+
+export interface SettingsMigration {
+  /** 跑完这条之后数据处于哪个版本。表按 `to` 升序执行。 */
+  to: number;
+  migrate(data: Record<string, unknown>): void;
+}
+
+/** 一次性迁移表。**现在是空的，这是有意的**（理由见上）。
+ *  以后要修某个历史上写坏的值，就往这里加一条并把 SETTINGS_VERSION +1。 */
+export const SETTINGS_MIGRATIONS: SettingsMigration[] = [];
+
+/** 按版本戳补跑迁移。返回新数据与是否真的动过（动过才值得回写磁盘）。 */
+export function migrateSettingsData(
+  data: Record<string, unknown>,
+  fromVersion: number,
+): { data: Record<string, unknown>; version: number; changed: boolean } {
+  const next = { ...data };
+  let version = Number.isFinite(fromVersion) ? Number(fromVersion) : 0;
+  let changed = false;
+  for (const step of [...SETTINGS_MIGRATIONS].sort((a, b) => a.to - b.to)) {
+    if (step.to <= version) continue;
+    step.migrate(next);
+    version = step.to;
+    changed = true;
+  }
+  if (version !== SETTINGS_VERSION) { version = SETTINGS_VERSION; changed = true; }
+  return { data: next, version, changed };
+}
+
+/** 非法值净化 —— 上游 initializeLanguage 里【与版本戳无关】的那一条：
+ *  语言不是 `en`/`zh` 一律重置为 `en`。
+ *  🔴 必须做：`loadSettings` 的 `Object.assign` 会把 data.json 里任何脏值
+ *     （手改、旧版本、同步冲突）原样带进 `execContext().language` 喂给 vendor。
+ *     `localCopy()` 会静默落 en，vendor 不会。 */
+export function sanitizeSettings(settings: NautilusSettings): NautilusSettings {
+  const out = { ...settings };
+  if (out.language !== 'en' && out.language !== 'zh') out.language = 'en';
+  return out;
+}
 
 export default class NautilusLogPlugin extends Plugin {
   settings: NautilusSettings = { ...DEFAULT_SETTINGS };
@@ -564,17 +667,9 @@ export default class NautilusLogPlugin extends Plugin {
       name: 'Complete task with timestamp / 勾选并打完成时间戳',
       editorCallback: (editor: Editor) => {
         const cursor = editor.getCursor();
-        const line = editor.getLine(cursor.line);
-        const now = new Date();
-        const stamp = `d${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-        if (/(?:^|\s)d\d{1,2}:\d{2}(?=\s|$)/.test(line)) return;   // 已有锚点，不重复追加
-        let next = line;
-        if (/^\s*[-*+]\s*\[ \]/.test(next)) {
-          next = next.replace(/^(\s*[-*+]\s*)\[ \]/, '$1[x]');      // 未勾选 => 勾上
-        } else if (!/^\s*[-*+]\s*\[[xX]\]/.test(next)) {
-          return;                                                    // 不是任务行，不动
-        }
-        editor.setLine(cursor.line, `${next.replace(/\s+$/, '')} ${stamp}`);
+        const next = completeWithTimestamp(editor.getLine(cursor.line), doneAtStamp(new Date()));
+        if (next === null) return;
+        editor.setLine(cursor.line, next);
       },
     });
 
@@ -724,8 +819,29 @@ export default class NautilusLogPlugin extends Plugin {
     };
   }
 
-  startExecutionLayer(): void {
-    if (this.timingRuntime) return;
+  /** 主开关的唯一入口 —— 上游 index.js:245-268 `setTrackingEnabled` 的等价物。
+   *  🔴 认证审计 E1-016：**开失败必须把设置回滚成 false**。
+   *     原先只 `console.error` + 拆掉运行时，开关却停在「开」⇒ 用户看到一个
+   *     开着但毫无效果的开关，下次启动继续尝试、继续失败。
+   *  🔴 E1-017/E1-059：关的时候走 `stopExecutionLayer({closeActive:true})`
+   *     ⇒ `runtime.disable()`（关掉所有在跑的 CLOCK + 清番茄钟持久态）。
+   *  返回**最终**的开关值（可能与入参不同）。 */
+  async setTrackingEnabled(enabled: boolean): Promise<boolean> {
+    this.settings.actualTimeTracking = enabled;
+    await this.saveSettings();
+    if (enabled && !this.startExecutionLayer()) {
+      this.settings.actualTimeTracking = false;           // 回滚
+      await this.saveSettings();
+      new Notice('[Nautilus Log] 执行层启动失败，已关闭「实际用时」开关。详见 console。');
+    }
+    if (!enabled) this.stopExecutionLayer({ closeActive: true });
+    this.refreshSidebars();
+    return this.settings.actualTimeTracking;
+  }
+
+  /** 返回 `false` 表示没起来（调用方据此回滚设置，见 setTrackingEnabled）。 */
+  startExecutionLayer(): boolean {
+    if (this.timingRuntime) return true;
     try {
       this.timingRuntime = createTimingRuntime({
         // 🔴 runtime 需要 get 和 set 两个 —— 它用 settings.set 持久化番茄钟状态
@@ -754,16 +870,25 @@ export default class NautilusLogPlugin extends Plugin {
       // 🔴 必须 await + catch：initialize() 是异步的，`void` 会让 rejection
       //    逃出上面那个 try/catch —— 状态栏已经挂上、runtime 却永停 'loading'，
       //    没有 ticker、用户零提示（认证审计 T2-019 / E1-054）。
+      // 🔴 initialize() 是异步的，失败发生在 setTrackingEnabled 早已返回之后
+      //    —— 所以回滚也必须在这里再做一次（E1-016 的异步那一半）。
       void this.timingRuntime.initialize().catch((err: unknown) => {
         console.error('[Nautilus Log] 执行层初始化失败', err);
         new Notice('[Nautilus Log] 执行层初始化失败，已停用。详见 console。');
         this.stopExecutionLayer();
+        this.settings.actualTimeTracking = false;
+        void this.saveSettings();
       });
       const el = this.addStatusBarItem();
       // 状态栏点击三态（见 PORTING-DECISIONS.md §D2）：
       //   普通点击 → 打开侧栏（Obsidian 这边最有用的默认）
       //   ⌥ Alt-click → 在主编辑区定位今天的计划
       //   ⇧ Shift-click → 把计划送右侧栏
+      // 🔴 认证审计 P1-046：三态此前**只存在于这条注释里**，元素上没有任何
+      //    title/aria —— 用户无从发现，也无从核对。文案由下面这个回调**同源**
+      //    地描述它自己的三个分支，改行为不改文案会被 block-render 测试抓住。
+      el.title = localCopy(this.settings.language).statusBarHint;
+      el.setAttribute('aria-label', el.title);
       this.statusBar = renderTimingStatusBar(el, this.execContext(), (ev: MouseEvent) => {
         if (ev.altKey || ev.shiftKey) {
           const rt = this.timingRuntime;
@@ -772,10 +897,12 @@ export default class NautilusLogPlugin extends Plugin {
         }
         void this.activateSidebar();
       });
+      return true;
     } catch (err) {
       // 执行层起不来不该带走整个插件 —— 规划与可视化必须还能用。
       console.error('[Nautilus Log] execution layer failed to start', err);
       this.stopExecutionLayer();
+      return false;
     }
   }
 
@@ -804,8 +931,11 @@ export default class NautilusLogPlugin extends Plugin {
     this.timingRuntime = null;
     if (!rt) return;
     try {
-      if (closeActive) rt.disable();   // disable() 内部会 destroy
-      else rt.destroy();
+      // 🔴 `disable()` 实际是**异步**的（vendor timing-runtime.js:536 走 enqueue），
+      //    契约上标成 void。只用 try/catch 接不住它的 rejection ——
+      //    会变成 unhandled rejection。这里显式吞掉。
+      if (closeActive) void Promise.resolve(rt.disable()).catch(() => { /* 见下 */ });
+      else rt.destroy();               // disable() 内部会自己 destroy
     } catch { /* 拆不干净也不能把插件带崩 */ }
   }
 
@@ -822,14 +952,34 @@ export default class NautilusLogPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    const data = (await this.loadData()) as Record<string, unknown> | null;
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+    const data = ((await this.loadData()) as Record<string, unknown> | null) || {};
     // runtime 的内部状态（番茄钟等）与用户设置同文件不同键，避免互相污染。
-    this.runtimeState = (data?._runtime as Record<string, unknown>) || {};
+    this.runtimeState = (data._runtime as Record<string, unknown>) || {};
+    const stamped = migrateSettingsData(
+      data, typeof data._settingsVersion === 'number' ? data._settingsVersion : 0,
+    );
+    const merged = Object.assign({}, DEFAULT_SETTINGS, stamped.data) as Record<string, unknown>;
+    // 下划线键是文件级元数据，不属于 NautilusSettings —— 别让它们渗进设置对象。
+    delete merged._runtime;
+    delete merged._settingsVersion;
+    const before = merged.language;
+    this.settings = sanitizeSettings(merged as unknown as NautilusSettings);
+    // 🔴 迁移/净化过就把结果落盘，否则每次启动都要重跑一遍（且 vendor 那边
+    //    仍会从磁盘读到脏值）。这里直接 saveData：onload 期间没有任何视图可广播。
+    if (stamped.changed || before !== this.settings.language) await this.persist();
+  }
+
+  /** 只写盘、不广播。onload 期间用（那时还没有视图可刷）。 */
+  private async persist(): Promise<void> {
+    await this.saveData({
+      ...this.settings,
+      _runtime: this.runtimeState,
+      _settingsVersion: SETTINGS_VERSION,
+    });
   }
 
   async saveSettings(): Promise<void> {
-    await this.saveData({ ...this.settings, _runtime: this.runtimeState });
+    await this.persist();
     this.broadcastSettingsChanged();
   }
 

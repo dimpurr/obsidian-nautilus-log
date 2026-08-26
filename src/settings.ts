@@ -51,6 +51,8 @@ export interface LocalCopy {
   clockOut: string;
   needTodo: string;
   onlyTodo: string;
+  /** P1-046：状态栏点击三态的悬停说明。文案必须与 main.ts 的分支一一对应。 */
+  statusBarHint: string;
 }
 
 export const LOCAL_COPY: { en: LocalCopy; zh: LocalCopy } = {
@@ -70,6 +72,7 @@ export const LOCAL_COPY: { en: LocalCopy; zh: LocalCopy } = {
     clockOut: 'Clock out',
     needTodo: 'Focus an unfinished TODO block before starting timing.',
     onlyTodo: 'Only an unfinished TODO can own the Timing Line.',
+    statusBarHint: 'Click: open the Nautilus Log sidebar · Alt-click: locate today\u2019s plan in the editor · Shift-click: locate it in the right sidebar',
   },
   zh: {
     unknownConfig: '无法识别的配置项。支持：start、end、default-duration、legend-length、urgent、language',
@@ -83,6 +86,7 @@ export const LOCAL_COPY: { en: LocalCopy; zh: LocalCopy } = {
     clockOut: '结束计时',
     needTodo: '请先把光标放在一条未完成的任务行上。',
     onlyTodo: '只有未完成的任务才能占用 Timing Line。',
+    statusBarHint: '点击：打开 Nautilus Log 侧栏 · ⌥ 点击：在编辑区定位今天的计划 · ⇧ 点击：定位到右侧栏',
   },
 };
 
@@ -109,6 +113,92 @@ export const DESC_LENGTH_SLIDER = { min: 14, max: 28, step: 1 } as const;
 // 🔴 曾误写成 max: 180，与本节注释「量程必须与上游列表端点一致」自相矛盾
 //    （认证审计 E1-020 抓到）。滑块 step 5 是有意的超集（上游是离散选项）。
 export const POMODORO_SLIDER = { min: 15, max: 90, step: 5 } as const;
+
+/* ── E1-026 · 设置面板自己的双语表 ────────────────────────────────────────────
+ * 上游 index.js:290-346 是**两张完整的 zh/en 文案表**（18 组 label/desc）。
+ * 本移植此前除 `workdayEndDesc` 外整页硬编码英文 —— 中文用户切到 zh 后，
+ * 渲染文案变中文了、设置页仍然全英文（认证审计 E1-026；上一轮补的
+ * 「6 处双语化」修的是 LOCAL_COPY 那批**渲染**文案，没碰这里）。
+ * 文案尽量直取上游同一条；本移植独有的项（描述长度的量程、次日提示）自拟。 */
+export interface SettingsCopy {
+  language: string; languageDesc: string;
+  start: string; startDesc: string;
+  end: string;
+  descLength: string; descLengthDesc(min: number, max: number): string;
+  duration: string; durationDesc: string;
+  urgent: string; urgentDesc: string;
+  tracking: string; trackingDesc: string;
+  sidebar: string; sidebarDesc: string;
+  pomodoro: string; pomodoroDesc(min: number, max: number): string;
+  recentRetention: string; recentRetentionDesc: string;
+  forgottenTimer: string; forgottenTimerDesc: string;
+}
+
+export const SETTINGS_COPY: { en: SettingsCopy; zh: SettingsCopy } = {
+  en: {
+    language: 'Language',
+    languageDesc: 'Select the settings language (takes effect immediately).',
+    start: 'Chart Start Time',
+    startDesc: 'Choose any whole-hour start from 00:00 to 23:00. Defaults to 05:00.',
+    end: 'Chart End Time',
+    descLength: 'Legend Max Length',
+    descLengthDesc: (min, max) => `Maximum label length (${min}–${max}); long text is measured and truncated to fit. Defaults to 22.`,
+    duration: 'Default Todo Duration',
+    durationDesc: 'Default minutes for an untimed flexible task (5–60). Defaults to 15.',
+    urgent: 'Urgent Trigger Word',
+    urgentDesc: 'Keyword that colors a task urgent red (no spaces, for example urgent). Empty disables.',
+    tracking: 'Execution Layer · Advanced',
+    trackingDesc: 'Optional. Turn your plan into action with focus, CLOCK timing, task switching, one-click completion, and daily Review. Enable to reveal execution settings; disabled by default.',
+    sidebar: 'Keep Timing Line first in right sidebar',
+    sidebarDesc: 'After Clock In or a task switch, open or move the Timing Line to the top of the right sidebar.',
+    pomodoro: 'Pomodoro Threshold',
+    pomodoroDesc: (min, max) => `Turn the live elapsed value red after this many continuous focus minutes (${min}–${max}). Switching tasks keeps the same cycle and never stops time automatically. It cannot be switched off.`,
+    recentRetention: 'Recent Retention (minutes)',
+    recentRetentionDesc: 'Keep a Clocked Out or switched task in Recent for this many minutes. Enter 0 to disable Recent.',
+    forgottenTimer: 'Forgotten Timer Warning (minutes)',
+    forgottenTimerDesc: 'Warn when one CLOCK has kept running for this many minutes. Enter 0 to disable; the warning never stops or deletes time automatically.',
+  },
+  zh: {
+    language: '语言 / Language',
+    languageDesc: '选择设置面板显示的语言（切换后立即生效）。',
+    start: '图表开始时间',
+    startDesc: '选择计划日的开始整点（00:00–23:00）。默认 05:00。',
+    end: '图表结束时间',
+    descLength: '最大图例长度',
+    descLengthDesc: (min, max) => `图表外部标签的最大长度（${min}–${max}），超出的文本会根据可用宽度截断。默认 22。`,
+    duration: '默认待办时长',
+    durationDesc: '没有写时长的弹性任务默认占用的分钟数（5–60）。默认 15。',
+    urgent: '紧急触发词',
+    urgentDesc: '使任务显示为紧急红色的关键词（不可包含空格，例如：重要）。留空则关闭。',
+    tracking: '执行层 · 进阶',
+    trackingDesc: '可选功能。将计划转化为行动：支持任务聚焦、CLOCK 计时、多任务切换、一键完成和每日复盘。启用后会在下方显示执行设置；默认关闭。',
+    sidebar: '计时任务置顶到右侧边栏',
+    sidebarDesc: 'Clock In 或切换任务时，将当前 Timing Line 打开或移动到右侧边栏顶部。',
+    pomodoro: '番茄钟阈值',
+    pomodoroDesc: (min, max) => `连续聚焦达到该分钟数（${min}–${max}）后，计时变红但不会自动停止。任务切换不会重置，且无法关闭。`,
+    recentRetention: 'Recent 保留时间（分钟）',
+    recentRetentionDesc: 'Clock Out 或切换任务后，该任务在 Recent 中保留的分钟数。填写 0 可关闭 Recent。',
+    forgottenTimer: '遗忘计时提醒（分钟）',
+    forgottenTimerDesc: '单条 CLOCK 连续运行达到该时长后显示警告。填写 0 可关闭提醒；不会自动停止或删除计时。',
+  },
+};
+
+export function settingsCopy(language: string): SettingsCopy {
+  return language === 'zh' ? SETTINGS_COPY.zh : SETTINGS_COPY.en;
+}
+
+/** 上游 index.js:355-363 `updateExecutionMinutes` 的等价物 —— E1-021/E1-022：
+ *  这两项在上游是**无上限的自由整数输入**（`type:"input"`），本移植原先是
+ *  `setLimits(0, 1440, 15)` 的滑块 ⇒ 20 / 25 / 40 分钟这类值**不可达**。
+ *  语义逐条照抄：空串 = 用户正在删，忽略（返回 null）；非有限数退回默认；
+ *  否则 `max(0, round(x))`，**不设上限**。 */
+export function parseExecutionMinutes(raw: unknown, fallback: number): number | null {
+  const text = String(raw ?? '').trim();
+  if (text === '') return null;
+  const parsed = Number(text);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.round(parsed));
+}
 
 /** 结束整点的显示标签。上游 index.js:376-380：结束 ≤ 开始（且不是 24）时
  *  追加「· 次日 / · next day」，否则用户无从知道 21→2 是跨午夜。 */
@@ -139,10 +229,21 @@ export class NautilusLogSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
+    // E1-026：整页文案走双语表，不再硬编码英文。
+    const copy = settingsCopy(this.plugin.settings.language);
+
+    // 🔴 E1-009：结束整点的「· 次日」依赖【开始整点】，所以开始整点一变也要刷
+    //    它的 desc。上游任一项 onChange 都整页 `panel.create` 重建（index.js:385-387）；
+    //    这里只重刷受影响的那一项 —— 拖滑块时整页重建会把滑块的焦点/拖拽状态
+    //    一并毁掉，是 Obsidian 侧的有意偏离（行为等价，见报告）。
+    let endSetting: Setting | null = null;
+    const refreshEndDesc = (): void => {
+      endSetting?.setDesc(workdayEndDesc(this.plugin.settings));
+    };
 
     new Setting(containerEl)
-      .setName('Language')
-      .setDesc('Display language for the capacity bar and labels.')
+      .setName(copy.language)
+      .setDesc(copy.languageDesc)
       .addDropdown((dropdown) => dropdown
         .addOption('en', 'English')
         .addOption('zh', '中文')
@@ -150,11 +251,14 @@ export class NautilusLogSettingTab extends PluginSettingTab {
         .onChange(async (value) => {
           this.plugin.settings.language = value as NautilusSettings['language'];
           await this.plugin.saveSettings();
+          // 🔴 E1-003：上游 index.js:456-458 语言一变立刻重建面板。整页文案都
+          //    是双语的（E1-026），不重建就要关掉设置页再打开才换语言。
+          this.display();
         }));
 
     new Setting(containerEl)
-      .setName('Workday start hour')
-      .setDesc('Hour (0–23) the day starts. Default 5.')
+      .setName(copy.start)
+      .setDesc(copy.startDesc)
       .addSlider((slider) => slider
         .setLimits(0, 23, 1)
         .setValue(this.plugin.settings.workdayStartHour)
@@ -162,13 +266,14 @@ export class NautilusLogSettingTab extends PluginSettingTab {
         .onChange(async (value) => {
           this.plugin.settings.workdayStartHour = value;
           await this.plugin.saveSettings();
+          refreshEndDesc();          // E1-009
         }));
 
     // 上游把「· 次日」直接写进结束整点的**选项标签**（index.js:376-380）。
-    // 滑块没有选项标签，所以把它放进 desc 并在每次 onChange 后重画整页 ——
+    // 滑块没有选项标签，所以把它放进 desc 并在每次 onChange 后重刷 ——
     // 否则用户拖到 02:00 只看见一个 "2"，完全看不出这是跨午夜（audit §P1-8）。
-    const endSetting = new Setting(containerEl)
-      .setName('Workday end hour')
+    endSetting = new Setting(containerEl)
+      .setName(copy.end)
       .setDesc(workdayEndDesc(this.plugin.settings));
     endSetting.addSlider((slider) => slider
       .setLimits(1, 24, 1)
@@ -177,12 +282,12 @@ export class NautilusLogSettingTab extends PluginSettingTab {
       .onChange(async (value) => {
         this.plugin.settings.workdayEndHour = value;
         await this.plugin.saveSettings();
-        endSetting.setDesc(workdayEndDesc(this.plugin.settings));
+        refreshEndDesc();
       }));
 
     new Setting(containerEl)
-      .setName('Description length')
-      .setDesc(`Maximum glyphs for a task description before truncation (${DESC_LENGTH_SLIDER.min}–${DESC_LENGTH_SLIDER.max}). Default 22.`)
+      .setName(copy.descLength)
+      .setDesc(copy.descLengthDesc(DESC_LENGTH_SLIDER.min, DESC_LENGTH_SLIDER.max))
       .addSlider((slider) => slider
         .setLimits(DESC_LENGTH_SLIDER.min, DESC_LENGTH_SLIDER.max, DESC_LENGTH_SLIDER.step)
         .setValue(this.plugin.settings.descLength)
@@ -193,8 +298,8 @@ export class NautilusLogSettingTab extends PluginSettingTab {
         }));
 
     new Setting(containerEl)
-      .setName('Default task duration')
-      .setDesc('Minutes assumed for an untimed task (5–60). Default 15.')
+      .setName(copy.duration)
+      .setDesc(copy.durationDesc)
       .addSlider((slider) => slider
         .setLimits(5, 60, 1)
         .setValue(this.plugin.settings.todoDuration)
@@ -205,8 +310,8 @@ export class NautilusLogSettingTab extends PluginSettingTab {
         }));
 
     new Setting(containerEl)
-      .setName('Urgent trigger')
-      .setDesc('Optional word that flags a task as urgent (colouring only). Empty disables.')
+      .setName(copy.urgent)
+      .setDesc(copy.urgentDesc)
       .addText((text) => text
         .setPlaceholder('urgent')
         .setValue(this.plugin.settings.urgentTrigger)
@@ -219,27 +324,23 @@ export class NautilusLogSettingTab extends PluginSettingTab {
     // Master switch. Re-render the whole page on change so the four
     // execution-layer settings below appear / disappear with it.
     new Setting(containerEl)
-      .setName('Actual time tracking')
-      .setDesc('Execution-layer master switch. When off, the execution settings below are hidden.')
+      .setName(copy.tracking)
+      .setDesc(copy.trackingDesc)
       .addToggle((toggle) => toggle
         .setValue(this.plugin.settings.actualTimeTracking)
         .onChange(async (value) => {
-          this.plugin.settings.actualTimeTracking = value;
-          await this.plugin.saveSettings();
-          // 立刻生效：开则起 runtime + 状态栏，关则全部拆掉（不留定时器/订阅）。
-          if (value) this.plugin.startExecutionLayer();
-          else this.plugin.stopExecutionLayer({ closeActive: true });
-          // 🔴 已打开的侧栏必须一并刷新，否则用户开了开关却什么也没发生，
-          //    要关掉侧栏再打开才出现 —— 看起来就像开关坏了。
-          this.plugin.refreshSidebars();
+          // 🔴 E1-016/E1-017：开关的全部动作（存盘 → 起/拆运行时 → **开失败回滚**
+          //    → 刷侧栏）都归 plugin.setTrackingEnabled 一处所有，
+          //    上游 index.js:245-268 也是这么收口的。设置页只负责重画。
+          await this.plugin.setTrackingEnabled(value);
           this.display();
         }));
 
     // The four settings below are revealed only while the master switch is on.
     if (this.plugin.settings.actualTimeTracking) {
       new Setting(containerEl)
-        .setName('Timing line in sidebar')
-        .setDesc('Clock In pins the current task to the right sidebar.')
+        .setName(copy.sidebar)
+        .setDesc(copy.sidebarDesc)
         .addToggle((toggle) => toggle
           .setValue(this.plugin.settings.timingLineSidebar)
           .onChange(async (value) => {
@@ -248,8 +349,8 @@ export class NautilusLogSettingTab extends PluginSettingTab {
           }));
 
       new Setting(containerEl)
-        .setName('Pomodoro minutes')
-        .setDesc(`Pomodoro threshold (${POMODORO_SLIDER.min}–${POMODORO_SLIDER.max} min). Hitting it only changes the hint — it never stops work. It cannot be switched off.`)
+        .setName(copy.pomodoro)
+        .setDesc(copy.pomodoroDesc(POMODORO_SLIDER.min, POMODORO_SLIDER.max))
         .addSlider((slider) => slider
           .setLimits(POMODORO_SLIDER.min, POMODORO_SLIDER.max, POMODORO_SLIDER.step)
           .setValue(clampMinutes(this.plugin.settings.pomodoroMinutes, 180, 45))
@@ -259,27 +360,31 @@ export class NautilusLogSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           }));
 
+      // 🔴 E1-021 / E1-022：这两项上游是**自由整数输入**（无上限），
+      //    原先的 `setLimits(0, 1440, 15)` 滑块让 20/25/40 分钟不可达。
       new Setting(containerEl)
-        .setName('Recent retention minutes')
-        .setDesc('How long Recent stays before it is dropped. 0 = off.')
-        .addSlider((slider) => slider
-          .setLimits(0, 1440, 15)
-          .setValue(clampMinutes(this.plugin.settings.recentRetentionMinutes, 1440, 45, true))
-          .setDynamicTooltip()
+        .setName(copy.recentRetention)
+        .setDesc(copy.recentRetentionDesc)
+        .addText((text) => text
+          .setPlaceholder('45')
+          .setValue(String(this.plugin.settings.recentRetentionMinutes))
           .onChange(async (value) => {
-            this.plugin.settings.recentRetentionMinutes = clampMinutes(value, 1440, 45, true);
+            const next = parseExecutionMinutes(value, 45);
+            if (next === null) return;               // 空串：用户正在删，别抢着写
+            this.plugin.settings.recentRetentionMinutes = next;
             await this.plugin.saveSettings();
           }));
 
       new Setting(containerEl)
-        .setName('Forgotten timer warning minutes')
-        .setDesc('Warn when a timer has been left running this long. Warning only — never auto-stops or deletes a CLOCK. 0 = off.')
-        .addSlider((slider) => slider
-          .setLimits(0, 1440, 15)
-          .setValue(clampMinutes(this.plugin.settings.forgottenTimerMinutes, 1440, 120, true))
-          .setDynamicTooltip()
+        .setName(copy.forgottenTimer)
+        .setDesc(copy.forgottenTimerDesc)
+        .addText((text) => text
+          .setPlaceholder('120')
+          .setValue(String(this.plugin.settings.forgottenTimerMinutes))
           .onChange(async (value) => {
-            this.plugin.settings.forgottenTimerMinutes = clampMinutes(value, 1440, 120, true);
+            const next = parseExecutionMinutes(value, 120);
+            if (next === null) return;
+            this.plugin.settings.forgottenTimerMinutes = next;
             await this.plugin.saveSettings();
           }));
     }
