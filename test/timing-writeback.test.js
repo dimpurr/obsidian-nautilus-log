@@ -869,3 +869,74 @@ test('🔴 T2-061 空 taskUid 的失败必须带自己的 message，绝不让 Ro
     assert.ok(!/Roam/i.test(res.message),'message 不得再含 Roam 字样');
   });
 });
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * 变异实验第 3 组补测 —— deleteClock / updateGraphBlock：
+ *   定位 / 歧义拒写 / 末行删除边界。
+ * 每条都先注入对应变异、确认本文件变红、再还原验证全绿（见 report-3.md）。
+ * 禁止写成「断言源码长什么样」—— 全部造真实文件、跑真实写回、断言内容。
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+test('🔴 deleteClock 行漂 + 同分钟两条 running CLOCK 时歧义拒写，不赌一个', async () => {
+  const v=makeVault(); v.write('2026-08-25.md',DUP_NOTE);
+  await T.primeTimingCache();
+  // 行首插一行：uid 5（甲原先的 CLOCK 行）现在落在甲的 LOGBOOK 抽屉行上
+  v.write('2026-08-25.md','# 补丁\n'+v.read('2026-08-25.md'));
+  await T.primeTimingCache();
+  assert.ok(!/CLOCK:/.test(v.read('2026-08-25.md').split('\n')[5]),'前提：第 5 行已不是 CLOCK');
+  const entryA={ clockUid:'2026-08-25.md:5', taskUid:'2026-08-25.md:3', running:true,
+    start:new Date(2026,7,25,10,0) };
+  await assert.rejects(()=>T.deleteClock(entryA), /Aborting/,
+    'uid 行漂后全文件扫出两条同分钟 running 命中，必须拒写而不是删第一条');
+  assert.equal((v.read('2026-08-25.md').match(/CLOCK:/g)||[]).length,2,
+    '两条 CLOCK 必须原样保留 —— 赌一个 = 删掉用户保留的另一条记录');
+  v.cleanup();
+});
+
+test('🔴 deleteClock 不得删掉已经被外部闭合的 CLOCK（running 过滤是最后防线）', async () => {
+  const v=makeVault();
+  v.write('2026-08-25.md',['# 2026-08-25',
+    '    - LOGBOOK::',
+    '        - CLOCK: [2026-08-25 Tue 10:00]--[2026-08-25 Tue 10:25] => 0:25'].join('\n'));
+  await T.primeTimingCache();
+  // 内存快照里还是 running 的 entry，磁盘上已被外部编辑闭合 —— 已闭合是用户保留的历史
+  const entry={ clockUid:'2026-08-25.md:2', taskUid:'2026-08-25.md:0', running:true,
+    start:new Date(2026,7,25,10,0) };
+  await assert.rejects(()=>T.deleteClock(entry), /Aborting/,
+    '磁盘上不是 running 的 CLOCK 不得按 stale entry 删除');
+  assert.match(v.read('2026-08-25.md'),/CLOCK: \[2026-08-25 Tue 10:00\]--/,
+    '已闭合的记录必须原样保留');
+  v.cleanup();
+});
+
+test('🔴 deleteClock 行漂后按内容精确定位删除，绝不按 uid 里的旧行号盲删', async () => {
+  const v=makeVault(); v.write('2026-08-25.md',LAST_LINE_NOTE);
+  await T.primeTimingCache();
+  // 行首插一行：CLOCK 从 5 漂到 6，uid 的旧行号 5 现在指着 LOGBOOK 抽屉行
+  v.write('2026-08-25.md','# 补丁\n'+v.read('2026-08-25.md'));
+  await T.primeTimingCache();
+  await T.deleteClock({...LAST_LINE_ENTRY});
+  const out=v.read('2026-08-25.md');
+  assert.ok(!/CLOCK:/.test(out),'跑掉的那条 CLOCK 必须被真正删除');
+  assert.match(out,/^    - LOGBOOK::$/m,'抽屉必须原样保留，不得把抽屉行当 CLOCK 删掉');
+  assert.match(out,/- \[ \] 写周报 45m/,'任务行完好');
+  v.cleanup();
+});
+
+test('🔴 updateGraphBlock 行漂后按内容精确定位写入，不按 uid 旧行号盲写', async () => {
+  const v=makeVault(); v.write('2026-08-25.md',LAST_LINE_NOTE);
+  await T.primeTimingCache();
+  // 同上：CLOCK 漂到 6，uid 旧行号 5 = LOGBOOK 抽屉行
+  v.write('2026-08-25.md','# 补丁\n'+v.read('2026-08-25.md'));
+  await T.primeTimingCache();
+  const closed=core.formatClockLine(new Date(2026,7,25,10,0), new Date(2026,7,25,10,20));
+  await T.updateGraphBlock('2026-08-25.md:5', closed);
+  const out=v.read('2026-08-25.md').split('\n');
+  assert.match(out.join('\n'),/^    - LOGBOOK::$/m,
+    '抽屉必须原样保留 —— 盲写会把 LOGBOOK 行改成 CLOCK');
+  const clock=out.findIndex(l=>/CLOCK:/.test(l));
+  assert.equal(clock,6,'漂移后该闭合的是第 6 行的那条 CLOCK');
+  assert.match(out[clock],/=> 0:20/,'reconcileLegacyOverlap 要补的结束时刻必须落到对的这一行');
+  assert.match(out[clock],/^\s+- CLOCK:/,'缩进与列表标记必须保留');
+  v.cleanup();
+});
