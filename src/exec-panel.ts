@@ -713,6 +713,13 @@ export function renderExecPanel(
   /* ─────────────────────────── 订阅 / 销毁 ─────────────────────────── */
 
   unsubscribe = runtime.subscribe((next) => { render(next); });
+  // 认证审计 T3-033：面板挂载即拉一次新数据。上游在打开 popover 时
+  // `void runtime.requestRefresh()`（timing-topbar.js:625,633）——打开那一瞬
+  // 用户应该看到最新数据。本移植面板在侧栏常驻，挂载/重挂就是对「打开」，
+  // 只吃 `getSnapshot()` 的既有快照可能已过期（runtime 最长 60s tick 才自刷）。
+  // requestRefresh 会异步 publish 新快照，上面的订阅早已就位；`?.` 兼容
+  // 没有该方法的 runtime（契约声明了它，这里防御性短路）。
+  void runtime.requestRefresh?.();
 
   return {
     /** 设置变更后用它 —— ctx 是取值函数，force 重渲即拿到新语言 / 新阈值，

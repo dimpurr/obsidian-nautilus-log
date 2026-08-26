@@ -104,6 +104,7 @@ function makeRuntime(initialSnapshot) {
     deleteCurrentClock: [],
     openTask: [],
     locate: 0,
+    requestRefresh: 0,
   };
   const notify = () => {
     for (const listener of [...listeners]) listener(snapshot);
@@ -133,6 +134,7 @@ function makeRuntime(initialSnapshot) {
     deleteCurrentClock(uid) { calls.deleteCurrentClock.push(uid); return Promise.resolve(); },
     openTask(uid, opts) { calls.openTask.push({ uid, opts }); return Promise.resolve(); },
     locate() { calls.locate += 1; return Promise.resolve(); },
+    requestRefresh() { calls.requestRefresh += 1; return Promise.resolve(); },
   };
 }
 
@@ -326,6 +328,13 @@ test("Review view renders the summary and per-row variance", () => {
   assert.match(summary.textContent, /Completed 1\/3/);
   assert.match(summary.textContent, /Compared 1/);
   assert.match(summary.textContent, /Variance \+5m/);
+  // T3-081: 摘要行的正偏差也要带 is-over —— 不只是 Review 行级有。
+  assert.ok(
+    container.querySelector(
+      ".nautilus-log-exec-review-totals .nautilus-log-exec-review-total.is-over",
+    ),
+    "a positive summary variance paints the summary cell is-over too",
+  );
 
   const rows = container.querySelectorAll(".nautilus-log-exec-review-row");
   assert.equal(rows.length, 3);
@@ -502,6 +511,24 @@ test("destroy() unsubscribes; later snapshots do not re-render", () => {
   const before = container.innerHTML;
   runtime.push(focusedSnapshot({ revision: 999 }));
   assert.equal(container.innerHTML, before, "no re-render after destroy");
+});
+
+/* ------------------------------------------------------------------ */
+/* Tests — freshness on mount (认证审计 T3-033)                         */
+/* ------------------------------------------------------------------ */
+
+test("mounting the panel requests one fresh refresh (T3-033)", () => {
+  makeDom();
+  const runtime = makeRuntime(focusedSnapshot());
+  const { container, panel } = mount(runtime);
+
+  assert.equal(
+    runtime.calls.requestRefresh,
+    1,
+    "the panel asks the runtime for fresh data the moment it mounts",
+  );
+
+  panel.destroy();
 });
 
 /* ------------------------------------------------------------------ */
