@@ -65,16 +65,6 @@
   color: var(--nautilus-log-text-main);
 }
 
-.nautilus-log-context-probe {
-  display: none !important;
-  height: 0 !important;
-  min-height: 0 !important;
-  width: 0 !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  overflow: hidden !important;
-}
-
 .nautilus-log-content {
   display: flex;
   flex-direction: column;
@@ -208,12 +198,6 @@
   stroke: currentColor;
 }
 
-.nautilus-log-burning-summary {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-}
-
 .nautilus-log-now-needle {
   pointer-events: none;
 }
@@ -271,11 +255,6 @@
   max-width: 100%;
   filter: none;
   margin: 8px 0 4px;
-}
-
-.nautilus-log-visual {
-  position: relative;
-  width: 100%;
 }
 
 .nautilus-log-compact-details {
@@ -498,47 +477,6 @@
 .nautilus-log-available-slot--now:hover .nautilus-log-available-slot-hit,
 .nautilus-log-available-slot--now:focus .nautilus-log-available-slot-hit {
   stroke-width: 1.6px;
-}
-
-.nautilus-log-hover-tooltip {
-  position: fixed;
-  z-index: 10060;
-  display: grid;
-  gap: 2px;
-  width: max-content;
-  max-width: min(240px, calc(100vw - 24px));
-  padding: 6px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 5px;
-  background: rgba(38, 43, 50, 0.96);
-  box-shadow: 0 4px 12px rgba(18, 23, 29, 0.16);
-  color: #fff;
-  font-family: var(--nl-exec-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
-  font-size: 11px;
-  line-height: 1.35;
-  opacity: 0;
-  pointer-events: none;
-  transform: none;
-  transition: opacity 80ms ease;
-}
-
-.nautilus-log-hover-tooltip--positioned {
-  opacity: 1;
-}
-
-.nautilus-log-hover-tooltip-title {
-  display: block;
-  max-width: 220px;
-  overflow: hidden;
-  font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.nautilus-log-hover-tooltip-meta {
-  color: rgba(255, 255, 255, 0.7);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
 .nautilus-log-past-overlay {
@@ -813,21 +751,6 @@
   }
 }
 
-/* Optional execution layer -------------------------------------------------
- * This namespace is mounted only while Actual Time Tracking is enabled.
- * Keeping it separate from the spiral guarantees that the default-off state
- * leaves no topbar layout, polling, or hidden interaction surface behind.
- */
-
-.nautilus-log-timing__topbar {
-  align-items: center;
-  display: inline-flex;
-  flex: 0 1 auto;
-  height: 32px;
-  margin: 0 4px;
-  min-width: 32px;
-}
-
 .nautilus-log-timing__trigger,
 .nautilus-log-timing__icon-button,
 .nautilus-log-timing__tab {
@@ -851,18 +774,6 @@
   overflow: hidden;
   padding: 0 8px;
   white-space: nowrap;
-}
-
-.nautilus-log-timing__brand-icon {
-  align-items: center;
-  color: var(--nl-exec-muted, #6b7280);
-  display: inline-flex;
-  flex: 0 0 auto;
-  font-weight: 400;
-  height: 18px;
-  justify-content: center;
-  line-height: 1;
-  width: 18px;
 }
 
 .nautilus-log-timing__trigger.is-active .nautilus-log-timing__brand-icon {
@@ -1007,13 +918,6 @@
   display: none;
 }
 
-.nautilus-log-timing__topbar[data-density="icon"] {
-  margin-left: 2px;
-  margin-right: 2px;
-  min-width: 30px;
-  width: 30px;
-}
-
 .nautilus-log-timing__topbar[data-density="icon"] .nautilus-log-timing__trigger {
   min-width: 30px;
   padding-left: 0;
@@ -1021,119 +925,9 @@
   width: 30px;
 }
 
-.nautilus-log-timing__topbar[data-density="icon"] .nautilus-log-timing__brand-icon {
-  display: inline-flex;
-}
-
 .nautilus-log-timing__topbar[data-density="icon"] .nautilus-log-timing__trigger > :not(.nautilus-log-timing__brand-icon),
 .nautilus-log-timing__topbar[data-density="icon"] .nautilus-log-timing__pomodoro-close {
   display: none !important;
-}
-
-.nautilus-log-timing__popover {
-  background: var(--nl-exec-surface, #fff);
-  border: 1px solid rgba(117, 126, 140, 0.22);
-  border-radius: 8px;
-  box-shadow: 0 12px 34px rgba(34, 42, 53, 0.16), 0 2px 8px rgba(34, 42, 53, 0.08);
-  color: var(--nl-exec-text, #303744);
-  font-family: var(--nl-exec-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
-  max-height: min(560px, calc(100vh - 72px));
-  overflow: hidden;
-  position: fixed;
-  z-index: 10050;
-}
-
-.nautilus-log-timing__popover-header {
-  align-items: center;
-  border-bottom: 1px solid rgba(117, 126, 140, 0.16);
-  display: flex;
-  justify-content: flex-start;
-  min-height: 44px;
-  padding: 6px 8px 6px 12px;
-}
-
-.nautilus-log-timing__popover-header-main {
-  align-items: center;
-  display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.nautilus-log-timing__identity {
-  appearance: none;
-  align-items: center;
-  background: transparent;
-  border: 0;
-  border-radius: 4px;
-  box-shadow: none;
-  color: #8a929f;
-  cursor: pointer;
-  display: inline-flex;
-  flex: 0 0 auto;
-  font: inherit;
-  gap: 5px;
-  height: 30px;
-  margin-left: -4px;
-  margin-right: 0;
-  padding: 0 8px 0 6px;
-  white-space: nowrap;
-}
-
-.nautilus-log-timing__identity:hover,
-.nautilus-log-timing__identity:focus-visible {
-  background: rgba(111, 120, 132, 0.08);
-  color: var(--nl-exec-text, #374151);
-  outline: none;
-}
-
-.nautilus-log-timing__identity:focus-visible {
-  box-shadow: inset 0 0 0 1px rgba(19, 124, 189, 0.35);
-}
-
-.nautilus-log-timing__identity-name {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-}
-
-.nautilus-log-timing__identity-hint {
-  font-size: 11px !important;
-  opacity: 0.55;
-  transition: opacity 120ms ease, transform 120ms ease;
-}
-
-.nautilus-log-timing__identity:hover .nautilus-log-timing__identity-hint,
-.nautilus-log-timing__identity:focus-visible .nautilus-log-timing__identity-hint {
-  opacity: 1;
-  transform: translateX(1px);
-}
-
-.nautilus-log-timing__identity-divider {
-  align-self: center;
-  background: rgba(117, 126, 140, 0.18);
-  flex: 0 0 1px;
-  height: 20px;
-  margin: 0 8px;
-  width: 1px;
-}
-
-.nautilus-log-timing__tabs {
-  align-items: center;
-  display: flex;
-  gap: 4px;
-}
-
-.nautilus-log-timing__tab {
-  color: #7a8390;
-  font-size: 12px;
-  font-weight: 600;
-  height: 30px;
-  padding: 0 9px;
-}
-
-.nautilus-log-timing__tab.is-active {
-  background: rgba(73, 82, 94, 0.09);
-  color: var(--nl-exec-text, #303744);
 }
 
 .nautilus-log-timing__icon-button {
@@ -1157,15 +951,6 @@
   color: #c73737;
 }
 
-.nautilus-log-timing__notice {
-  background: rgba(206, 129, 31, 0.08);
-  border-bottom: 1px solid rgba(206, 129, 31, 0.17);
-  color: #9c5e0b;
-  font-size: 12px;
-  line-height: 1.45;
-  padding: 9px 12px;
-}
-
 .nautilus-log-timing__capacity {
   align-items: center;
   background: rgba(111, 120, 132, 0.025);
@@ -1182,289 +967,6 @@
   padding: 6px 14px;
 }
 
-.nautilus-log-timing__capacity-metric {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.nautilus-log-timing__capacity-metric strong {
-  color: #4e5764;
-  font-family: inherit;
-  font-weight: 650;
-}
-
-.nautilus-log-timing__capacity-part.is-warning,
-.nautilus-log-timing__capacity-part.is-warning strong {
-  color: #ad690f;
-}
-
-.nautilus-log-timing__review-summary {
-  border-bottom: 1px solid rgba(117, 126, 140, 0.14);
-  padding: 10px 14px 9px;
-}
-
-.nautilus-log-timing__review-counts,
-.nautilus-log-timing__review-totals {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-}
-
-.nautilus-log-timing__review-counts {
-  color: #7f8895;
-  font-size: 11px;
-  gap: 16px;
-}
-
-.nautilus-log-timing__review-count strong,
-.nautilus-log-timing__review-total strong {
-  color: var(--nl-exec-text, #303744);
-  font-weight: 600;
-}
-
-.nautilus-log-timing__review-totals {
-  color: #8a929f;
-  font-size: 11px;
-  gap: 6px 15px;
-  margin-top: 5px;
-}
-
-.nautilus-log-timing__review-total.is-over strong,
-.nautilus-log-timing__review-variance.is-over {
-  color: #ad690f;
-}
-
-.nautilus-log-timing__review-row {
-  border-bottom: 1px solid rgba(117, 126, 140, 0.1);
-  min-width: 0;
-  padding: 9px 10px;
-}
-
-.nautilus-log-timing__review-row:last-child {
-  border-bottom: 0;
-}
-
-.nautilus-log-timing__review-row:hover {
-  background: rgba(111, 120, 132, 0.045);
-}
-
-.nautilus-log-timing__review-row-heading {
-  align-items: center;
-  display: flex;
-  gap: 8px;
-  justify-content: space-between;
-  min-width: 0;
-}
-
-.nautilus-log-timing__review-title {
-  appearance: none;
-  background: transparent;
-  border: 0;
-  color: var(--nl-exec-text, #303744);
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  min-width: 0;
-  overflow: hidden;
-  padding: 0;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.nautilus-log-timing__review-title:hover,
-.nautilus-log-timing__review-title:focus-visible {
-  color: var(--nautilus-log-page-link, #137cbd);
-  outline: none;
-}
-
-.nautilus-log-timing__review-state {
-  background: rgba(111, 120, 132, 0.08);
-  border-radius: 999px;
-  color: #858e9b;
-  flex: 0 0 auto;
-  font-size: 10px;
-  line-height: 18px;
-  padding: 0 7px;
-}
-
-.nautilus-log-timing__review-row.is-live .nautilus-log-timing__review-state {
-  background: rgba(20, 145, 190, 0.1);
-  color: #087ca9;
-}
-
-.nautilus-log-timing__review-row-metrics {
-  color: #8a929f;
-  display: flex;
-  flex-wrap: wrap;
-  font-size: 11px;
-  gap: 4px 14px;
-  margin-top: 4px;
-}
-
-.nautilus-log-timing__review-variance {
-  color: #68717e;
-  font-weight: 600;
-}
-
-.nautilus-log-timing__list {
-  max-height: min(468px, calc(100vh - 158px));
-  overflow: auto;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  padding: 6px;
-}
-
-.nautilus-log-timing__list::-webkit-scrollbar {
-  display: none;
-  width: 0;
-  height: 0;
-}
-
-.nautilus-log-timing__list.is-review {
-  max-height: min(398px, calc(100vh - 222px));
-}
-
-.nautilus-log-timing__list.is-plan {
-  padding-top: 2px;
-}
-
-.nautilus-log-timing__plan-section + .nautilus-log-timing__plan-section {
-  border-top: 1px solid rgba(117, 126, 140, 0.11);
-  margin-top: 2px;
-  padding-top: 2px;
-}
-
-.nautilus-log-timing__plan-heading {
-  align-items: center;
-  color: #8a929f;
-  display: flex;
-  font-size: 10px;
-  font-weight: 650;
-  justify-content: flex-start;
-  letter-spacing: 0.055em;
-  min-height: 30px;
-  padding: 6px 10px 4px;
-  text-transform: uppercase;
-}
-
-button.nautilus-log-timing__plan-heading {
-  appearance: none;
-  background: transparent;
-  border: 0;
-  border-radius: 4px;
-  cursor: pointer;
-  font-family: inherit;
-  text-align: left;
-  width: 100%;
-}
-
-button.nautilus-log-timing__plan-heading:hover,
-button.nautilus-log-timing__plan-heading:focus-visible {
-  background: rgba(111, 120, 132, 0.055);
-  outline: none;
-}
-
-.nautilus-log-timing__plan-label {
-  align-items: center;
-  display: inline-flex;
-  gap: 3px;
-  min-width: 0;
-}
-
-.nautilus-log-timing__plan-section.is-unscheduled .nautilus-log-timing__plan-heading {
-  color: #ad690f;
-}
-
-.nautilus-log-timing__row {
-  align-items: center;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  display: grid;
-  gap: 10px;
-  grid-template-columns: minmax(0, 1fr) auto;
-  min-height: 54px;
-  padding: 7px 6px 7px 10px;
-}
-
-.nautilus-log-timing__row:hover {
-  background: rgba(111, 120, 132, 0.055);
-}
-
-.nautilus-log-timing__row.is-focused {
-  background: rgba(20, 145, 190, 0.07);
-  border-color: rgba(20, 145, 190, 0.2);
-}
-
-.nautilus-log-timing__row.is-forgotten {
-  background: rgba(206, 129, 31, 0.075);
-  border-color: rgba(206, 129, 31, 0.3);
-}
-
-.nautilus-log-timing__row.is-unscheduled .nautilus-log-timing__row-meta {
-  color: #9f6a23;
-}
-
-.nautilus-log-timing__row-copy {
-  min-width: 0;
-}
-
-.nautilus-log-timing__row-title {
-  appearance: none;
-  background: transparent;
-  border: 0;
-  color: var(--nl-exec-text, #303744);
-  cursor: pointer;
-  display: block;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.35;
-  overflow: hidden;
-  padding: 0;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  width: 100%;
-}
-
-.nautilus-log-timing__row-title:hover,
-.nautilus-log-timing__row-title:focus-visible {
-  color: var(--nautilus-log-page-link, #137cbd);
-  outline: none;
-}
-
-.nautilus-log-timing__row-meta {
-  color: #8a929f;
-  font-size: 11px;
-  margin-top: 2px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.nautilus-log-timing__row-meta.is-warning {
-  color: #ad690f;
-  font-weight: 600;
-}
-
-.nautilus-log-timing__row-actions {
-  align-items: center;
-  display: flex;
-  flex: 0 0 auto;
-  gap: 2px;
-}
-
-.nautilus-log-timing__empty {
-  color: #858e9b;
-  font-size: 12px;
-  line-height: 1.5;
-  padding: 24px 18px;
-  text-align: center;
-}
-
 .nautilus-log-timing__located {
   animation: nautilus-log-timing-locate 1.2s ease-out;
 }
@@ -1474,63 +976,16 @@ button.nautilus-log-timing__plan-heading:focus-visible {
   100% { box-shadow: 0 0 0 0 rgba(19, 124, 189, 0); }
 }
 
-.theme-dark .nautilus-log-timing__popover,
-.dark .nautilus-log-timing__popover {
-  --nl-exec-surface: #242a31;
-  --nl-exec-text: #e4e8ee;
-  --nl-exec-muted: #a0a8b4;
-  border-color: rgba(223, 228, 235, 0.13);
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.38);
-}
-
-.theme-dark .nautilus-log-timing__review-row.is-live .nautilus-log-timing__review-state,
-.dark .nautilus-log-timing__review-row.is-live .nautilus-log-timing__review-state {
-  color: #66c7e8;
-}
-
 .theme-dark .nautilus-log-timing__capacity,
 .dark .nautilus-log-timing__capacity {
   background: rgba(255, 255, 255, 0.018);
   border-bottom-color: rgba(223, 228, 235, 0.09);
 }
 
-.theme-dark .nautilus-log-timing__capacity-metric strong,
-.dark .nautilus-log-timing__capacity-metric strong {
-  color: #d6dbe2;
-}
-
-.theme-dark .nautilus-log-timing__capacity-part.is-warning,
-.theme-dark .nautilus-log-timing__capacity-part.is-warning strong,
-.dark .nautilus-log-timing__capacity-part.is-warning,
-.dark .nautilus-log-timing__capacity-part.is-warning strong,
-.theme-dark .nautilus-log-timing__plan-section.is-unscheduled .nautilus-log-timing__plan-heading,
-.dark .nautilus-log-timing__plan-section.is-unscheduled .nautilus-log-timing__plan-heading,
-.theme-dark .nautilus-log-timing__row.is-unscheduled .nautilus-log-timing__row-meta,
-.dark .nautilus-log-timing__row.is-unscheduled .nautilus-log-timing__row-meta {
-  color: #d89a46;
-}
-
 /* Preserve the complete three-view switcher in unusually narrow Roam
    windows. The shell icon and chevron still make the Primary Plan shortcut
    discoverable when its text label no longer fits. */
 @media (max-width: 320px) {
-  .nautilus-log-timing__popover-header {
-    padding-left: 8px;
-    padding-right: 6px;
-  }
-
-  .nautilus-log-timing__identity-name {
-    display: none;
-  }
-
-  .nautilus-log-timing__identity-divider {
-    margin-left: 5px;
-    margin-right: 5px;
-  }
-
-  .nautilus-log-timing__tab {
-    padding: 0 7px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -36,6 +36,7 @@
  */
 
 import { setIcon } from 'obsidian';
+import { stripStateTokens } from './parser';
 import type { ExecViewContext, TimingEntry, TimingSnapshot } from './timing-contract';
 
 /** 状态栏标题的硬性字符上限。状态栏空间极小，光靠 CSS ellipsis 不够——文本本身
@@ -83,16 +84,6 @@ export interface StatusBarClickHint {
  *  Plan/Review 行不漏是因为它们走 `resolveTaskInstance`（先 removeTaskState
  *  再 taskTitle）。这里在适配层复刻同样的顺序。
  *  🔴 正则逐字对齐 vendor/timing-core.js:16-17，也与 src/parser.ts:88-89 一致。 */
-const DONE_TIME_STRIP_RE = /(?:^|\s)d(\d{1,2})(?::(\d{1,2}))?(?=\s|$)/gi;
-const PROGRESS_STRIP_RE = /(?:^|\s)d(\d{1,3})%(?=\s|$)/gi;
-
-function stripTaskStateTokens(value: string | null | undefined): string {
-  return String(value ?? '')
-    .replace(DONE_TIME_STRIP_RE, ' ')
-    .replace(PROGRESS_STRIP_RE, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 
 /** TimingEntry.start 可能是 Date 也可能是 epoch 毫秒，统一成毫秒。 */
 function entryStartMs(start: Date | number | null | undefined): number | null {
@@ -120,6 +111,11 @@ export function renderTimingStatusBar(
   hostHint?: () => string,
 ): StatusBarHandle {
   el.classList.add('nautilus-log-statusbar');
+  // 🔴 同时带上上游的 trigger 类：styles.css 里 `.is-forgotten` 那一族规则
+  //    （忘关提示的橙色底 + 图标显隐）全挂在 `.nautilus-log-timing__trigger` 上。
+  //    只加 `is-forgotten` 而不带这个类，规则一条都不会命中 —— 提示画不出来。
+  //    与 §D3 的一贯做法一致：发射上游类名，而不是改 CSS 选择器。
+  el.classList.add('nautilus-log-timing__trigger');
 
   /** 每次 render 现读 —— 设置改了立刻生效，不必重启执行层（T3-034）。 */
   const readCtx: () => ExecViewContext = typeof ctxSource === 'function'
@@ -155,6 +151,13 @@ export function renderTimingStatusBar(
   /* ── 常驻停止 POMO 按钮（认证审计 T3-020）───────────────────────────────
    *  上游把它放在 trigger 旁的【常驻层】，不在 popover 里；本移植此前只在侧栏
    *  面板 (pomo.ts) 里有 ⇒ 停 POMO 必须先开侧栏。这里补上常驻入口。 */
+  // 忘关计时器的橙色提示图标。默认 `display:none`，由 `.is-forgotten` 打开
+  //  （styles.css:943/960）。上游 timing-topbar.js:701 的等价物。
+  const forgottenSignalEl = document.createElement('span');
+  forgottenSignalEl.className = 'nautilus-log-timing__forgotten-signal';
+  forgottenSignalEl.setAttribute('aria-hidden', 'true');
+  forgottenSignalEl.textContent = '⚠';
+
   const pomoCloseEl = document.createElement('button');
   pomoCloseEl.type = 'button';
   pomoCloseEl.className = 'nautilus-log-timing__pomodoro-close';
@@ -193,6 +196,7 @@ export function renderTimingStatusBar(
     titleEl = elapsedEl = pomoLabelEl = threadsEl = null;
     fill();
     appendCapacityNodes();
+    el.appendChild(forgottenSignalEl);
     el.appendChild(pomoCloseEl);
   };
 
@@ -299,7 +303,7 @@ export function renderTimingStatusBar(
       const overdue = ctx.pomodoroMinutes > 0 && pomodoroElapsed >= ctx.pomodoroMinutes * 60000;
       const forgotten = timingCore.isForgottenClock(focused, new Date(now), ctx.forgottenTimerMinutes);
       // T1-022：taskTitle 不剥 `dHH:MM`，Plan/Review 之所以不漏是先过 removeTaskState。
-      const title = stripTaskStateTokens(
+      const title = stripStateTokens(
         focused.title || timingCore.taskTitle(String(focused.taskString || '')),
       ) || '(untitled)';
       const truncated = truncateTitle(title);

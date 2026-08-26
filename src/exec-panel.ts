@@ -24,6 +24,7 @@
  */
 
 import type { ExecViewContext, TimingSnapshot, TimingEntry } from './timing-contract';
+import { stripStateTokens } from './parser';
 
 /** vendored timing-core 的 CJS 面 —— 手动钉住本项目用到的函数签名。
  *  （照类型猜返回值在本项目栽过两次跟头，这里逐条实跑核对过。） */
@@ -135,16 +136,6 @@ function toMs(value: Date | number | null | undefined): number {
  *  Timing 视图的行标题直接用 `entry.title` ⇒ 用户会看到「写周报 d11:20」。
  *  `removeTaskState` 上游没导出，这里在适配层复刻同一顺序。
  *  🔴 正则逐字对齐 vendor/timing-core.js:16-17，也与 src/parser.ts:88-89 一致。 */
-const DONE_TIME_STRIP_RE = /(?:^|\s)d(\d{1,2})(?::(\d{1,2}))?(?=\s|$)/gi;
-const PROGRESS_STRIP_RE = /(?:^|\s)d(\d{1,3})%(?=\s|$)/gi;
-
-function stripTaskStateTokens(value: string | null | undefined): string {
-  return String(value ?? '')
-    .replace(DONE_TIME_STRIP_RE, ' ')
-    .replace(PROGRESS_STRIP_RE, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 
 /** 面板可以接受值，也可以接受取值函数。见 §T3-034：`execContext()` 生成的是
  *  值快照，持有它 ⇒ 改 language / 阈值后面板一直用旧值直到重建。 */
@@ -232,7 +223,7 @@ export function renderExecPanel(
       uid: entry.taskUid || '',
       string: entry.taskString || '',
       // T1-022：entry.title 走的是 taskTitle()，`dHH:MM` 还留在里面。
-      title: stripTaskStateTokens(entry.title) || '(untitled)',
+      title: stripStateTokens(entry.title) || '(untitled)',
       plannedMinutes: planned,
       // 🔴 此前这里硬填 progress: 0 / remainingMinutes: 0，于是「在计时的任务」
       //    进度恒 0、剩余恒 0，与 Plan 行（走 resolveTaskInstance）自相矛盾。
@@ -288,7 +279,7 @@ export function renderExecPanel(
     const copyEl = row.createDiv({ cls: 'nautilus-log-exec-row-copy' });
     // T1-022 / G1-089：Plan 行来自 resolveTaskInstance（已干净），Timing 行来自
     // activeTask（已在那里剥过）；这里再过一次是幂等的最后一道闸。
-    const displayTitle = stripTaskStateTokens(task.title) || '(untitled)';
+    const displayTitle = stripStateTokens(task.title) || '(untitled)';
     const title = copyEl.createEl('button', { cls: 'nautilus-log-exec-row-title', text: displayTitle });
     title.type = 'button';
     title.title = displayTitle;
@@ -435,7 +426,7 @@ export function renderExecPanel(
     row.dataset.taskUid = task.uid;
 
     const heading = row.createDiv({ cls: 'nautilus-log-exec-review-row-heading' });
-    const displayTitle = stripTaskStateTokens(task.title) || '(untitled)';   // T1-022
+    const displayTitle = stripStateTokens(task.title) || '(untitled)';   // T1-022
     const title = heading.createEl('button', { cls: 'nautilus-log-exec-review-title', text: displayTitle });
     title.type = 'button';
     title.title = displayTitle;

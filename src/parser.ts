@@ -197,6 +197,19 @@ function displayWidth(text: string): number {
  *  ⚠️ 紧凑列表要显示时间段，但那是它**单独的 `<time>` 列**（`compact.ts`
  *  的 `minutesToTime(start)–minutesToTime(end)`），来自已解析的分钟数，
  *  不是标题里的原文 token —— 与上游「标题栏不含区间、时间列单独显示」一致。 */
+/** 只剥【状态 token】(`dHH:MM` 完成锚点与 `dNN%` 进度)，不碰列表标记/时长/时间段。
+ *  执行层拿到的 `entry.title` / `task.title` 已经过引擎的 `taskTitle()`，
+ *  只剩这两种是我们自己发明、引擎不认识的 token（见 PORTING-DECISIONS.md §D8）。
+ *  🔴 这是全仓**唯一**一份实现 —— 曾经 statusbar.ts 与 exec-panel.ts 各抄了一份，
+ *  三处逐字节对齐全靠人盯，是明摆着的 DRY 违规。 */
+export function stripStateTokens(value: string | null | undefined): string {
+  return String(value ?? '')
+    .replace(DONE_AT_STRIP_RE, ' ')
+    .replace(PROGRESS_STRIP_RE, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function stripTaskTokens(line: string): string {
   // 先剥标记：`- [ ] ` / `- ` / `[x] `。放在最前面，后面的 token 剥离才不受影响。
   let text = String(line ?? '')
