@@ -76,7 +76,14 @@
 - 小时（`parseHour`）：`5` / `05:00` / `5:30` 都认，但**分钟被丢弃（向下取整到小时）**；范围 0–24，越界 ⇒ 进 `unknown`。
 - `language` 只认字面量 `en` / `zh`，其它值 ⇒ 进 `unknown`。
 - `urgent` **不做任何校验**，原样取字符串（空串 = 关闭）。
-- 🔴 **数值键没有任何范围钳制**：`parseInt_` 只查 `isFinite`。而上游 `resolveRendererSettings` 用 `boundedInteger` 钳到 `[5,60]` / `[15,30]`（`log-core.js`），本移植的设置页也用 slider 钳。⇒ **块内 `default-duration: 99999` 是唯一能绕过钳制的入口**。这是一处对上游的偏离，登记在此（认证审计 P1-058）。
+- **数值键有量程校验，越界＝拒收 + 上报，不静默夹取**（`blockconfig.ts`）。
+  > ⚠️ **订正（2026-08-26）**：本条原写「数值键没有任何范围钳制…块内 `default-duration: 99999`
+  > 是唯一能绕过钳制的入口」—— **该入口已于同日关闭**（认证审计 L1-039 / L1-040）。
+  量程取的是**本移植 UI 自身的端点**（`descLength` 14–28 / `todoDuration` 5–60），
+  **不是**引擎 `boundedInteger` 的 `[15,30]` —— 引擎那个自己就与上游下拉列表 `[14…28]` 不一致
+  （14 可选却被夹到 22），本移植的滑块允许 14。
+  越界走「上报」而不是静默夹取，与本节「未知键不吞掉」同哲学。
+  🔴 **改量程时必须同步三处**：`blockconfig.ts` 的校验、`settings.ts` 的滑块、`contract.ts` 的行内注释。
 
 **围栏与正文边界**：
 
@@ -203,7 +210,7 @@ openPrimaryPlan · warmRightSidebarWindowCache · legacyLogbookIsRunning · show
 | **为什么这样切** | 判据：「Obsidian 代码块可以吞掉自己的源码，只有当它装的是*查询/配置*而不是*数据*时」。计划正文是数据，必须留在块外保持可编辑、可被其它插件索引 |
 | **为什么不扫兄弟列表** | 边界零歧义。代价是不进 Tasks 插件的全局索引（B 方案留后手，一期不做） |
 | **别名** | `naut` 是短写。🔴 **新增别名必须同步改 3 处**，见下 |
-| **块内配置语法** | 完整契约见 **§1.1**（别名表 / `#` 注释 / key 小写归一 / 未知键上报 / 数值不钳制 / 正文边界）—— 上游是位置参数，这一整套零线索 |
+| **块内配置语法** | 完整契约见 **§1.1**（别名表 / `#` 注释 / key 小写归一 / 未知键上报 / **数值越界拒收并上报** / 正文边界）—— 上游是位置参数，这一整套零线索 |
 
 🔴 **别名注册点实为 3 处**（⚠️ 本条曾写「`main.ts` 的 `BLOCK_LANGS` 与 `locateByFile()` 的围栏正则」—— **`locateByFile` 这个函数在仓库里根本不存在**，已查 `grep -rn locateByFile src/` 只命中那条注释本身。这与 §D3 已订正的那类错误同型；认证审计 P1-055）：
 
@@ -329,6 +336,136 @@ Roam 专有的「组件前缀文本」，Obsidian 无对应概念。**这是上�
 🔴 **代价（必须让用户知道）**：上游那条「检测到第二个 CLOCK 写入者就拒绝启动」的安全承诺，在本移植里**不存在**。如果 vault 里还有别的插件在写 `LOGBOOK::` 抽屉（Day Planner 之类），Nautilus Log 不会察觉。真正的兜底不在这里，而在**定位侧**：`locateClockLine` 命中多行时**歧义拒写**、`locateLine` 的内容乐观锁拒写变化过的行（注意 §D9 里那条边界 —— 锁不防「选错人」）。
 
 ---
+
+
+### §D15 数据层的「保守拒写」一族
+
+上游的写回靠 Roam block uid 精确寻址，**不存在寻址歧义**。本移植的 uid 是 `path:line`（§D5），
+行会漂 ⇒ 每个写回点都要先定位、再动手。**统一取向：定位不唯一就拒写，宁可报错也不改错人。**
+代价集中在「幂等性」：上游那些「再调一次静默成功」的路径，这边会抛错。
+
+| 函数 | 本移植的收窄 | 上游行为 | 代价 | 审计 ID |
+|---|---|---|---|---|
+| `createRunningClock` | 开头守「仅 TODO 可开钟」；`status` 无 `\|\| 'TODO'` 兜底（守卫保证恒 TODO，兜底不可达，**不是漏抄**） | 无此守卫 | 绕过 runtime 直调数据层给非 TODO 开钟会抛错 | A1-069 / A1-083 |
+| `closeClock` | 定位歧义（同文件多条同起始分钟的 running CLOCK）时抛错 | 按 `clockUid` 精确读，无歧义问题 | **重复 Clock Out 不再幂等** —— 这正是 §D9「锁不防选错人」那条边界的具体后果 | A1-096 |
+| `deleteClock` | 先定位后删；找不到/歧义即拒写 | 「删完再读回确认」—— 若删错行，校验读到的仍是「删掉了」，防线失效 | 同一 entry 连删两次：第二次抛错（上游静默成功）。宿主删完即 refresh，实际触不到 | A1-108 / A1-112 |
+| `updateGraphBlock` | 窄化成**只接受 CLOCK 形态**的新内容；返回 `true`；重复调用抛错 | 通用「把任意 block 文本改成 string」 | 想更新非 CLOCK 块会抛错；本移植无此诉求（唯一调用方是 `reconcileLegacyOverlap`） | A1-116 / A1-122 / A1-123 |
+| `completeTask` | 只认显式 TODO（含 `- [/]` `- [-]` `- [>]` 等自定义 checkbox）；**裸文本行拒绝** | 非 DONE 一律完成 —— 裸行用前缀 `{{[[DONE]]}}` 照样勾上 | 对裸行调用会抛错。与 §D1 一致：裸行不是任务，不该凭空变成「已完成」 | A1-126 / A1-127 |
+
+### §D16 形状兼容字段：填得下但没有真语义
+
+vendored runtime 的数据结构里有几个字段在 Obsidian 没有对应概念。**保留字段是为了形状兼容，值不承载语义。**
+
+| 字段 | 本移植填什么 | 上游是什么 | 有消费者吗 |
+|---|---|---|---|
+| `TimingEntry.pageTitle` / `PrimaryPlanSnapshot.pageTitle` | vault 相对路径 | 人类可读页标题（`"September 24, 2026"`） | 无（vendor 与宿主均不读；盘心标题另走 `data-nl-key`） |
+| `plan.string` | 恒 `''` | 命中的 renderer block 的文本 | 无（vendor 只读 `plan.uid`） |
+
+**为什么**：Obsidian 的「页面身份」就是 vault 路径 —— 它已经是 uid 的基底（§1），没有独立于路径之外
+的「页标题」概念值得再爬一次。**代价**：将来若有消费方按上游语义读它们，`pageTitle` 拿到路径、
+`plan.string` 拿到空串。审计 ID：A1-009 / A1-044 / A1-049 / A1-084。
+
+### §D17 LOGBOOK 抽屉的成员判定放宽到「任意缩进后代」
+
+| | |
+|---|---|
+| **上游** | `ENTRIES_QUERY` 要求 CLOCK 是 drawer 块的**直接**子级（`timing-roam.js:31-55`） |
+| **本移植** | `indent > drawer.indent` 即算成员 —— 抽屉下方**任意深度**的 CLOCK 都收 |
+| **为什么** | 纯文本没有父子实体，只能靠缩进近似;「直接子级」在文本里没有可靠判据。我们自己写出的 CLOCK 恒为 `drawerIndent + 4`;用户手工塞进更深层级属病态输入，**收下比丢掉更不容易丢历史** |
+| **代价** | 抽屉归属口径比上游略宽。可解析性不受影响 |
+
+审计 ID：A1-011。
+
+### §D18 平行正则：`parser.ts` 逐字抄 vendor 的两条 `d`-token 正则
+
+| | |
+|---|---|
+| **问题** | 上游**不导出** `doneTime` / `durationTokens` / `removeTaskState`（`module.exports` 里没有）。而解析侧必须与引擎对同一行文本给同一答案 ⇒ 只能抄正则 |
+| **本移植** | `parser.ts` 的 `PROGRESS_RE` / `DONE_AT_RE` 与 `vendor/timing-core.js` 逐字相同 |
+| 🔴 **维护风险** | 上游改正则时本移植**不会自动跟随，测试也不会红**（两套各自本地） |
+| **保障** | §7 新增第 8 号检测器「平行正则漂移」：机械比对两侧 `regex source` 是否逐字一致，不一致即红 |
+
+审计 ID：T1-127。
+
+### §D19 Clock In 入口收窄到「今天主计划里的任务」
+
+右键菜单的「Clock in」要求该行 uid ∈ 今天主计划的任务集。上游任何 TODO 块都能 clock in。
+
+**为什么**：vendored `startTask` 自己就校验任务在今天主计划里、否则抛错
+（`timing-runtime.js:403-406`）—— 不加这条收窄就会给出一个**点了必然报错的菜单项**。
+**代价**：跨笔记 / 非计划任务不能从右键开始计时（要先把任务写进今天的日记）。审计 ID：E1-079。
+
+### §D20 状态栏点击只开侧栏，不 toggle 收起
+
+上游点 trigger 是 toggle popover;本移植三种入口（状态栏 token / 命令 / ribbon）调 `activateSidebar`，
+侧栏已开则只 `revealLeaf` 聚焦。**为什么**：载荷面是 Obsidian 侧栏 leaf，它自带关闭按钮与工作区命令。
+**代价**：想收起要用 Obsidian 原生关闭。审计 ID：T3-018。
+
+### §D21 CLOCK 在跑时 POMO 启动按钮「保留但禁用」
+
+上游在有任务 CLOCK 时**完全不渲染** POMO 启动按钮;本移植始终渲染，只置灰。
+
+**为什么**：把入口整个藏掉会让用户以为「番茄钟没了」;置灰是**可见的状态宣示** ——
+功能存在，只是被任务 CLOCK 暂时锁住（与 CLOCK always wins 的语义一致）。
+**代价**：照上游截图核对时会觉得多了一个点不动的按钮。审计 ID：T3-030。
+
+### §D22 浮层的类名、挂载面与数据形状都偏离上游
+
+| | |
+|---|---|
+| **上游** | `.nautilus-log-hover-tooltip` + `--positioned` / `--{placement}`，portal 到 `document.body`，内容是 `title` + `meta` 两个固定字段 |
+| **本移植** | `.nautilus-log-tooltip`，append 到**宿主容器**、坐标宿主相对（被 RQ-8 测试钉死），placement 存 `dataset.placement`，内容是逐行渲染的 `lines` |
+| **为什么** | 不 portal 到 body ⇒ 沿用上游 `--{placement}` 类名会与「body 绝对定位」语义的样式冲突;而两边的数据形状本就不同（我们喂 `[标题, 区间, 时长]`，种类行在 `aria-label`）。纯改名零用户可见收益 |
+| **代价** | `styles.css` 这一族非上游原样，对账时要记得它是「改造后的对应物」，不是遗漏 |
+
+审计 ID：L2-122 / S1-018。
+
+### §D23 紧凑显隐交给 CSS 容器查询，不在 JS 里判
+
+上游用 `compact-state` 这个 JS 状态门控紧凑概览的渲染;本移植**无条件渲染**，显隐全交给
+`@container (max-width:520px)`。`nautilus-log-header--compact` 同理无条件加。
+
+**为什么**：紧凑与否由容器查询判定，不需要宿主再维护一份「是否紧凑」的 JS 布尔，
+也避免与 `spiral.ts` 的 `isCompactChartWidth` 打架。
+**代价**：宽容器里常驻一段 `display:none` 的 DOM（开销可忽略）;⚠️ 若将来有人把某条规则移出
+`@container` 而忘了这里，会意外在宽容器生效。审计 ID：C2-022 / C2-076。
+
+### §D24 渲染路的语言不做二次归一化
+
+`main.ts` 渲染路的 `uiCopy(settings.language)` 不再归一化（`parser.ts` 有 `normalizeLanguage`）。
+
+**不是疏漏，是依赖不变量的有意取舍**：`loadSettings → sanitizeSettings` 每次加载都把 language
+强制成 `en`/`zh`，块级 `lang:` 覆盖也只认这两个字面量 ⇒ 渲染路永远拿不到脏值。
+**重新评估触发条件**：若将来出现能绕过净化的入口，把 `normalizeLanguage` 接到渲染路当防御。
+审计 ID：L2-034。
+
+### §D25 ⛔ 明确不移植清单（逐条附上游侧证据）
+
+🔴 判「不移植」必须能说清**为什么上游那段在上游自己也不触发，或者 Obsidian 根本没这个概念** ——
+不能只写「Roam 专有」四个字。
+
+| 项 | 上游侧证据（为什么不该移植） | 审计 ID |
+|---|---|---|
+| **debug 调试设施** | `debug-state-atom` 初始 `false`;开启按钮只在 renderer 块**首个位置参数**是字面量 `:debug` 时渲染 —— 而 §D4 用代码块内 YAML，**没有位置参数**这个通道;上游自注 `#FIXME remove in production later` | L2-089 / C1-107 / C2-034 |
+| **`shaky` 随机抖动** | `(def shaky false) ;; beta feature` —— 常量恒 false，`shake-if` 恒返回 0，**从未触发** | C1-106 |
+| **`iterate-rect-place` 第二套标签摆位** | 上游 `(or external-rect fallback-rect)` 里 `external-rect` **永不 nil**（`placeExternalLabels` 的 side-rails 分支恒返回对象）⇒ 那套螺旋搜索连同两个常量**整体不可达**。两边都不可达，等价于无差别 | C1-060 / L2-105 |
+| **Roam 面包屑 / zoom 重复渲染抑制** | 六条规则全匹配 `.rm-*` 专属 DOM;上游注释明说是「Roam 会把祖先块重复渲染进面包屑」。⚠️ **审计一度把它误读成「跳过嵌入的昂贵渲染」** —— 上游根本不针对 hover preview / `![[]]` 嵌入 | S1-004 / E1-084 / G1-120 |
+| **topbar 响应式密度 `data-density`** | 密度的测量面是 Roam 顶栏的搜索框（`findSearchSurface(.rm-topbar)`），Obsidian 无等价物。状态栏已用「标题截断 + idle 只留图标」覆盖了上游 density 的两档 | T3-014 |
+| **「加载中」态** | 上游数据源是异步图查询，有「渲染已发生但扩展仍在 bootstrap」的窗口;本移植渲染同步吃内容缓存（§D6），唯一异步点是双冷时的一次 `primeCache`，毫秒级 | C2-112 |
+| **`isDestroyed()` 探针** | 上游 `index.js` 自己也不调它（纯外部自省）;vendor 内部已用 `destroyed` 旗标守卫全部异步操作 | T2-108 |
+| **`showToast` 的 `intent`/`timeout`/`id`** | Obsidian `Notice` 只有 `(message, duration?)`，无 type、无 id;唯一 `danger` 调用点挂在 §D14 判死的 `legacyLogbookIsRunning()` 之后，不可达 | A1-183/184/185 |
+| **Roam 右栏窗口栈语义** | `frontBlock` 的 `deduped`/`reordered`/`skipped`/`superseded` 全是**多窗口栈**的去重/重排/竞态语义;Obsidian 右栏是**单个 leaf**，每次 `openFile` 覆盖式打开，没有可被乱序的栈 | A1-150 / A1-151 |
+| **`;;` 模板菜单插入组件** | Roam 原生模板菜单;Obsidian 直接敲围栏即可，§S4 的「创建测试笔记」已覆盖插入面 | E1-087 |
+| **命令面板缺失守卫** | 上游对 `extensionAPI.ui.commandPalette` 缺失抛错;Obsidian 的 `Plugin.addCommand` 无条件存在，无失败面 → N/A | E1-075 |
+| **点击盘面切片 +10% 进度** | ⚠️ 这条**不是上游死代码**，是真缺口。`spiral.ts` 是刻意纯渲染的壳（不 import obsidian，平台量靠宿主注入），在只读 SVG 里埋写回路径与「盘面只读」的既有契约冲突。**代价**：调进度只能手改笔记里的 `d50%`。**重新评估触发条件**：给 `SpiralOptions` 加 `onProgressClick?(uid)` 回调并把写回接进 `timing-obsidian.ts` | C1-105 |
+
+### §D26 设置滑块的量程不消费引擎导出的常量
+
+「开始/结束整点」用滑块 `setLimits(0,23)` / `setLimits(1,24)`，不消费引擎的 `START_HOURS`/`END_HOURS`。
+**为什么**：本移植的控件是滑块不是下拉，两个集合**端点一致**，滑块 step 1 即同一能力集合。
+**代价**：端点被抄了一份，上游改量程时不会自动跟随 —— 由 §7 第 5 号检测器（vendor 逐字节比对）
+在升级时提示，届时人工核对。审计 ID：L1-003 / L1-004。
+
 
 ## 5. 挂载面重排
 
