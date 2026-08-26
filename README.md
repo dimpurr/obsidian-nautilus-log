@@ -67,6 +67,9 @@ are accepted.
   time remains.
 - **Line order is priority.** Reorder the lines and the schedule follows.
 - Durations support `30m`, `30min`, `1h`, and `1h30m`.
+- **Urgent tasks turn red.** Set an **Urgent trigger** word in settings (empty
+  disables it); a flexible task whose title contains that word as a whitespace-
+  delimited token is drawn red instead of blue. Fixed events keep their own colour.
 
 ### Completed work
 
@@ -136,6 +139,47 @@ Time is written into your note next to the task as Org-style CLOCK lines under a
   It warns — it never stops or deletes a CLOCK. `0` disables it.
 - Actual time is never capped at Planned. Without an explicit completion anchor
   (`dHH:MM`) or an Actual end, Nautilus Log does not invent history.
+
+### Status bar timer
+
+With the execution layer on, a timer token lives in Obsidian's status bar. It
+shows the running task's title and elapsed time (or `elapsed · POMO` for a
+standalone pomodoro), and it turns to a warning state past the pomodoro and
+forgotten-timer thresholds.
+
+It is also **the only place the modifier-key gestures are mounted** (upstream
+hangs them off its top bar; this port has none):
+
+| Click | Action |
+|---|---|
+| Plain click | Open the sidebar |
+| **⌥ / Alt + click** | Locate today's Primary Plan in the main editor |
+| **⇧ / Shift + click** | Send the Primary Plan to the right sidebar |
+
+The panel's **Locate Primary Nautilus** button also honours ⇧; there a plain
+click already means "locate in the main editor", so ⌥ is a synonym for it.
+
+## Looking at other days
+
+A chart does not have to be about today. If the note's path contains a
+`YYYY-MM-DD` date (the usual Daily Note naming), that day becomes the chart's
+display day; otherwise it falls back to today.
+
+| Display day | Behaviour |
+|---|---|
+| **Today** | Red now-hand; tasks laid out from *this moment*; capacity counts the time that is left |
+| **Past** | No now-hand; the elapsed hatching covers the whole day; tasks laid out from the day's start; capacity counts the **whole day**; "relative to now" interactions (eye, playback) are off |
+| **Future** | No now-hand and **no hatching at all** — tomorrow has not started, so nothing has elapsed; otherwise as above |
+
+The rules for the three cases come from the upstream engine's `timelineDayState`;
+this port only tells it *which day the note is about*.
+
+## Troubleshooting
+
+The execution-layer chain has four independent failure points (injection path /
+file exists / synchronous cache hit / fence regex hit). Rather than guessing,
+run the command **Diagnose execution layer**: it reports the value at each link
+as a single notice.
 
 ## Differences from the Roam original
 

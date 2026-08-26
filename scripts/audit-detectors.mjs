@@ -5,13 +5,14 @@
  * 为什么这几条有效：本移植的 **CSS 与 i18n 是整份从上游搬来的、代码是逐个写的**。
  * 两者之差就是一张现成的欠账清单 —— 不需要人去回忆上游有什么。
  *
- * 五个检测器全是机械判定，零语义推断：
+ * 七个检测器全是机械判定，零语义推断：
  *   1. 孤儿 CSS      styles.css 里有规则、代码从不发射的类
  *   2. 孤儿文案      引擎文案表里有 key、渲染路径不可达
  *   3. 引擎导出面    src/vendor/*.js 导出了、没有任何调用点的符号
  *   4. 键名空间      vendor 里的 settings.get('...') 字面量必须在 shim 映射表里
  *   5. 上游漂移      vendor 基线与上游 HEAD 的距离（需本地有上游 clone）
  *   6. 怪癖钉子      test/reality-quirks.md 里每条现实怪癖必须有一个真实存在的测试钉住
+ *   7. 空转测试      test/*.test.js 里没有任何一处引用 src/ 的（＝没碰到被测代码）
  *
  * 用法：
  *   node scripts/audit-detectors.mjs           # 人读的报告
@@ -223,6 +224,29 @@ function danglingQuirkPins() {
   return out;
 }
 
+/* ── 7. 空转测试 ─────────────────────────────────────────────────────────
+ * 每个 `test/*.test.js` 必须至少引用一次 `src/`。
+ *
+ * 抓的是这一类：**把被测算法在测试文件里重写一遍，然后测那份重写**。
+ * 断言全绿、覆盖率好看，而产品代码一行都没跑到 —— 改坏 src/ 它也不会红。
+ * （`test/locate.test.js` 就是样板：它复刻了 main.ts 的 locateInText。）
+ *
+ * 🔴 判定必须【机械】，所以只看「有没有出现 `src/` 这个字面量」，不追语义。
+ *    三种真实接线方式都会命中：
+ *      require('../src/x')  ·  esbuild entryPoints: ['src/x.ts']  ·  readFileSync('src/x.ts')
+ *    误判方向是【放过】而不是【冤枉】—— 一个只在注释里写 src/ 的测试会被放过。
+ *    这是有意的：冤枉会逼人往测试里塞假引用，比漏报更坏。
+ *    剥注释反而会制造这种压力，故此处【不剥】。 */
+function testsWithoutSrc() {
+  const dir = join(ROOT, 'test');
+  if (!existsSync(dir)) return [`test/ 未找到（已查：仓库根下该相对路径）`];
+  return readdirSync(dir)
+    .filter((f) => f.endsWith('.test.js'))
+    .filter((f) => !read(`test/${f}`).includes('src/'))
+    .map((f) => `test/${f}`)
+    .sort();
+}
+
 /* ── 汇总 ───────────────────────────────────────────────────────────────── */
 const result = {
   orphanCss: orphanCss(),
@@ -231,12 +255,13 @@ const result = {
   unmappedSettingKeys: unmappedSettingKeys(),
   upstreamDrift: upstreamDrift(),
   danglingQuirkPins: danglingQuirkPins(),
+  testsWithoutSrc: testsWithoutSrc(),
 };
 
 const BASELINE_PATH = 'scripts/audit-baseline.json';
 const baseline = exists(BASELINE_PATH) ? JSON.parse(read(BASELINE_PATH)) : {};
 const regressions = {};
-for (const key of ['orphanCss', 'orphanCopy', 'unreachableExports', 'unmappedSettingKeys']) {
+for (const key of ['orphanCss', 'orphanCopy', 'unreachableExports', 'unmappedSettingKeys', 'testsWithoutSrc']) {
   const known = new Set(baseline[key] || []);
   const fresh = result[key].filter((x) => !known.has(x));
   if (fresh.length) regressions[key] = fresh;
@@ -255,6 +280,7 @@ if (process.argv.includes('--json')) {
     orphanCopy: '孤儿文案（文案表有 key、渲染不可达）',
     unreachableExports: '引擎导出但零调用',
     unmappedSettingKeys: '未映射的设置键（会静默落硬编码兜底）',
+    testsWithoutSrc: '空转测试（整个文件没引用过 src/，＝没碰到被测代码）',
   };
   for (const [k, title] of Object.entries(label)) {
     console.log(`\n## ${title} — ${result[k].length} 条`);

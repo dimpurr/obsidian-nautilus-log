@@ -32,7 +32,7 @@ default-duration: 30
 | `end` / `end-time` / `workday-end` | 当天结束小时（1–24；≤ start 即跨午夜） |
 | `default-duration` / `todo-duration` | 无时长任务的默认分钟数 |
 | `legend-length` / `desc-length` | 图例文字截断宽度 |
-| `urgent` / `urgent-trigger` | ⚠ 设置项存在，但当前实现**不改颜色**（见设置表） |
+| `urgent` / `urgent-trigger` | 紧急触发词。命中的**弹性任务**画成红色（见「视觉语义」） |
 | `language` / `lang` | `en` / `zh` |
 
 **行的种类**（行序就是优先级，永不排序）：
@@ -91,12 +91,30 @@ default-duration: 30
 | 颜色 | 含义 |
 | --- | --- |
 | 蓝 | 弹性任务 |
+| 红 | **紧急任务**——标题命中 Urgent trigger 触发词的弹性任务（固定事件仍是黄色，不会被改红） |
 | 黄 | 固定事件 |
 | 灰（带删除线） | 已完成的记录（历史切片） |
 | 红针 | 当前时刻 |
 | 斜纹 / 变暗 | 已流逝但没被记录的空档 |
 
 过去的空档是**事实性排程数据**，不是「时间被浪费」的判断。
+
+## 看昨天 / 看明天（跨日）
+
+图表画的**不一定是今天**：笔记路径里如果认得出 `YYYY-MM-DD`（Daily Note 的常见
+命名），那一天就是这张图的「显示日」。认不出才退回今天。
+
+| 显示日 | 行为 |
+| --- | --- |
+| **今天** | 红针指当前时刻；任务从**此刻**起往后铺；容量按剩余时间算；眼睛/播放可用 |
+| **过去** | **不画红针**；斜纹（已流逝）铺满整天；任务从**当天起点**铺；容量按**整天**算；眼睛/播放这类「相对此刻」的交互关闭 |
+| **未来** | **不画红针、完全不铺斜纹**（明天还没开始，没有「已流逝」这回事）；任务从当天起点铺；容量按整天算；交互同样关闭 |
+
+所以翻回昨天的日记看到的图与今天的形状明显不同，这是有意的：过去那一天的容量
+本来就该按整天核算，而不是按「现在还剩多少」。
+
+三种情况的规则全部由上游引擎的 `timelineDayState` 决定，本移植只负责把「这篇笔记
+是哪一天」喂进去，一条规则都不自己发明。
 
 ## 图表控制
 
@@ -119,6 +137,31 @@ default-duration: 30
 
 - 每分钟 tick 一次；主计划文件改动时重渲染。
 - 没有今日笔记 / 没有 nautilus 块 → 明说「no plan for today」，绝不静默画空盘。
+
+## 状态栏计时 token
+
+执行层打开后，Obsidian 右下角状态栏会常驻一个计时 token。它有三态：
+
+| 状态 | 显示 |
+| --- | --- |
+| 空闲 | 只有一个 ⏱ 图标 |
+| 任务 CLOCK 在跑 | `任务标题（截断）· 已用时长`，完整标题在悬停提示里 |
+| 独立番茄钟在跑 | `已用时长 · POMO` |
+
+超过 Pomodoro minutes 阈值会变色（`is-overdue`），超过 Forgotten timer warning
+minutes 会变成忘关告警态（`is-forgotten`）。
+
+**🔴 它同时是修饰键手势唯一的挂载面**（上游那套手势原本挂在 top bar 上，本移植
+没有 top bar）：
+
+| 点击 | 动作 |
+| --- | --- |
+| 普通点击 | 打开右侧栏 |
+| **⌥ / Alt + 点击** | 在主编辑区定位今天的主计划 |
+| **⇧ / Shift + 点击** | 把主计划送进右侧栏 |
+
+侧栏执行面板顶部的 **Locate Primary Nautilus** 按钮也接了 ⇧（送右侧栏）；那里
+普通点击本来就是「主编辑区定位」，所以 ⌥ 与普通点击同义。
 
 ## 执行层
 
@@ -175,24 +218,39 @@ default-duration: 30
 | Language | English | 界面文案语言（en / zh） |
 | Workday start hour | 5 | 0–23，窗口开始小时 |
 | Workday end hour | 21 | 1–24；≤ start 即「次日」 |
-| Description length | 22 | 15–30，图例截断宽度 |
+| Description length | 22 | 14–28，图例截断宽度（量程端点与上游列表对齐） |
 | Default task duration | 15 | 5–60，无时长任务的默认分钟 |
-| Urgent trigger | 空 | ⚠ 设置项存在，但当前实现不改颜色（只存配置） |
+| Urgent trigger | 空 | 触发词（空 = 关闭）。命中的弹性任务画成红色 |
 | Actual time tracking | 关 | 执行层总开关；关着时以下 4 项隐藏 |
 | Timing line in sidebar | 开 | Clock In 时把当前任务钉到右侧栏 |
-| Pomodoro minutes | 45 | 到点只变信号、不停止工作；`0` 会被当作未设置回落到 45 |
+| Pomodoro minutes | 45 | 15–90；到点只变信号、不停止工作。**关不掉**（量程到不了 0） |
 | Recent retention minutes | 45 | Recent 保留多久；`0` = 关闭 |
 | Forgotten timer warning minutes | 120 | 忘关警告阈值；`0` = 关闭；只警告不停止 |
 
 ## 命令一览
 
-命令面板里有：
+命令面板里注册了 **8 条**命令。前 5 条始终可用：
 
-- **Complete task with timestamp / 勾选并打完成时间戳**——勾选当前任务行并追加
-  `dHH:MM` 完成锚点。默认不绑快捷键，可在 设置 → 快捷键 自行绑定。
-- **Create Nautilus Log test note / 创建 Nautilus Log 测试笔记**——生成一份带测试
-  场景的笔记。
-- **Open Nautilus Log settings**——打开设置。
+| 命令 | 作用 |
+| --- | --- |
+| **Open Nautilus Log sidebar / 打开侧栏** | 打开右侧栏视图（与 ribbon 的指南针图标同义） |
+| **Diagnose execution layer / 诊断执行层** | 把执行层这条链的每一环取值报成一条 Notice：注入路径 / 文件是否存在 / 同步缓存命中数 / 围栏正则是否命中。面板说「今天没有 Nautilus Log」时按它，别猜 |
+| **Complete task with timestamp / 勾选并打完成时间戳** | 勾选光标所在任务行并追加 `dHH:MM` 完成锚点。默认不绑快捷键，可在 设置 → 快捷键 自行绑定。非任务行、或已有锚点时**静默不动** |
+| **Create Nautilus Log test note / 创建 Nautilus Log 测试笔记** | 生成一份带测试场景的笔记（同名已存在就加序号，绝不覆盖） |
+| **Open Nautilus Log settings** | 打开设置 |
+
+后 3 条是上游原有的执行层命令，**只在总开关 Actual time tracking 打开时出现**
+（关着时命令面板里一条都搜不到）：
+
+| 命令 | 作用 |
+| --- | --- |
+| **Focus current block on the Timing Line / 聚焦当前行到 Timing Line** | 把光标所在行送上 Timing Line（Clock In） |
+| **Clock out Timing Line / 结束当前计时** | 合上当前 CLOCK |
+| **Locate Primary Plan / 定位今天的主计划** | 跳到今天 Daily Note 的第一个 nautilus 块 |
+
+**TODO 行右键菜单**：总开关打开后，在编辑器里右键一个任务行会多出 **Clock In** /
+**Clock Out** 两项（是否出现由当前行的状态决定）。总开关关着时右键菜单里也一项都
+没有。
 
 执行层开启后，执行层面板还提供这些动作：Clock In / Clock Out、Complete task（勾选
 完成）、Delete current CLOCK（再次点击确认）、Start / Stop standalone POMO、Locate
@@ -219,3 +277,8 @@ Primary Nautilus。
    （上游靠外部 Todo Trigger 插件）。
 5. **嵌套子任务不参与排程**（与上游一致；原因见「计划格式」）。
 6. **事件行推荐写 `- 08:30-09:30 起床`**（与 `- [ ]` 缩进一致）；裸文本仍接受。
+7. **状态栏计时 token** 是本移植新增的（上游是 top bar），且 ⌥/⇧ 修饰键手势只挂在
+   它和侧栏 Locate 按钮上。
+8. **跨日显示**（从笔记路径认出 `YYYY-MM-DD`）是本移植新增的入口；三种日子的行为
+   规则本身来自上游引擎。
+9. **命令「诊断执行层」** 是本移植新增的（上游没有对应命令）。
