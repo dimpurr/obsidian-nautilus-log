@@ -318,6 +318,21 @@ test("无法识别的配置键 → 警告条，且不静默吞掉键名", async 
   assert.match(warn.textContent, /strat: 6/);
 });
 
+test("🔴 L1-039/040 块内 default-duration/legend-length 越界 → 上报警告且回落全局设置", async () => {
+  const plugin = makePlugin();
+  const { el, view } = makeView(plugin, {
+    source: "default-duration: 99999\nlegend-length: 99999",
+    sectionInfo: { text: PLAN_NOTE, lineEnd: PLAN_LINE_END },
+  });
+  await view.render();
+  const warn = el.querySelector(".nautilus-log-config-warning");
+  assert.ok(warn, "越界数值键必须计入 unknown 上报（不能静默吞掉）");
+  assert.match(warn.textContent, /default-duration: 99999/);
+  assert.match(warn.textContent, /legend-length: 99999/);
+  assert.ok(el.querySelector(".nautilus-log-chart svg"),
+    "回落全局设置后图必须照常渲染 —— 99999 不得直通容量/螺旋");
+});
+
 test("语言开关贯穿到块内文案（空态是 main.ts 自己的双语表）", async () => {
   const plugin = makePlugin({ language: "zh" });
   const { el, view } = makeView(plugin, {

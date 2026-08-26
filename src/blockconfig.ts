@@ -42,6 +42,37 @@ function parseInt_(raw: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/* ── 数值键的有效量程（认证审计 L1-039/040）─────────────────────────────────
+ * 上游 `resolveRendererSettings` 用 boundedInteger 把这两个键钳在
+ * [15,30] / [5,60]（vendor/log-core.js:206-217, "legend-len-limit" /
+ * "default-duration"）。本移植此前 `parseInt_` 只查 isFinite ⇒ 块内
+ * `default-duration: 99999` / `legend-length: 99999` 一类值一路直通
+ * 螺旋与容量计算 —— 设置页滑块（settings.ts）钳不住这条入口
+ * （§1.1 P1-058 登记的「唯一能绕过钳制的入口」）。
+ * 这里按 parseHour 的既有模式【拒收 + 计入 unknown 上报】，不静默夹取：
+ * · 越界值回落到全局设置（与上游 boundedInteger 的 fallback 效果一致）；
+ * · 但会连同键名一起报给 UI（renderConfigWarning），而不是像引擎那样静默
+ *   吞掉 —— 与「未知键不吞掉」（§1.1）同一条哲学。
+ * 量程取**本移植 UI 自己的**端点（settings.ts 的滑块 / contract.ts），不是
+ * 引擎的 [15,30] —— 引擎自己就跟上游下拉列表 [14,…,28] 不一致，夹到 15 会
+ * 毁掉滑块上合法的 14。两处量程只允许有一个定义真源：合同在
+ * src/contract.ts:92-93 与 settings.ts 的 DESC_LENGTH_SLIDER / 时长滑块。
+ * 改量程时这几处必须一起改。 */
+const NUMERIC_RANGES = {
+  todoDuration: { min: 5, max: 60 },
+  descLength: { min: 14, max: 28 },
+} as const;
+
+type NumericRangeKey = keyof typeof NUMERIC_RANGES;
+
+function boundedBlockNumber(raw: string, key: NumericRangeKey): number | null {
+  const n = parseInt_(raw);
+  if (n === null) return null;
+  const { min, max } = NUMERIC_RANGES[key];
+  // 与引擎 boundedInteger 一致：非整数同样拒收。
+  return Number.isInteger(n) && n >= min && n <= max ? n : null;
+}
+
 /** 解析 ```nautilus``` 块的内容。YAML frontmatter 风格的 `key: value`。
  *  空块＝完全沿用全局设置，这是合法且常见的写法。 */
 export function parseBlockConfig(source: string): BlockOverrides {
@@ -65,12 +96,12 @@ export function parseBlockConfig(source: string): BlockOverrides {
         break;
       }
       case 'default-duration': case 'todo-duration': {
-        const n = parseInt_(value); if (n !== null) out.todoDuration = n;
+        const n = boundedBlockNumber(value, 'todoDuration'); if (n !== null) out.todoDuration = n;
         else out.unknown.push({ key, value });
         break;
       }
       case 'legend-length': case 'desc-length': {
-        const n = parseInt_(value); if (n !== null) out.descLength = n;
+        const n = boundedBlockNumber(value, 'descLength'); if (n !== null) out.descLength = n;
         else out.unknown.push({ key, value });
         break;
       }

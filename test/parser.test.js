@@ -355,3 +355,16 @@ test('L1-042 未知语言归一到 en（引擎 uiCopy 未知语言会退中文�
   assert.equal(plan.warnings[0].message, logCore.uiCopy('en').warnings.sameTime);
   assert.notEqual(plan.warnings[0].message, logCore.uiCopy('zh').warnings.sameTime);
 });
+
+// 认证审计 L2-034 · 引擎 uiCopy 未知语言退【中文】的口径钉子。
+// 渲染路（main.ts:240-241,315,379,387）直接 `logCore.uiCopy(settings.language)`，
+// 之所以永不归一化也不会分叉，靠的是 loadSettings 的 sanitizeSettings（E1-040）
+// 把 language 强制成 en/zh —— 本钉子把「引擎口径确实是 zh」这一事实钉死，
+// 谁要是绕过净化把 'de' 喂进来，两边（引擎 zh / LOCAL_COPY en）当场分叉。
+test('L2-034 引擎 uiCopy 未知语言整表退中文（口径钉子）', () => {
+  const en = logCore.uiCopy('en');
+  const zh = logCore.uiCopy('zh');
+  const de = logCore.uiCopy('de');
+  assert.notDeepEqual(en, zh, 'en/zh 两表必须真实不同，否则断言自洽');
+  assert.deepEqual(de, zh, '未知语言必须逐键等于 zh 表（上游 log-core.js:944-946）');
+});
