@@ -548,7 +548,8 @@ test("Plan splits into Scheduled / Unscheduled sections, each with a count", () 
 
   const headings = [...container.querySelectorAll(".nautilus-log-exec-plan-label")]
     .map((n) => n.textContent);
-  assert.deepEqual(headings, ["Scheduled today · 1", "▸ Unscheduled today · 1"]);
+  // 折叠箭头不再拼进标签文本 —— 它是独立的 aria-hidden 图标（见下一条断言）。
+  assert.deepEqual(headings, ["Scheduled today · 1", "Unscheduled today · 1"]);
 
   // Unscheduled starts collapsed: only the scheduled row is rendered.
   const rows = container.querySelectorAll(".nautilus-log-exec-row");
@@ -671,6 +672,195 @@ test("a running task's progress reduces its remaining minutes (d50%)", () => {
   assert.equal(row.dataset.plannedMinutes, "45");
   // 45m at 50% done => 23m remaining (timing-core.js:352 rounding), never 0.
   assert.equal(row.dataset.remainingMinutes, "23");
+
+  panel.destroy();
+});
+
+/* ------------------------------------------------------------------ */
+/* Tests — write-back window (认证审计 T3-032)                          */
+/*                                                                     */
+/* MINE's structure key contains `status`, so a queued write used to    */
+/* rebuild the whole table: the list flickers and — worse — an already  */
+/* armed delete-confirmation button becomes an orphan node whose 2.5s   */
+/* timeout then resets a button that is no longer in the document.      */
+/* Upstream only greys the buttons out during that frame.               */
+/* ------------------------------------------------------------------ */
+
+test("status==='working' greys the buttons out instead of rebuilding the rows", () => {
+  makeDom();
+  const runtime = makeRuntime(focusedSnapshot());
+  const { container, panel } = mount(runtime);
+
+  const rowBefore = container.querySelector(".nautilus-log-exec-row.is-focused");
+  const deleteBefore = rowBefore.querySelector(".is-delete-clock");
+
+  // Arm the delete confirmation, then let a write-back land.
+  deleteBefore.click();
+  assert.ok(deleteBefore.classList.contains("is-confirming"), "confirmation armed");
+
+  runtime.push({ status: "working" });
+
+  const rowAfter = container.querySelector(".nautilus-log-exec-row.is-focused");
+  assert.equal(rowAfter, rowBefore, "the row node must survive the write-back");
+  const deleteAfter = rowAfter.querySelector(".is-delete-clock");
+  assert.equal(deleteAfter, deleteBefore, "the armed button must not become an orphan node");
+  assert.ok(deleteAfter.classList.contains("is-confirming"), "confirmation survives the write-back");
+  assert.equal(deleteAfter.disabled, true, "…but every row action is disabled meanwhile");
+  assert.equal(
+    [...rowAfter.querySelectorAll(".nautilus-log-exec-row-actions button")].every((b) => b.disabled),
+    true,
+  );
+
+  // The confirmed refresh re-enables them again.
+  runtime.push({ status: "ready" });
+  assert.equal(
+    [...container.querySelectorAll(".nautilus-log-exec-row-actions button")].some((b) => b.disabled),
+    false,
+    "buttons come back once the write-back is confirmed",
+  );
+
+  panel.destroy();
+});
+
+/* ------------------------------------------------------------------ */
+/* Tests — live context + view state (认证审计 T3-034)                  */
+/* ------------------------------------------------------------------ */
+
+test("context is read per render: refresh() picks up new settings and keeps the view", () => {
+  makeDom();
+  const runtime = makeRuntime(scheduledSnapshot());
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  let ctx = makeCtx(runtime);
+  const panel = renderExecPanel(container, () => ctx);
+
+  findTab(container, "Plan").click();
+  container.querySelector(".nautilus-log-exec-plan-heading.is-collapsible").click();
+  assert.deepEqual(panel.getViewState(), { view: "plan", unscheduledExpanded: true });
+
+  // The user switches the language in settings — no remount.
+  ctx = makeCtx(runtime, { language: "zh" });
+  panel.refresh();
+
+  assert.ok(findTab(container, "计划"), "tabs re-render in the new language");
+  assert.deepEqual(
+    panel.getViewState(),
+    { view: "plan", unscheduledExpanded: true },
+    "a settings change must not kick the user back to Timing / collapse the section",
+  );
+  assert.equal(
+    container.querySelector(".nautilus-log-exec-tab.is-active").textContent,
+    "计划",
+    "the Plan tab is still the active one",
+  );
+  assert.equal(
+    container.querySelectorAll(".nautilus-log-exec-row.is-unscheduled").length,
+    1,
+    "the expanded Unscheduled section is still expanded",
+  );
+
+  panel.destroy();
+});
+
+test("a rebuilt panel can be handed the previous view state", () => {
+  makeDom();
+  const runtime = makeRuntime(scheduledSnapshot());
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const panel = renderExecPanel(container, makeCtx(runtime), {
+    viewState: { view: "plan", unscheduledExpanded: true },
+  });
+
+  assert.equal(container.querySelector(".nautilus-log-exec-tab.is-active").textContent, "Plan");
+  assert.equal(container.querySelectorAll(".nautilus-log-exec-row.is-unscheduled").length, 1);
+  panel.destroy();
+});
+
+/* ------------------------------------------------------------------ */
+/* Tests — dHH:MM done anchor (认证审计 T1-022 / G1-089)                */
+/* ------------------------------------------------------------------ */
+
+test("the dHH:MM done anchor never reaches Timing / Review row titles", () => {
+  makeDom();
+  const base = focusedSnapshot();
+  const focused = { ...base.activeWork.focused, title: "Weekly report d11:20" };
+  const runtime = makeRuntime({
+    ...base,
+    entries: [focused],
+    activeWork: { ...base.activeWork, focused, recent: [], items: [focused], count: 1 },
+    forgottenTimerMinutes: 0,
+    dailyReview: {
+      ...base.dailyReview,
+      rows: [{ ...base.dailyReview.rows[0], title: "Weekly report d11:20" }],
+    },
+  });
+  const { container, panel } = mount(runtime);
+
+  const rowTitle = container.querySelector(".nautilus-log-exec-row-title");
+  assert.equal(rowTitle.textContent, "Weekly report");
+  assert.equal(rowTitle.title, "Weekly report");
+
+  findTab(container, "Review").click();
+  const reviewTitle = container.querySelector(".nautilus-log-exec-review-title");
+  assert.equal(reviewTitle.textContent, "Weekly report");
+
+  panel.destroy();
+});
+
+test("the forgotten-clock warning line uses the anchor-free title too", () => {
+  makeDom();
+  const base = focusedSnapshot();
+  const focused = {
+    ...base.activeWork.focused,
+    title: "Weekly report d11:20",
+    start: new Date(2026, 7, 24, 6, 0), // 6h before NOW
+  };
+  const runtime = makeRuntime({
+    ...base,
+    entries: [focused],
+    activeWork: { ...base.activeWork, focused, recent: [], items: [focused], count: 1 },
+  });
+  const { container, panel } = mount(runtime, { forgottenTimerMinutes: 120 });
+
+  const warning = container.querySelector(".nautilus-log-exec-forgotten");
+  // T3-045: MINE renders a whole extra warning row (upstream only prefixes the
+  // row meta). That superset is intentional — this asserts it is still there.
+  assert.ok(warning, "the extra forgotten-clock warning row is still rendered");
+  assert.equal(warning.textContent, "Check CLOCK: Weekly report");
+  // …and it never stops or deletes the CLOCK.
+  assert.equal(runtime.calls.stopTask, 0);
+  assert.deepEqual(runtime.calls.deleteCurrentClock, []);
+
+  panel.destroy();
+});
+
+/* ------------------------------------------------------------------ */
+/* Tests — collapse arrow is an icon, not text                          */
+/* ------------------------------------------------------------------ */
+
+test("the collapse arrow is a separate aria-hidden icon, not part of the label", () => {
+  makeDom();
+  const runtime = makeRuntime(scheduledSnapshot());
+  const { container, panel } = mount(runtime);
+  findTab(container, "Plan").click();
+
+  const disclosure = container.querySelector(".nautilus-log-exec-plan-heading.is-collapsible");
+  const arrow = disclosure.querySelector(".nautilus-log-exec-plan-arrow");
+  assert.ok(arrow, "arrow rendered as its own element");
+  assert.equal(arrow.getAttribute("aria-hidden"), "true", "screen readers must not read ▾/▸");
+  assert.equal(arrow.textContent, "▸");
+  assert.equal(
+    disclosure.querySelector(".nautilus-log-exec-plan-label").textContent,
+    "Unscheduled today · 1",
+    "the label text carries no arrow glyph",
+  );
+
+  disclosure.click();
+  assert.equal(
+    container.querySelector(".nautilus-log-exec-plan-arrow").textContent,
+    "▾",
+    "the arrow flips with aria-expanded",
+  );
 
   panel.destroy();
 });

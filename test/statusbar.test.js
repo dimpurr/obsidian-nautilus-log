@@ -98,7 +98,10 @@ function withNow(ms, fn) {
 function makeRuntime(snapshot) {
   const listeners = new Set();
   let current = snapshot;
+  const calls = { stopStandalonePomodoro: 0 };
   return {
+    calls,
+    stopStandalonePomodoro() { calls.stopStandalonePomodoro += 1; return Promise.resolve(); },
     getSnapshot: () => current,
     subscribe(listener) {
       listeners.add(listener);
@@ -144,6 +147,23 @@ function standaloneSnapshot(startedAtMs) {
 
 function makeCtx(runtime, overrides = {}) {
   return { runtime, language: "en", pomodoroMinutes: 45, forgottenTimerMinutes: 120, ...overrides };
+}
+
+/** planSnapshot carrying the runtime's execution projection — the only source
+ *  the capacity token is allowed to read (认证审计 T3-011). Same numbers as
+ *  exec-panel.test.js: free = 300-60 = 240, 240/600 => 40%. */
+const CAPACITY_EXECUTION = {
+  availableMinutes: 300,
+  totalAvailableMinutes: 600,
+  demandMinutes: 60,
+  fixedMinutes: 0,
+  totalFixedMinutes: 0,
+  overloadMinutes: 0,
+  unplacedMinutes: 0,
+};
+
+function withCapacity(snapshot) {
+  return { ...snapshot, planSnapshot: { plan: { uid: "p1" }, tasks: [], execution: CAPACITY_EXECUTION } };
 }
 
 const T0 = 1_700_000_000_000; // arbitrary fixed epoch ms for "now"
@@ -416,4 +436,224 @@ test("click handler fires while alive and is removed on destroy", () => {
   handle.destroy();
   el.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
   assert.equal(clicked.n, 1, "listener must be removed on destroy");
+});
+
+/* ------------------------------------------------------------------ */
+/* Tests — capacity token (认证审计 T3-011 / T3-012 / T3-019)          */
+/* ------------------------------------------------------------------ */
+
+test("capacity token is persistent: shows the left percentage in every mode", () => {
+  const { dom } = makeDom();
+  const runtime = makeRuntime(withCapacity(baseSnapshot()));
+  const el = dom.window.document.createElement("div");
+
+  withNow(T0, () => {
+    const handle = renderTimingStatusBar(el, makeCtx(runtime), () => {});
+    const token = () => el.querySelector(".nautilus-log-timing__capacity-token");
+    const value = () => el.querySelector(".nautilus-log-timing__capacity-value").textContent;
+
+    // idle
+    assert.equal(token().hidden, false, "token visible without opening anything");
+    assert.equal(value(), "40%");
+    // T3-012: the token's title carries the whole three-part summary.
+    assert.equal(token().title, "1h planned · 4h free · 40% left");
+    assert.equal(
+      el.querySelector(".nautilus-log-timing__capacity-separator").hidden,
+      false,
+    );
+
+    // running CLOCK — token survives the structural rebuild
+    runtime.publish(withCapacity(clockSnapshot({ startMs: T0 - 60_000 })));
+    assert.equal(value(), "40%", "token still present in the active mode");
+
+    // standalone POMO
+    runtime.publish(withCapacity(standaloneSnapshot(T0 - 60_000)));
+    assert.equal(value(), "40%", "token still present in the POMO mode");
+
+    handle.destroy();
+  });
+});
+
+test("no execution projection => capacity token stays hidden", () => {
+  const { dom } = makeDom();
+  const runtime = makeRuntime(baseSnapshot()); // planSnapshot: null
+  const el = dom.window.document.createElement("div");
+
+  const handle = renderTimingStatusBar(el, makeCtx(runtime), () => {});
+  assert.equal(el.querySelector(".nautilus-log-timing__capacity-token").hidden, true);
+  assert.equal(el.querySelector(".nautilus-log-timing__capacity-separator").hidden, true);
+  handle.destroy();
+});
+
+test("clicking the capacity token asks for the Plan view; elsewhere it does not", () => {
+  const { dom } = makeDom();
+  const runtime = makeRuntime(withCapacity(baseSnapshot()));
+  const el = dom.window.document.createElement("div");
+  const hints = [];
+
+  const handle = renderTimingStatusBar(el, makeCtx(runtime), (_ev, hint) => { hints.push(hint); });
+
+  el.querySelector(".nautilus-log-timing__capacity-token")
+    .dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  assert.deepEqual(hints[0], { view: "plan" }, "T3-019: token click lands on Plan");
+
+  el.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  assert.equal(hints[1], undefined, "a plain click carries no view hint");
+
+  handle.destroy();
+});
+
+/* ------------------------------------------------------------------ */
+/* Tests — thread count (认证审计 T3-003)                              */
+/* ------------------------------------------------------------------ */
+
+test("active mode emits the concurrent thread count with singular/plural", () => {
+  const { dom } = makeDom();
+  const one = clockSnapshot({ startMs: T0 - 60_000 }); // activeWork.count === 1
+  const runtime = makeRuntime(one);
+  const el = dom.window.document.createElement("div");
+
+  withNow(T0, () => {
+    const handle = renderTimingStatusBar(el, makeCtx(runtime), () => {});
+    const threads = () => el.querySelector(".nautilus-log-timing__threads").textContent;
+    assert.equal(threads(), "1 thread");
+
+    const two = clockSnapshot({ startMs: T0 - 60_000 });
+    two.activeWork = { ...two.activeWork, count: 2 };
+    runtime.publish(two);
+    assert.equal(threads(), "2 threads", "plural switches on count !== 1");
+
+    handle.destroy();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Tests — accessibility (认证审计 T3-013 / T3-021 / P1-102)           */
+/* ------------------------------------------------------------------ */
+
+test("aria: role/label per state, capacity folded in, openPanelHint as description", () => {
+  const { dom } = makeDom();
+  const runtime = makeRuntime(withCapacity(baseSnapshot()));
+  const el = dom.window.document.createElement("div");
+
+  withNow(T0, () => {
+    const handle = renderTimingStatusBar(el, makeCtx(runtime), () => {});
+    assert.equal(el.getAttribute("role"), "button");
+    assert.equal(el.getAttribute("tabindex"), "0");
+    // P1-102: openPanelHint was an orphan copy key until this wiring.
+    assert.equal(
+      el.getAttribute("aria-description"),
+      "Click: panel · ⌥/Alt: main · ⇧: sidebar",
+    );
+    assert.equal(el.title, "Click: panel · ⌥/Alt: main · ⇧: sidebar");
+    assert.equal(el.getAttribute("aria-label"), "Open Nautilus Log execution panel, 1h planned · 4h free · 40% left");
+
+    runtime.publish(withCapacity(clockSnapshot({ startMs: T0 - 60_000 })));
+    assert.equal(
+      el.getAttribute("aria-label"),
+      "1:00, 1 thread, 1h planned · 4h free · 40% left",
+    );
+
+    runtime.publish(withCapacity(standaloneSnapshot(T0 - 60_000)));
+    assert.equal(
+      el.getAttribute("aria-label"),
+      "1:00, POMO, 1h planned · 4h free · 40% left",
+    );
+
+    handle.destroy();
+  });
+});
+
+test("forgotten clock is announced in the aria-label, not only as a class", () => {
+  const { dom } = makeDom();
+  const runtime = makeRuntime(clockSnapshot({ startMs: T0 - 3 * 3600_000 }));
+  const el = dom.window.document.createElement("div");
+
+  withNow(T0, () => {
+    const handle = renderTimingStatusBar(el, makeCtx(runtime, { forgottenTimerMinutes: 120 }), () => {});
+    assert.match(el.getAttribute("aria-label"), /^Check CLOCK, 3:00:00, 1 thread$/);
+    handle.destroy();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Tests — persistent stop-POMO button (认证审计 T3-020)               */
+/* ------------------------------------------------------------------ */
+
+test("stop POMO lives on the persistent layer: no sidebar needed", () => {
+  const { dom } = makeDom();
+  const runtime = makeRuntime(baseSnapshot());
+  const el = dom.window.document.createElement("div");
+  let opened = 0;
+
+  withNow(T0, () => {
+    const handle = renderTimingStatusBar(el, makeCtx(runtime), () => { opened += 1; });
+    const stop = () => el.querySelector(".nautilus-log-timing__pomodoro-close");
+
+    assert.equal(stop().hidden, true, "hidden while idle");
+    runtime.publish(clockSnapshot({ startMs: T0 - 60_000 }));
+    assert.equal(stop().hidden, true, "hidden while a task CLOCK runs");
+
+    runtime.publish(standaloneSnapshot(T0 - 60_000));
+    assert.equal(stop().hidden, false, "visible during a standalone POMO");
+    assert.equal(stop().getAttribute("aria-label"), "Stop standalone POMO");
+
+    stop().dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    assert.equal(runtime.calls.stopStandalonePomodoro, 1, "stops without opening the sidebar");
+    assert.equal(opened, 0, "the stop click must not also open the panel");
+
+    handle.destroy();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Tests — live settings (认证审计 T3-034)                             */
+/* ------------------------------------------------------------------ */
+
+test("context is read per render: changing settings takes effect without a restart", () => {
+  const { dom, intervals } = makeDom();
+  const runtime = makeRuntime(standaloneSnapshot(T0 - 50 * 60_000)); // 50m in
+  const el = dom.window.document.createElement("div");
+  let ctx = makeCtx(runtime, { pomodoroMinutes: 60 });
+
+  withNow(T0, () => {
+    const handle = renderTimingStatusBar(el, () => ctx, () => {});
+    assert.ok(!el.classList.contains("is-overdue"), "50m < 60m threshold");
+
+    // The user lowers the threshold in settings; no remount, no new snapshot.
+    ctx = makeCtx(runtime, { pomodoroMinutes: 45 });
+    intervals[0].fn();
+    assert.ok(el.classList.contains("is-overdue"), "the next render must use the new threshold");
+
+    // Language is read per render too (copy comes from the fresh context).
+    ctx = makeCtx(runtime, { pomodoroMinutes: 45, language: "zh" });
+    intervals[0].fn();
+    assert.equal(el.getAttribute("aria-description"), "单击：面板 · ⌥/Alt：主界面 · ⇧：侧边栏");
+
+    handle.destroy();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Tests — dHH:MM done anchor (认证审计 T1-022 / G1-089)               */
+/* ------------------------------------------------------------------ */
+
+test("the dHH:MM done anchor never reaches the status bar title", () => {
+  const { dom } = makeDom();
+  const runtime = makeRuntime(clockSnapshot({
+    startMs: T0 - 60_000,
+    // `title` is what the runtime produced via taskTitle(), which does NOT
+    // strip the done anchor (upstream only strips it via removeTaskState).
+    title: "Weekly report d11:20",
+    taskString: "{{TODO}} Weekly report 30m d11:20",
+  }));
+  const el = dom.window.document.createElement("div");
+
+  withNow(T0, () => {
+    const handle = renderTimingStatusBar(el, makeCtx(runtime), () => {});
+    const titleEl = el.querySelector(".nautilus-log-statusbar-title");
+    assert.equal(titleEl.title, "Weekly report", "full title must be anchor-free");
+    assert.ok(!titleEl.textContent.includes("d11:20"), "displayed title must be anchor-free");
+    handle.destroy();
+  });
 });
