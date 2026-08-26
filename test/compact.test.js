@@ -217,6 +217,53 @@ test("compact event list localises the summary and singularises one item (P1-4)"
 });
 
 /* ------------------------------------------------------------------ */
+/* C2-075 · 紧凑面板折叠态跨重渲染存活                                  */
+/* ------------------------------------------------------------------ */
+
+test("🔴 C2-075 事件清单：带 state 宿主时，用户展开的面板不被重渲染重置", () => {
+  const states = new Map();
+  const render = (parent) => renderCompactEventList(
+    parent, events, copyEn, { open: false, state: { key: "schedule", states } },
+  );
+
+  const container = host();
+  render(container);
+  let details = container.querySelector(".nautilus-log-compact-details");
+  // open:false → 冷启动（宿主里没有记录）应为折叠。
+  assert.strictEqual(details.hasAttribute("open"), false, "fresh host starts collapsed");
+
+  // 模拟用户展开：浏览器 <details> 设 open 并发 toggle 事件。
+  details.setAttribute("open", "");
+  details.dispatchEvent(new dom.window.Event("toggle"));
+  assert.strictEqual(states.get("schedule"), true, "onToggle persists the open state into the host");
+
+  // 重渲染（每分钟 tick 的等价物）：同一个宿主，<details> 整个重建后仍应保持展开。
+  const container2 = host();
+  render(container2);
+  const details2 = container2.querySelector(".nautilus-log-compact-details");
+  assert.ok(details2 !== details, "the <details> is genuinely rebuilt, not reused");
+  assert.strictEqual(
+    details2.hasAttribute("open"), true,
+    "rebuilt <details> must read the persisted open state, not reset to open:false",
+  );
+});
+
+test("🔴 C2-075 事件清单：宿主里记录的是收起，重渲染就收起（双向读回）", () => {
+  const states = new Map([["schedule", false]]);
+  const render = (parent) => renderCompactEventList(
+    parent, events, copyEn, { open: true, state: { key: "schedule", states } },
+  );
+
+  const container = host();
+  render(container);   // 默认 open:true，但宿主说收起 → 必须收。
+  assert.strictEqual(
+    container.querySelector(".nautilus-log-compact-details").hasAttribute("open"),
+    false,
+    "host value wins over the open:true default",
+  );
+});
+
+/* ------------------------------------------------------------------ */
 /* §P1-4  compact overview                                             */
 /* ------------------------------------------------------------------ */
 
@@ -312,6 +359,34 @@ test("compact overview survives a broken capacity (P1-4)", () => {
   assert.ok(
     container.querySelector("details.nautilus-log-compact-overview"),
     "a malformed capacity degrades to a zeroed overview instead of throwing",
+  );
+});
+
+test("🔴 C2-085 概览：带 state 宿主时，用户展开的面板不被重渲染重置", () => {
+  const states = new Map();
+  const render = (parent) => renderCompactOverview(
+    parent, normalCapacity(), settings, 600, copyEn,
+    { open: false, state: { key: "overview", states } },
+  );
+
+  const container = host();
+  render(container);
+  let details = container.querySelector(".nautilus-log-compact-overview");
+  // 概览默认折叠（open === true 才展开）；冷启动 + open:false → 折叠。
+  assert.strictEqual(details.hasAttribute("open"), false, "fresh host starts collapsed");
+
+  details.setAttribute("open", "");
+  details.dispatchEvent(new dom.window.Event("toggle"));
+  assert.strictEqual(states.get("overview"), true, "onToggle persists the open state into the host");
+
+  // 重渲染（每分钟 tick 的等价物）：重建后仍应保持展开。
+  const container2 = host();
+  render(container2);
+  const details2 = container2.querySelector(".nautilus-log-compact-overview");
+  assert.ok(details2 !== details, "the <details> is genuinely rebuilt, not reused");
+  assert.strictEqual(
+    details2.hasAttribute("open"), true,
+    "rebuilt <details> must read the persisted open state, not reset to folded",
   );
 });
 

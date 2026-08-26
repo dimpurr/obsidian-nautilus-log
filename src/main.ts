@@ -67,6 +67,11 @@ export class NautilusLogView extends MarkdownRenderChild {
   private timer: number | null = null;
   private metadataListener: ((file: TFile) => void) | null = null;
 
+  /** C2-075/085：紧凑面板折叠态的宿主。代码块每分钟 tick 重渲染、`<details>`
+   *  整个重建，展开/收起必须存进这里、重渲染时经 options.state 读回 —— 否则
+   *  用户手动展开的面板 60 秒后自己合上。键：overview / schedule。 */
+  private compactOpen = new Map<string, boolean>();
+
   constructor(
     containerEl: HTMLElement,
     private plugin: NautilusLogPlugin,
@@ -307,7 +312,7 @@ export class NautilusLogView extends MarkdownRenderChild {
     // 紧凑概览（窄容器时才由 CSS 显出来）。canonical 摘要在折叠头里，body 只有
     // Available/Events + 图例 —— 照上游 5464e9d 之后的行为，不重复。
     renderCompactOverview(root, capacity, settings, dayState.capacityFromMinutes,
-      logCore.uiCopy(settings.language) as never);
+      logCore.uiCopy(settings.language) as never, { state: { key: "overview", states: this.compactOpen } });
 
 
     // 螺旋图。几何全部来自 vendor 的 log-core（spiralCellInnerHour /
@@ -351,6 +356,8 @@ export class NautilusLogView extends MarkdownRenderChild {
         showDone: this.chartState.showDone,
         playbackMinute,
         dayState,
+        // C2-075：把紧凑日程清单的折叠态交给 renderSpiral（宿主 Map 跨 tick 存活）。
+        compactState: this.compactOpen,
         // P0-4：把执行层的 CLOCK 记录喂进去，已完成任务才画得出【实际】耗时。
         clockEntries: this.plugin.timingRuntime?.getSnapshot?.()?.entries ?? [],
       });

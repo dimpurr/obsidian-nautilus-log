@@ -206,6 +206,11 @@ export class NautilusSidebarView extends ItemView {
   private exec: { destroy(): void } | null = null;
   private pomo: { destroy(): void } | null = null;
 
+  /** C2-075/085：紧凑面板折叠态的宿主。侧栏每分钟 tick 重渲染、`<details>`
+   *  整个重建，展开/收起必须存进这里、重渲染时经 options.state 读回 —— 否则
+   *  用户手动展开的面板 60 秒后自己合上。键：overview / schedule。 */
+  private compactOpen = new Map<string, boolean>();
+
   /* ---- 认证审计 C2-058：侧栏此前完全没有控制栏（眼睛/播放/折叠）。 ----
    * 图表状态得有个宿主，`main.ts` 的 view 有 `chartState`，侧栏没有 ——
    * 这里补一份同构的。它是【纯视觉】状态，不写回 Markdown。 */
@@ -451,7 +456,8 @@ export class NautilusSidebarView extends ItemView {
     // 🔴 侧栏几乎总是落在 @container (max-width:520px) 里，那套规则会把完整
     //    头部藏起来、改显紧凑概览。只接 main.ts 不接这里 => 侧栏什么都没有。
     const uiCopy = logCore.uiCopy(settings.language) as never;
-    renderCompactOverview(shell, capacity, settings, nowMinutes(), uiCopy);
+    renderCompactOverview(shell, capacity, settings, nowMinutes(), uiCopy,
+      { state: { key: "overview", states: this.compactOpen } });
 
     const content = shell.createDiv({ cls: 'nautilus-log-content' });
 
@@ -467,6 +473,8 @@ export class NautilusSidebarView extends ItemView {
         //   否则按钮点了没反应。只用 renderSpiral 的现有 options。
         showDone: this.chartState.showDone,
         playbackMinute: this.chartState.playback?.minute ?? null,
+        // C2-075：把紧凑日程清单的折叠态交给 renderSpiral（宿主 Map 跨 tick 存活）。
+        compactState: this.compactOpen,
         // P0-4：同 main.ts —— 侧栏也要拿到 CLOCK 记录。
         clockEntries: this.getExecContext()?.runtime?.getSnapshot?.()?.entries ?? [],
         dayState: resolveDayState({

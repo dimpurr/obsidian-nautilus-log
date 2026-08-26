@@ -84,16 +84,37 @@ function itemLabel(copy: UiCopy, count: number): string {
   return count === 1 ? (panels.item || "item") : (panels.items || "items");
 }
 
-/** 折叠面板骨架：`<details class=…><summary class=…>text</summary>`。 */
+/** 折叠态宿主：单个面板的展开/收起状态，跨重渲染存活。
+ *
+ *  C2-075 / C2-085：侧栏与代码块每 60 秒 tick 一次会【整个】重渲染，`<details>`
+ *  被重建 ⇒ 用户手动展开的面板 60 秒后又合上了（上游对应的是 Clojure atom
+ *  `compact-list-open-state` / `compact-overview-open-state`，Component 重绘时显式
+ *  读回）。宿主把状态存在调用方（main.ts / sidebar.ts 的 `Map`）而不是 DOM 里，
+ *  重渲染时经 `options.state` 读回，展开态才活得下去。
+ */
+export interface CompactState {
+  /** 这个面板在宿主 Map 里的键。同一宿主可塞多个面板，互不干扰。 */
+  key: string;
+  states: Map<string, boolean>;
+}
+
+/** 折叠面板骨架：`<details class=…><summary class=…>text</summary>`。
+ *  ⚠️ 加了 toggle 监听后，这个 <details> 就【带着监听器】交给了调用方 ——
+ *  宿主重渲染前必须把它从文档剥掉/换掉，不能长期挂着；`re-render 读回`靠的是
+ *  `onToggle` 把展开态写回宿主，不是靠复用这个旧节点。 */
 function makeDetails(
   detailsCls: string,
   summaryCls: string,
   open: boolean,
+  onToggle?: (open: boolean) => void,
 ): { details: HTMLElement; summary: HTMLElement } {
   const details = el("details", detailsCls);
   if (open) details.setAttribute("open", "");
   const summary = el("summary", summaryCls);
   details.appendChild(summary);
+  if (onToggle) {
+    details.addEventListener("toggle", () => onToggle(details.hasAttribute("open")));
+  }
   return { details, summary };
 }
 
@@ -159,7 +180,7 @@ export function renderCompactEventList(
   parent: HTMLElement,
   events: CompactEvent[],
   copy: UiCopy,
-  options: { open?: boolean } = {},
+  options: { open?: boolean; state?: CompactState } = {},
 ): HTMLElement {
   const items = (events || [])
     .filter((e) => e && e.freetime !== true
@@ -169,6 +190,11 @@ export function renderCompactEventList(
     .sort((a, b) => (a.start - b.start) || (a.end - b.end));
 
   const panels = copy?.panels || {};
+  // C2-075：状态宿主在读回时优先；没有宿主才退回 `options.open` 的兜底。
+  const stored = options.state?.states.get(options.state.key);
+  const onToggle = options.state
+    ? (open: boolean) => { options.state!.states.set(options.state!.key, open); }
+    : undefined;
   const { details, summary } = makeDetails(
     "nautilus-log-compact-details",
     "nautilus-log-compact-summary",
@@ -176,7 +202,8 @@ export function renderCompactEventList(
     // 上游 `component.cljs:1730` 是 `(reset! compact-list-open-state (not sidebar?))`
     // —— 侧栏（紧凑）默认**折叠**，主视图才展开。默认值留作展开只是
     // 调用方不传时的兑底；真正的判据由 `spiral.ts` 传 `{open: !compact}`。
-    options.open !== false,
+    stored !== undefined ? stored : options.open !== false,
+    onToggle,
   );
   summary.textContent =
     `${panels.schedule || "Schedule"} · ${items.length} ${itemLabel(copy, items.length)}`;
@@ -222,7 +249,7 @@ export function renderCompactOverview(
   settings: NautilusSettings,
   nowMinutes: number,
   copy: UiCopy,
-  options: { open?: boolean } = {},
+  options: { open?: boolean; state?: CompactState } = {},
 ): HTMLElement {
   const metrics = resolveCapacityMetrics(capacity, settings, nowMinutes);
   const planned = metrics.planned;
@@ -231,10 +258,16 @@ export function renderCompactOverview(
   const panels = copy?.panels || {};
   const overviewLabel = panels.overview || "Overview";
 
+  // C2-085：状态宿主在读回时优先；没有宿主才退回 `options.open === true`。
+  const stored = options.state?.states.get(options.state.key);
+  const onToggle = options.state
+    ? (open: boolean) => { options.state!.states.set(options.state!.key, open); }
+    : undefined;
   const { details, summary } = makeDetails(
     `nautilus-log-compact-overview${warning ? " nautilus-log-compact-overview--warning" : ""}`,
     "nautilus-log-compact-summary nautilus-log-compact-overview-summary",
-    options.open === true,           // 上游 compact-overview-open-state 默认 false
+    stored !== undefined ? stored : options.open === true,   // 上游 compact-overview-open-state 默认 false
+    onToggle,
   );
   summary.setAttribute(
     "aria-label",
