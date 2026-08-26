@@ -128,19 +128,65 @@ function toMs(value: Date | number | null | undefined): number {
   return Number(value) || 0;
 }
 
-export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): { destroy(): void } {
-  const runtime = ctx.runtime;
-  const language = ctx.language;
-  const copy = () => timingCore.executionCopy(language);
+/* ── `dHH:MM` 完成锚点剥离（认证审计 T1-022 / G1-089）───────────────────────
+ *  上游 `taskTitle` 只剥 TODO 与时长 token，**不剥** `dHH:MM` / `d50%`；
+ *  Plan/Review 行之所以干净，是因为它们走 `resolveTaskInstance`
+ *  （timing-core.js:325 先 `removeTaskState` 再 `taskTitle`）。
+ *  Timing 视图的行标题直接用 `entry.title` ⇒ 用户会看到「写周报 d11:20」。
+ *  `removeTaskState` 上游没导出，这里在适配层复刻同一顺序。
+ *  🔴 正则逐字对齐 vendor/timing-core.js:16-17，也与 src/parser.ts:88-89 一致。 */
+const DONE_TIME_STRIP_RE = /(?:^|\s)d(\d{1,2})(?::(\d{1,2}))?(?=\s|$)/gi;
+const PROGRESS_STRIP_RE = /(?:^|\s)d(\d{1,3})%(?=\s|$)/gi;
+
+function stripTaskStateTokens(value: string | null | undefined): string {
+  return String(value ?? '')
+    .replace(DONE_TIME_STRIP_RE, ' ')
+    .replace(PROGRESS_STRIP_RE, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** 面板可以接受值，也可以接受取值函数。见 §T3-034：`execContext()` 生成的是
+ *  值快照，持有它 ⇒ 改 language / 阈值后面板一直用旧值直到重建。 */
+export type ExecContextSource = ExecViewContext | (() => ExecViewContext);
+
+/** 面板的「视图态」—— 数据之外、用户手动摆出来的那部分（认证审计 T3-034）。
+ *  侧栏重建面板时必须带过去，否则每次设置变更都把用户踢回 Timing 视图、
+ *  并把 Unscheduled 分节重新收起。 */
+export interface ExecPanelViewState {
+  view: ViewName;
+  unscheduledExpanded: boolean;
+}
+
+export interface ExecPanelHandle {
+  destroy(): void;
+  /** 强制重渲（设置变更后用它，而不是销毁重建 —— 见 T3-034）。 */
+  refresh(): void;
+  /** 交给侧栏，在不得不重建时把视图态搬过去。 */
+  getViewState(): ExecPanelViewState;
+}
+
+export function renderExecPanel(
+  container: HTMLElement,
+  ctxSource: ExecContextSource,
+  options: { viewState?: Partial<ExecPanelViewState> } = {},
+): ExecPanelHandle {
+  /** 🔴 每次用到都现读（T3-034）。别在这里解构成局部常量。 */
+  const readCtx: () => ExecViewContext = typeof ctxSource === 'function'
+    ? (ctxSource as () => ExecViewContext)
+    : () => ctxSource as ExecViewContext;
+  const runtime = readCtx().runtime;
+  const language = (): string => readCtx().language;
+  const copy = () => timingCore.executionCopy(language());
 
   let destroyed = false;
-  let view: ViewName = 'timing';
+  let view: ViewName = options.viewState?.view || 'timing';
   let state: TimingSnapshot = runtime.getSnapshot();
   let lastStructureKey: string | null = null;
   let unsubscribe: (() => void) | null = null;
   let deleteConfirmation: { clockUid: string; button: HTMLButtonElement; timer: number } | null = null;
   /** Plan 的 Unscheduled 分节是否展开（上游默认收起，只显示计数）。 */
-  let unscheduledExpanded = false;
+  let unscheduledExpanded = options.viewState?.unscheduledExpanded ?? false;
 
   container.addClass('nautilus-log-exec-panel');
 
@@ -167,7 +213,7 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
 
   /** ctx.forgottenTimerMinutes > 0 且当前 CLOCK 已跑超过阈值才算忘关。 */
   const isForgotten = (entry: TimingEntry): boolean => {
-    const threshold = Number(ctx.forgottenTimerMinutes) || 0;
+    const threshold = Number(readCtx().forgottenTimerMinutes) || 0;
     if (threshold <= 0) return false;
     return timingCore.isForgottenClock(entry, state.now, threshold);
   };
@@ -176,7 +222,7 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
    *  🔴 上游同名代码读 `settings.get('todo-duration')`（timing-topbar.js:331）；
    *  本移植此前硬编码 15 —— 恰好等于 DEFAULT_SETTINGS，所以只有改过设置的
    *  用户会撞上、测试必绿。这正是 PORTING-DECISIONS.md §D7 描述的静默模式。 */
-  const todoDuration = (): number => Number(ctx.todoDuration) || 15;
+  const todoDuration = (): number => Number(readCtx().todoDuration) || 15;
 
   /** 从一条 CLOCK 条目还原成 plan 行形状（上游 activeTask）。 */
   const activeTask = (entry: TimingEntry): PlanTask => {
@@ -185,7 +231,8 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
     return {
       uid: entry.taskUid || '',
       string: entry.taskString || '',
-      title: entry.title || '(untitled)',
+      // T1-022：entry.title 走的是 taskTitle()，`dHH:MM` 还留在里面。
+      title: stripTaskStateTokens(entry.title) || '(untitled)',
       plannedMinutes: planned,
       // 🔴 此前这里硬填 progress: 0 / remainingMinutes: 0，于是「在计时的任务」
       //    进度恒 0、剩余恒 0，与 Plan 行（走 resolveTaskInstance）自相矛盾。
@@ -239,9 +286,12 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
     if (forgotten) row.classList.add('is-forgotten');
 
     const copyEl = row.createDiv({ cls: 'nautilus-log-exec-row-copy' });
-    const title = copyEl.createEl('button', { cls: 'nautilus-log-exec-row-title', text: task.title });
+    // T1-022 / G1-089：Plan 行来自 resolveTaskInstance（已干净），Timing 行来自
+    // activeTask（已在那里剥过）；这里再过一次是幂等的最后一道闸。
+    const displayTitle = stripTaskStateTokens(task.title) || '(untitled)';
+    const title = copyEl.createEl('button', { cls: 'nautilus-log-exec-row-title', text: displayTitle });
     title.type = 'button';
-    title.title = task.title;
+    title.title = displayTitle;
     title.addEventListener('click', (event: MouseEvent) => {
       runAction(() => runtime.openTask(task.uid, { sidebar: event.shiftKey }));
     });
@@ -251,7 +301,7 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
       plannedMinutes: task.plannedMinutes,
       entries: state.entries,
       now: state.now,
-      language,
+      language: language(),
     });
 
     const timingText = focused && focusedEntry
@@ -385,9 +435,10 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
     row.dataset.taskUid = task.uid;
 
     const heading = row.createDiv({ cls: 'nautilus-log-exec-review-row-heading' });
-    const title = heading.createEl('button', { cls: 'nautilus-log-exec-review-title', text: task.title });
+    const displayTitle = stripTaskStateTokens(task.title) || '(untitled)';   // T1-022
+    const title = heading.createEl('button', { cls: 'nautilus-log-exec-review-title', text: displayTitle });
     title.type = 'button';
-    title.title = task.title;
+    title.title = displayTitle;
     title.addEventListener('click', (event: MouseEvent) => {
       runAction(() => runtime.openTask(task.uid, { sidebar: event.shiftKey }));
     });
@@ -429,10 +480,17 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
     if (collapsible) {
       (header as HTMLButtonElement).type = 'button';
       header.setAttribute('aria-expanded', String(expanded));
+      // 🔴 折叠箭头必须是独立的 aria-hidden 图标，不能拼进标签文本 ——
+      //    否则屏幕阅读器会把「▾」念出来（上游同样是独立图标 + aria-expanded
+      //    才是状态的可访问载体）。
+      header.createEl('span', {
+        cls: 'nautilus-log-exec-plan-arrow',
+        text: expanded ? '▾' : '▸',
+      }).setAttribute('aria-hidden', 'true');
     }
     header.createEl('span', {
       cls: 'nautilus-log-exec-plan-label',
-      text: `${collapsible ? (expanded ? '▾ ' : '▸ ') : ''}${label} · ${count}`,
+      text: `${label} · ${count}`,
     });
     return header;
   };
@@ -442,7 +500,7 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
   const renderCapacity = (): void => {
     const execution = (state.planSnapshot?.execution || null) as ExecutionProjection | null;
     if (!execution) return;
-    const summary = timingCore.capacitySummary(execution, language);
+    const summary = timingCore.capacitySummary(execution, language());
     const strip = container.createDiv({ cls: 'nautilus-log-exec-capacity' });
     strip.setAttribute('aria-label', copy().capacity.label);
     const metric = strip.createDiv({ cls: 'nautilus-log-exec-capacity-metric' });
@@ -587,9 +645,26 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
 
   /* ─────────────────────────── 渲染 / 就地刷新 ─────────────────────────── */
 
+  /** 写回期间只同步按钮可用性，不重建行（上游 syncActionAvailability，
+   *  timing-topbar.js:449-454）。 */
+  const syncActionAvailability = (): void => {
+    const disabled = state.status === 'working';
+    container.querySelectorAll('.nautilus-log-exec-row-actions button')
+      .forEach((button) => { (button as HTMLButtonElement).disabled = disabled; });
+  };
+
   const render = (next: TimingSnapshot, force = false): void => {
     state = next;
     if (destroyed) return;
+    // 🔴 认证审计 T3-032：本移植的结构键含 status，`working` 一到就整表重建
+    //    ⇒ 写回期间列表闪烁，并且【已武装的删除确认按钮变成孤儿节点】
+    //    （2.5s 后 clearDeleteConfirmation 操作的是已脱离文档的按钮）。
+    //    上游在这一帧只置灰按钮 + 就地刷新计时，等确认后的刷新再渲染新数据。
+    if (!force && state.status === 'working' && lastStructureKey !== null) {
+      syncActionAvailability();
+      updateLiveElapsed();
+      return;
+    }
     const key = timingCore.executionStructureKey(state, view);
     if (!force && lastStructureKey !== null && key === lastStructureKey) {
       updateLiveElapsed();
@@ -619,7 +694,7 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
         plannedMinutes: row.plannedMinutes,
         entries: state.entries,
         now: state.now,
-        language,
+        language: language(),
       });
       actual.textContent = `${copy().review.actual} ${timingCore.compactMinutes(duration.actualMinutes)}`;
       return;
@@ -635,7 +710,7 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
       plannedMinutes: task.plannedMinutes,
       entries: state.entries,
       now: state.now,
-      language,
+      language: language(),
     });
     const forgotten = isForgotten(focused);
     row.classList.toggle('is-forgotten', forgotten);
@@ -649,6 +724,15 @@ export function renderExecPanel(container: HTMLElement, ctx: ExecViewContext): {
   unsubscribe = runtime.subscribe((next) => { render(next); });
 
   return {
+    /** 设置变更后用它 —— ctx 是取值函数，force 重渲即拿到新语言 / 新阈值，
+     *  而 view / unscheduledExpanded 原地保留（认证审计 T3-034）。 */
+    refresh() {
+      if (destroyed) return;
+      render(runtime.getSnapshot(), true);
+    },
+    getViewState(): ExecPanelViewState {
+      return { view, unscheduledExpanded };
+    },
     destroy() {
       if (destroyed) return;
       destroyed = true;
