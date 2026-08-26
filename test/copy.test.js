@@ -7,8 +7,8 @@
  *
  * 🔴 断言对象是 **main.ts 真实导出的渲染函数**，不是复刻件（audit §5）。
  *
- * ⚠️ `formatCapacitySummary` 硬编码中文是**上游行为**（header.ts:317 /
- *    contract.ts:162 有注释），不在本条范围内、也不许"顺手改掉"。
+ * ⚠️ `formatCapacitySummary` 硬编码中文是**上游行为**（header.ts:411 /
+ *    contract.ts:195 有注释），不在本条范围内、也不许"顺手改掉"。
  */
 
 "use strict";

@@ -182,7 +182,7 @@ openPrimaryPlan · warmRightSidebarWindowCache · legacyLogbookIsRunning · show
 | **状态栏三态** | 普通点击 → 打开侧栏（Obsidian 这边最有用的默认，上游没有这个动作）· ⌥ → 主编辑区定位 · ⇧ → 送右侧栏 |
 | **侧栏按钮只有两态** | ⚠️ 订正：`exec-panel.ts` 的 identity 按钮**普通点击本来就是「主编辑区定位」**，所以 ⌥ 与普通点击**同义**，只有 ⇧ 有区分。按钮 `title` 写「⌥ / ⇧」是为了让用户知道 ⇧ 另有行为，不是承诺 ⌥ 另有语义 —— 代码注释已就地澄清（认证审计 P1-046） |
 | **实现** | `main.ts` 的 `renderTimingStatusBar` 回调 · `exec-panel.ts` 的 identity 按钮 |
-| 🔴 **已知欠账** | 状态栏那三态**没有任何提示**。引擎自带的提示文案 `EXECUTION_COPY.actions.openPanelHint`（"Click: panel · ⌥/Alt: main · ⇧: sidebar"）只被死代码 topbar 引用，`statusbar.ts` 未接（它的 `title` 是任务全名）。⇒ 检测器把它报成孤儿文案，baseline 里标的是 🔴 真欠账而不是豁免（认证审计 P1-047） |
+| **状态栏三态提示** | ✅ 已接（2026-08-26 收口，认证审计 P1-047）。提示挂在状态栏自身的 `aria-description` + `title` 上：`statusbar.ts:263-269` 把 `EXECUTION_COPY.actions.openPanelHint` 与 §D2 修饰键三态合并成一条（`aria-description` + `title`）。已不再是孤儿文案、也不是欠账。⚠️ 上游的 `openPanelHint` 那套落在 topbar 死代码里（§D3），故文案来源仍是引擎、挂载点是状态栏 |
 
 ### §D3 top bar 整体并入右侧栏
 
@@ -240,7 +240,7 @@ openPrimaryPlan · warmRightSidebarWindowCache · legacyLogbookIsRunning · show
 |---|---|
 | **上游** | Roam `extensionAPI.settings` 用 **kebab-case**：`workday-start` / `todo-duration` / `recent-retention-minutes` / `timing-line-sidebar` |
 | **本移植** | `NautilusSettings` 用 **camelCase**（`workdayStartHour` …） |
-| **🔴 必须有映射表** | 喂给 vendored runtime 的 `extensionAPI` shim **必须做 kebab→camel 转换**。直接透传会让所有 `settings.get()` 返回 `undefined` |
+| **🔴 必须有映射表** | 喂给 vendored runtime 的 `extensionAPI` shim **必须做 kebab→camel 转换**。直接透传会让所有 `settings.get()` 返回 `undefined`。表本体在 `main.ts` 的 `SETTINGS_KEY_MAP`（8 条目，全部 8/8 目标正确已在 2026-08-26 逐一核对）。§7 检测器 4 现在按【精确键名 + 字段真相】核对这张表，见其订正行（T2-119） |
 | **为什么会静默** | 引擎的兜底值 `?? 5 / ?? 21 / \|\| 15 / ?? 45` **恰好等于 `DEFAULT_SETTINGS`** ⇒ 默认配置下行为完全正确，只有改过设置的用户会撞上，测试必绿。审计 §P0-1 |
 | **shim 的第三层兜底** | 映射表未命中时：先查 `this.settings[k]`、再查 `this.runtimeState[k]`。后者专为 **`POMODORO_STATE_KEY` 这类变量键**而设 —— 它不是字面量，§7 的键名空间检测器**抓不到它**，只能靠这条兜底（认证审计 P1-066） |
 | 🔴 **`settings.set` 必须存在** | shim 只做 `get` 是不够的：Clock Out 会写回 runtime 状态，缺 `set` 直接抛 `settings.set is not a function` |
@@ -384,10 +384,11 @@ Roam 专有的「组件前缀文本」，Obsidian 无对应概念。**这是上�
 | 1 | **孤儿 CSS** | `styles.css` 里每个 `.nautilus-log-*` 类必须有代码发射点（发射面 = `src/*.ts` + **接线过的** vendor 模块，剥注释后匹配） | compact 列表族 17 类、图例 6 类、警告面板 2 类、available-slot 3 类；修掉三处假阴性后又暴露出 `nautilus-log-container/-content/-shell/-collapsed` 这 4 个**真欠账** |
 | 2 | **孤儿文案** | `UI_COPY` / `EXECUTION_COPY` 每个叶子 key 必须可达（消费者同样**排除死模块**） | 26 个 key 直接指向 topbar 未接；正则修好后当场抓到真孤儿 `openPanelHint` |
 | 3 | **引擎导出面** | `src/vendor/*.js` 的导出符号必须可达（CJS `module.exports` **与 ESM `export function` 都认**） | `availableSlotGroups` · `completedTaskClockSummary` · `capacitySummary` · `taskProgress` · `createTimingTopbar` |
-| 4 | **键名空间** | vendor 里所有 `settings.get('...')` 字面量必须在 shim 映射表里有条目 | §D7 那一族（实测 8 个字面量 / 7 个需转换，见 §D7 的订正）。⚠️ 只能抓**字面量**，`POMODORO_STATE_KEY` 这类变量键抓不到 —— 靠 §D7 的第三层兜底 |
+| 4 | **键名空间** | vendor 里所有 `settings.get('...')` 字面量【精确】命中 shim 映射表 `SETTINGS_KEY_MAP`，且每个映射目标必须是 `NautilusSettings` 真实字段 | §D7 那一族（实测 8 个字面量 / 7 个需转换，见 §D7 的订正）。🔴 **2026-08-26 订正（T2-119）**：原实现只判 `main.includes("'k'")` —— 字面量出现在注释 / 别的对象里也算「已映射」，映射目标拼错了也放行。已改为按映射表精确键名 + 字段真相核对（`scripts/setting-map-check.mjs`，`test/detector-mapping.test.js` 钉住）。⚠️ 机械边界：kebab→camel 的【语义】没有第二份真相，「合法但指错的字段」（如把 `workday-start` 指到 `workdayEndHour`）查不出 —— 靠 TS `Record<string, keyof NautilusSettings>` + 升级核对。`POMODORO_STATE_KEY` 这类【变量键】根本进不了字面量集合 —— 靠 §D7 的第三层兜底 |
 | 5 | **上游漂移** | 设 `UPSTREAM_DIR=<上游 clone>` 后，`src/vendor/*` 与上游同名文件**逐字节比对**；没给就明说「未检查」，不假装通过 | ⚠️ 订正：本行曾写「`git log` + 行数差异告警」，而原实现**只打印一条命令字符串，永远不会红**（认证审计 P1-106）。已改成真比对 |
 | 6 | **怪癖钉子** | [`test/reality-quirks.md`](../test/reality-quirks.md) 里每条 `## RQ-n` 都必须有一行「钉住它的测试」，且那个文件真的存在、真的含那个测试名。**没有豁免** —— 怪癖表只许变长 | 断链即红 |
 | 7 | **测试必须接触被测代码** | 每个 `test/*.test.js` 至少引用一次 `src/`（`require` / esbuild `entryPoints` / `readFileSync` 皆可） | 🔴 `test/locate.test.js`：**把 `main.ts` 的定位算法在测试文件里重写了一遍，然后测那份重写** —— 100% 通过，而被测代码一行都没跑到 |
+| 8 | **平行正则漂移** | `src/parser.ts` 逐字抄 `src/vendor/timing-core.js` 的两条正则（`DONE_AT_RE`↔`DONE_TIME_RE`、`PROGRESS_RE`↔`PROGRESS_RE`）必须逐字一致 | 🔴 认证审计 T1-127：上游不导出 `doneTime`/`durationTokens`/`removeTaskState`，本移植只能抄正则。上游一改正则，复制件不跟着动、测试也不红 ⇒ 静默漂移。检测器把两侧 source 逐字比对，漂了直接红（`test/detector-mapping.test.js` 两条 T1-127 用例钉住） |
 
 > 🔴 **「17 函数签名检测器」不在表里，因为它不存在。** 数据层签名的核对方式见 §3 的说明（升级时人工核对 16 个函数 + `getFocusedBlockUid`）。要么有人把它实现出来再加回本表，要么就别在文档里假装有这道保障 —— **假保障比没保障更危险**（同 §8 的结论）。
 

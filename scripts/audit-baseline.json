@@ -18,7 +18,6 @@
   "__why": {
     "__检测器修复说明": "2026-08-26 认证审计发现检测器有 4 处假阴性（死模块当发射面/当消费者、注释当发射、只认 CJS export、只认 X={ 不认 Object.freeze({），修完后欠账从 8 条暴露到 55 条。这份 baseline 是修复后的真实基线。同日新增第 7 号检测器「空转测试」。",
     "nautilus-log-container/-content/-shell/-collapsed": "🔴 真欠账，非豁免：块根实际类名是 nautilus-log。导致控制栏 hover 浮现与折叠态样式失效（认证审计 C2-056/057）",
-    "openPanelHint": "🔴 真孤儿，不是豁免：状态栏三态（点击/⌥/⇧）在 UI 上没有任何提示，引擎自带的这条提示文案没人接。§D2 已登记为已知欠账。接线点是 statusbar.ts 的 title（现在放的是任务全名）（认证审计 P1-047 / P1-102）。",
     "createTimingTopbar": "§D3 有意不 import（挂载被 .rm-topbar 门控，且形态是 body 上的绝对定位 popover —— 正是那条决策否决掉的挂载面）。",
     "resolveTaskInstance/resolveBlockReferences": "§D10 有意不接线（Roam 块引用的每日实例模型无直接对应；不传 references/readString 时会优雅降级到纯本地解析）。",
     "selectPrimaryPlan/resolveRendererSettings": "§D4 用代码块围栏定位与块内配置替代。⚠️ 副作用：跟着丢掉了 resolveRendererSettings 里的 boundedInteger 钳制，于是块内 default-duration / legend-length 没有任何范围限制（§1.1 已登记，认证审计 P1-058/115）。",

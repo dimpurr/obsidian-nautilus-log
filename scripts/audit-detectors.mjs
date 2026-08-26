@@ -13,6 +13,7 @@
  *   5. 上游漂移      vendor 基线与上游 HEAD 的距离（需本地有上游 clone）
  *   6. 怪癖钉子      test/reality-quirks.md 里每条现实怪癖必须有一个真实存在的测试钉住
  *   7. 空转测试      test/*.test.js 里没有任何一处引用 src/ 的（＝没碰到被测代码）
+ *   8. 平行正则漂移  parser.ts 逐字抄 vendor 的正则必须一直逐字一致（T1-127）
  *
  * 用法：
  *   node scripts/audit-detectors.mjs           # 人读的报告
@@ -23,10 +24,15 @@
  *    只许变短，不许变长。
  */
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { analyzeSettingKeyMap } from './setting-map-check.mjs';
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+// 🔴 NT_AUDIT_ROOT 只服务测试：让检测器读一份【临时仓库副本】，用真实代码
+//   验证「映射目标不对会被抓」。生产路径不设它。
+const ROOT = process.env.NT_AUDIT_ROOT
+  ? resolve(process.env.NT_AUDIT_ROOT)
+  : join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (p) => readFileSync(join(ROOT, p), 'utf8');
 const exists = (p) => existsSync(join(ROOT, p));
 
@@ -167,16 +173,26 @@ function unreachableExports() {
 
 /* ── 4. 键名空间 ─────────────────────────────────────────────────────────── */
 function unmappedSettingKeys() {
-  const asked = new Set(
-    vendorSources().flatMap(({ text }) => (
-      [...text.matchAll(/settings\.get\(['"]([^'"]+)['"]\)/g)].map((m) => m[1])
-    )),
-  );
+  const asked = [
+    ...new Set(
+      vendorSources().flatMap(({ text }) => (
+        [...text.matchAll(/settings\.get\(['"]([^'"]+)['"]\)/g)].map((m) => m[1])
+      )),
+    ),
+  ];
   const main = exists('src/main.ts') ? read('src/main.ts') : '';
-  const runtimeOnly = /const\s+RUNTIME_ONLY_KEYS[\s\S]*?\];/.exec(main)?.[0] || '';
-  return [...asked]
-    .filter((k) => !main.includes(`'${k}'`) && !runtimeOnly.includes(k))
-    .sort();
+  const contract = exists('src/contract.ts') ? read('src/contract.ts') : '';
+  // 🔴 T2-119：原实现只判 `main.includes("'k'")` —— 字面量出现在注释 / 别的
+  //    对象 / 字符串拼接里都算「已映射」，检测不出「映射目标对不对」。现在按
+  //    精确键名成员关系核对 SETTINGS_KEY_MAP，并按 NautilusSettings 字段真相
+  //    核对每个映射目标（实现见 scripts/setting-map-check.mjs）。
+  //    ⚠️ 机械边界：kebab→camel 的【语义正确性】没有第二份真相，仍查不出
+  //    「合法但指错的字段」—— 见 PORTING-DECISIONS.md §7 检测器 4 的订正。
+  const { missingKeys, badTargets } = analyzeSettingKeyMap(main, contract, asked);
+  return [
+    ...missingKeys,
+    ...badTargets.map(([k, v]) => `SETTINGS_KEY_MAP.target[${k}]→${v}`),
+  ].sort();
 }
 
 /* ── 5. 上游漂移 ─────────────────────────────────────────────────────────── */
@@ -247,6 +263,37 @@ function testsWithoutSrc() {
     .sort();
 }
 
+/* ── 8. 平行正则漂移 ─────────────────────────────────────────────────────
+ * src/parser.ts 与 src/vendor/timing-core.js 各抄了一份「dHH:MM 锚点 /
+ * dNN% 进度」的正则（上游没有导出它们，只能逐字抄 —— 认证审计 T1-127）。
+ * 上游一改正则，本移植的复制品不会跟着动、测试也不红 ⇒ 静默漂移。
+ * 这条检测器把它们【逐字比对】，两侧 source 不再一致就直接红。
+ * 判定全部机械：从两文件里各自抓同名 `const X = /pattern/flags` 的 pattern。 */
+function parallelRegexDrift() {
+  const pairs = [
+    { own: 'src/parser.ts', ownName: 'DONE_AT_RE',          vendor: 'src/vendor/timing-core.js', vendorName: 'DONE_TIME_RE' },
+    { own: 'src/parser.ts', ownName: 'PROGRESS_RE',         vendor: 'src/vendor/timing-core.js', vendorName: 'PROGRESS_RE' },
+  ];
+  const out = [];
+  const getPattern = (text, name) => {
+    const m = new RegExp(`const\\s+${name}\\s*=\\s*/((?:\\\\.|[^/\\\\])*)/[a-z]*`).exec(text);
+    return m ? m[1] : null;
+  };
+  const cache = new Map();
+  const readOwn = (p) => {
+    if (!cache.has(p)) cache.set(p, exists(p) ? read(p) : '');
+    return cache.get(p);
+  };
+  for (const p of pairs) {
+    const a = getPattern(readOwn(p.own), p.ownName);
+    const b = getPattern(readOwn(p.vendor), p.vendorName);
+    if (a === null) { out.push(`${p.own}: 找不到 ${p.ownName}（复制关系断链？）`); continue; }
+    if (b === null) { out.push(`${p.vendor}: 找不到 ${p.vendorName}（上游改名/删除？）`); continue; }
+    if (a !== b) out.push(`${p.own} ${p.ownName} 与 ${p.vendor} ${p.vendorName} 不再一致`);
+  }
+  return out;
+}
+
 /* ── 汇总 ───────────────────────────────────────────────────────────────── */
 const result = {
   orphanCss: orphanCss(),
@@ -256,6 +303,7 @@ const result = {
   upstreamDrift: upstreamDrift(),
   danglingQuirkPins: danglingQuirkPins(),
   testsWithoutSrc: testsWithoutSrc(),
+  parallelRegexDrift: parallelRegexDrift(),
 };
 
 const BASELINE_PATH = 'scripts/audit-baseline.json';
@@ -271,6 +319,7 @@ for (const key of ['orphanCss', 'orphanCopy', 'unreachableExports', 'unmappedSet
 }
 
 if (result.danglingQuirkPins.length) regressions.danglingQuirkPins = result.danglingQuirkPins;
+if (result.parallelRegexDrift.length) regressions.parallelRegexDrift = result.parallelRegexDrift;
 
 if (process.argv.includes('--json')) {
   console.log(JSON.stringify({ result, regressions }, null, 2));
@@ -290,6 +339,10 @@ if (process.argv.includes('--json')) {
   console.log(result.danglingQuirkPins.length
     ? result.danglingQuirkPins.map((x) => `  🔴 ${x}`).join('\n')
     : '  ✅ 每条怪癖都有活着的钉子');
+  console.log(`\n## 平行正则漂移（parser.ts 逐字抄 vendor 的正则）`);
+  console.log(result.parallelRegexDrift.length
+    ? result.parallelRegexDrift.map((x) => `  🔴 ${x}`).join('\n')
+    : '  ✅ 两份 regex source 逐字一致');
   console.log(`\n## 上游漂移\n  ${result.upstreamDrift.note}`);
   if (Object.keys(regressions).length) {
     console.log('\n🔴 相对 baseline 的新增/过期：');
