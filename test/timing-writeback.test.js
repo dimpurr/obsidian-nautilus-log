@@ -11,8 +11,10 @@ esbuild.buildSync({entryPoints:[path.join(__dirname,'../src/timing-obsidian.ts')
   format:'cjs',platform:'node',outfile:path.join(__dirname,'.tw.cjs'),external:['obsidian'],logLevel:'error'});
 const T=require('./.tw.cjs');
 
-/** 用真实文件系统撑起一个最小 vault。vault.process 走真实原子读改写。 */
-function makeVault(){
+/** 用真实文件系统撑起一个最小 vault。vault.process 走真实原子读改写。
+ *  externalEdit 非空时：在【第一次】vault.process 落笔前，先把外部编辑写进磁盘
+ *  —— 模拟「用户在 createRunningClock 读完文件之后、写回之前动了同一行」。 */
+function makeVault(externalEdit){
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'nl-vault-'));
   const abs=p=>path.join(dir,p);
   const files=new Map();
@@ -22,6 +24,7 @@ function makeVault(){
     read(p){ return fs.readFileSync(abs(p),'utf8'); },
     cleanup(){ fs.rmSync(dir,{recursive:true,force:true}); },
   };
+  let processes=0;
   const vault={
     getAbstractFileByPath:p=>files.get(p)||null,
     getMarkdownFiles:()=>[...files.values()],
@@ -29,7 +32,13 @@ function makeVault(){
     // 🔴 写回路径用的是 vault.read（未缓存的最新内容），不是 cachedRead。
     //    这个区分是对的：落笔前必须看到最新文件，缓存可能是旧的。
     read:async f=>fs.readFileSync(abs(f.path),'utf8'),
-    process:async(f,fn)=>{ const cur=fs.readFileSync(abs(f.path),'utf8');
+    process:async(f,fn)=>{
+      if (processes===0 && externalEdit) {
+        const now=fs.readFileSync(abs(f.path),'utf8');
+        fs.writeFileSync(abs(f.path), externalEdit(now));   // 外部编辑先落盘
+      }
+      processes++;
+      const cur=fs.readFileSync(abs(f.path),'utf8');
       const next=fn(cur); fs.writeFileSync(abs(f.path),next); return next; },
   };
   const app={vault, workspace:{iterateAllLeaves(){}, getLeaf:()=>null, openLinkText:async()=>{}},
@@ -54,6 +63,54 @@ test('createRunningClock 在真实文件上写出未闭合 CLOCK', async () => {
   assert.match(out,/CLOCK: \[2026-08-24 [A-Za-z]{3} 10:00\]\s*$/m,'未闭合 CLOCK');
   assert.match(out,/- \[ \] 回邮件 30m/,'其它行不得受损');
   assert.equal(out.split('\n').filter(l=>l.includes('写周报')).length,1,'任务行不得重复');
+  v.cleanup();
+});
+
+test('🔴 A1-069 已完成任务不得被 createRunningClock 打卡 —— 完整守卫抑制脏写', async () => {
+  const v=makeVault(); v.write('d.md',['# 2026-08-24','```naut','```','- [x] 已完成 30m','- [ ] 未完成 30m'].join('\n'));
+  await assert.rejects(()=>T.createRunningClock('d.md:3', new Date(2026,7,24,10,0)),
+    /unfinished TODO/, '已勾选（DONE）的任务必须被拒');
+  const out1=v.read('d.md');
+  assert.ok(!/LOGBOOK::/.test(out1),'拒写后不得留下任何 LOGBOOK 抽屉或 CLOCK');
+  assert.ok(!/CLOCK:/.test(out1),'拒写后不得插入 CLOCK');
+  // 未完成任务仍可正常打卡，证明守卫与正常路径互不干扰
+  await T.createRunningClock('d.md:4', new Date(2026,7,24,10,0));
+  assert.match(v.read('d.md'),/CLOCK: \[2026-08-24 [A-Za-z]{3} 10:00\]/,
+    '未完成任务必须仍能正常写入未闭合 CLOCK');
+  v.cleanup();
+});
+
+test('🔴 乐观锁：任务行在读后、写回前被外部改动，createRunningClock 必须拒写不落盘', async () => {
+  const v=makeVault((cur)=>cur.replace('- [ ] 写周报 45m','- [ ] 写周报（外部改过来）45m'));
+  v.write('d.md',NOTE);
+  await assert.rejects(()=>T.createRunningClock('d.md:3', new Date(2026,7,24,10,0)),
+    /changed while writing/i,
+    '锚点行已不是读到的原文，必须中止 —— 否则 LOGBOOK 会插到被改过的任务后面');
+  const out=v.read('d.md');
+  assert.match(out,/- \[ \] 写周报（外部改过来）45m/,'外部编辑必须保留');
+  assert.ok(!/LOGBOOK::/.test(out),'拒写后不得把 LOGBOOK 插到外部改动过的行后面');
+  assert.ok(!/CLOCK:/.test(out),'也不得插入 CLOCK');
+  v.cleanup();
+});
+
+test('🔴 tab 缩进任务 · Clock In：抽屉与 CLOCK 的层级必须落在 tab 子树下方', async () => {
+  const v=makeVault();
+  v.write('d.md',['# 2026-08-24','- 顶层','\t- [ ] tab 缩进任务 30m','\t- [ ] 同级任务 30m'].join('\n'));
+  await T.createRunningClock('d.md:2', new Date(2026,7,24,10,0));
+  const lines=v.read('d.md').split('\n');
+  // tab 计数为 1 ⇒ 抽屉缩进 = taskIndent(1) + 4 = 5 个空格
+  const drawer=lines.findIndex(l=>/LOGBOOK::/.test(l));
+  assert.equal(drawer,3,'抽屉应紧接着 tab 任务行（原行 2，插入后为行 3）');
+  assert.equal(lines[drawer],'     - LOGBOOK::',
+    'tab 任务（缩进 1）的抽屉必须是 5 空格 —— 只数空格不数 tab 会把它掉到 4 空格 = 插进上级');
+  assert.equal(lines[drawer-1],'\t- [ ] tab 缩进任务 30m','抽屉正上方必须是原任务行');
+  // 新 CLOCK 缩进 = 抽屉 + 4 = 9 空格
+  const clock=lines.find(l=>/CLOCK: \[/.test(l));
+  assert.equal(clock,'         - CLOCK: [2026-08-24 Mon 10:00]',
+    '新 CLOCK 必须继承抽屉的 9 空格层级，不能掉到顶层');
+  // 原任务行不受损
+  assert.equal(lines[1],'- 顶层');
+  assert.equal(lines[drawer+2],'\t- [ ] 同级任务 30m','同级任务行必须原样保留');
   v.cleanup();
 });
 
