@@ -122,17 +122,28 @@ const core = (logCoreModule as unknown) as SpiralCore;
 /* Visual constants (mirror of upstream defaults, desktop only).       */
 /* ------------------------------------------------------------------ */
 
-const MOBILE = false;
-const SNAIL_SCALER = 1;
-const FONT_SIZE = MOBILE ? 12 : 14;
+/* 认证审计 L2-104：上游按 `platform.isMobile` 切三组几何量 ——
+ * `component.cljs:31` mobile?、`:35` snail-scaler 0.7/1、`:55` font-size 12/14、
+ * `:277` gap 14/24。本移植刻意让 spiral.ts 保持纯粹（不 import obsidian），
+ * 所以平台由宿主经 `SpiralOptions.mobile` 注入，缺省桌面。
+ * 🔴 这几个量必须是 `let` + `applyPlatform()`：它们被模块级常量与十几个
+ *    渲染函数共享，改成逐层传参会把整份文件的签名都撕开。 */
+let MOBILE = false;
+let SNAIL_SCALER = 1;
+let FONT_SIZE = 14;
 const FONT_FAMILY =
   "'方正屏显雅宋简体', 'FZPingXianYaSong-R-GBK', 'PingFang SC', 'Microsoft YaHei', sans-serif";
 const RECT_WIDTH_COEF = 1.55;
 const RECT_HEIGHT_COEF = 1.15;
 const RESERVE = 15;
 const BENT_LINE_GAP = 5;
-const STARTING_DISTANCE = 30;
-const TRIES_THRESHOLD = 25;
+/* 认证审计 C1-060：上游 `iterate-rect-place`（component.cljs:193-252,290-297）
+ * 是 `placeExternalLabels` 返回空时的第二套摆放算法，常量 init-starting-distance=30 /
+ * tries-treshold=25 属于它。**本移植不移植它，因为它在两边都不可达**：
+ * `log-core.js:1292` 是 `labels.map(...)`（一入一出），side-rails 分支
+ * `:1322-1323` 返回 `candidate || fallback`，而 fallback = `externalLabelRect(...)`
+ * 永远是对象 ⇒ 单标签调用恒返回长度 1 的数组。上游 `(or external-rect fallback-rect {})`
+ * 里的 fallback-rect 同样恒被短路。故此处只保留恒定锚点兜底（见 getLegendRect）。 */
 
 /** The spiral's radius profile: 5 empty cells, the outer ring, then the taper. */
 const SNAIL_BLUEPRINT_OUTER_RADII: number[] = [
@@ -141,12 +152,21 @@ const SNAIL_BLUEPRINT_OUTER_RADII: number[] = [
   145, 140, 135, 130, 125, 120, 115, 110, 105, 100, 95, 90, 85, 80, 75, 70,
   68, 66, 64, 62,
 ];
-const SNAIL_INNER_RADIUS = 50 * SNAIL_SCALER;
+let SNAIL_INNER_RADIUS = 50 * SNAIL_SCALER;
 /* P1-9①：hover 浮层的锚点半径。上游 component.cljs:427 传的是
  * `8 + 最大外径`（= 158），即把锚点放到盘【外】8px；传内圈 50 会让锚点落在
  * 盘面内部，提示直接盖在切片上。 */
-export const TOOLTIP_ANCHOR_RADIUS =
+export let TOOLTIP_ANCHOR_RADIUS =
   8 + Math.max(...SNAIL_BLUEPRINT_OUTER_RADII) * SNAIL_SCALER;
+
+/** 认证审计 L2-104：渲染前落实平台。桌面/移动只差这四个量。 */
+function applyPlatform(mobile: boolean): void {
+  MOBILE = mobile === true;
+  SNAIL_SCALER = MOBILE ? 0.7 : 1;
+  FONT_SIZE = MOBILE ? 12 : 14;
+  SNAIL_INNER_RADIUS = 50 * SNAIL_SCALER;
+  TOOLTIP_ANCHOR_RADIUS = 8 + Math.max(...SNAIL_BLUEPRINT_OUTER_RADII) * SNAIL_SCALER;
+}
 
 /* Colors are CSS custom properties so W2 owns the palette. */
 const SPIRAL_TEMPLATE_COLOR = "var(--nautilus-log-spiral)";
@@ -1153,6 +1173,35 @@ function eventsToNewDimensions(
 /* Public entry point.                                                 */
 /* ------------------------------------------------------------------ */
 
+/**
+ * 认证审计 L1-138 / L2-006：算出**被显示那一天**的本地 00:00。
+ *
+ * 首选宿主直接给的 `displayDate`（笔记日期）。宿主没接线时退而求其次：
+ * 引擎的 `timelineMinutes` 在非回放下 = `nowMinutes + dayDelta * 1440`
+ * （log-core.js:317-318，`dayDelta = 今天 - 显示日`），可以反推出日偏移。
+ * 回放时 `timelineMinutes` 就是回放游标、反推不成立，这时只能退回今天。
+ */
+function resolveDisplayedDayStart(
+  displayDate: Date | number | null | undefined,
+  ds: DayState | undefined,
+  nowMinutes: number,
+): Date {
+  if (displayDate != null) {
+    const explicit = new Date(displayDate as Date);
+    if (Number.isFinite(explicit.getTime())) {
+      return new Date(explicit.getFullYear(), explicit.getMonth(), explicit.getDate());
+    }
+  }
+  const today = new Date();
+  if (ds && Number.isFinite(ds.timelineMinutes) && Number.isFinite(nowMinutes)) {
+    const dayDelta = Math.round((ds.timelineMinutes - nowMinutes) / 1440);
+    if (dayDelta !== 0) {
+      return new Date(today.getFullYear(), today.getMonth(), today.getDate() - dayDelta);
+    }
+  }
+  return new Date(today.getFullYear(), today.getMonth(), today.getDate());
+}
+
 let patternCounter = 0;
 
 /**
@@ -1175,6 +1224,13 @@ export interface SpiralOptions {
   clockEntries?: { taskUid?: string; start?: unknown; end?: unknown; running?: boolean }[];
   /** 回放中的时刻；给了就用它当"当前时刻"画针与流逝区。 */
   playbackMinute?: number | null;
+  /** 认证审计 L2-104：宿主平台。Obsidian 侧传 `Platform.isMobile`。
+   *  缺省桌面 —— spiral.ts 不 import obsidian，保持可测。 */
+  mobile?: boolean;
+  /** 认证审计 L1-138 / L2-006：**被显示的那一天**（笔记日期）。
+   *  CLOCK 汇总的日窗口要按它算，不是按 `new Date()`。
+   *  宿主不传时从 dayState 的日偏移反推，再退到今天。 */
+  displayDate?: Date | number | null;
   /** 笔记日期与今天的关系。缺省即按"今天"处理（向后兼容）。
    *  🔴 看昨天不该画红针、看明天不该画斜纹 —— 全由它决定，别自己判。 */
   dayState?: DayState;
@@ -1203,15 +1259,24 @@ export function renderSpiral(
 
   // 回放：把"当前时刻"换成回放游标。不改任何 Markdown —— 上游语义就是纯视觉。
   const effectiveNow = options.playbackMinute ?? nowMinutes;
+  const playbackActive = options.playbackMinute != null;
   const ds = options.dayState;
-  const timelineMinute = effectiveNow;
+  applyPlatform(options.mobile === true);   // 认证审计 L2-104
   // 过去的日子：斜纹铺满整天（那天已经过完了）；未来：不铺。
   const elapsedThrough = ds
     ? clamp(ds.elapsedThroughMinutes, workdayStart, workdayEnd)
     : clamp(effectiveNow, workdayStart, workdayEnd);
+  // 🔴 认证审计 L1-064：切片着色的「此刻」是引擎的 elapsedThroughMinutes，
+  //    **不是真实时钟**（上游 component.cljs:1308-1311 传的就是它）。用真实时钟
+  //    会让「看昨天」时所有已完成任务 / 已过去的会议都不变灰 —— 斜纹铺满了整天，
+  //    切片却还是彩色的。
+  const timelineMinute = elapsedThrough;
   // 🔴 未来的日子【完全不画】已流逝区 —— 明天还没开始。
   const showElapsed = ds ? ds.showElapsed : true;
-  const interactive = true;
+  // 🔴 认证审计 L1-109：`interactive` 是引擎给的（上游 `(:interactive timeline-state)`，
+  //    log-core.js:340 `interactive: today`）。硬编码 true 会让**明天** 09:00 的任务
+  //    在真实时钟 09:30 时被标成 `.nautilus-log-current-task` / `aria-current`。
+  const interactive = ds ? ds.interactive === true : true;
   // 🔴 只有今天画红针。看昨天/明天时画一根"现在"的针是没有意义的。
   const showNow = ds ? ds.showNow : (effectiveNow >= workdayStart && effectiveNow < workdayEnd);
 
@@ -1250,25 +1315,36 @@ export function renderSpiral(
   const showDone = options.showDone !== false;
   // 当天窗口的绝对毫秒 —— completedTaskClockSummary 要的是时间戳不是分钟。
   const clockEntries = options.clockEntries || [];
-  const dayAnchor = ds?.timelineMinutes ?? nowMinutes;
+  // 🔴 认证审计 L1-138 / L2-006：窗口口径必须对齐上游 `dailyPageBounds`
+  //    （UP/src/index.js:79-93）：**所显示那天的 00:00 → 次日 00:00**
+  //    （只有 workdayEnd > 1440 的跨夜设置才改成 dayStart + endMinutes）。
+  //    原实现两处都错：① 恒用 `new Date()` 的今天午夜（`dayAnchor` 取了却
+  //    `void dayAnchor`），看历史页时 CLOCK 段全落在窗口外 ⇒ actualMinutes=0；
+  //    ② 把窗口收窄到工作日区间，workdayStart 前 / workdayEnd 后的打卡被裁掉。
+  const displayedDayStart = resolveDisplayedDayStart(
+    options.displayDate, playbackActive ? undefined : ds, nowMinutes);
+  const clockDayStartMs = displayedDayStart.getTime();
+  const clockDayEndMs = workdayEnd > 1440
+    ? clockDayStartMs + workdayEnd * 60000
+    : new Date(
+      displayedDayStart.getFullYear(),
+      displayedDayStart.getMonth(),
+      displayedDayStart.getDate() + 1,
+    ).getTime();
   const summaryCache = new Map<string, ReturnType<SpiralCore['completedTaskClockSummary']> | null>();
   const clockSummaryFor = (uid: string) => {
     if (!clockEntries.length) return null;
     if (summaryCache.has(uid)) return summaryCache.get(uid) ?? null;
-    const midnight = new Date();
-    midnight.setHours(0, 0, 0, 0);
-    const base = midnight.getTime();
-    void dayAnchor;
     const out = core.completedTaskClockSummary({
       taskUid: uid,
       entries: clockEntries,
-      dayStartMs: base + workdayStart * 60000,
-      dayEndMs: base + workdayEnd * 60000,
+      dayStartMs: clockDayStartMs,
+      dayEndMs: clockDayEndMs,
     });
     summaryCache.set(uid, out);
     return out;
   };
-  const doneEvents: RenderEvent[] = (showDone ? plan.tasks : [])
+  const allDoneEvents: RenderEvent[] = plan.tasks
     .filter((t) => t.done)
     .map((t) => {
       // P0-4：有 CLOCK 记录就用实际耗时，并在缺 `dHH:MM` 锚点时用
@@ -1296,10 +1372,19 @@ export function renderSpiral(
     })
     .filter((e): e is RenderEvent => e !== null && e.start < e.end);
 
+  const doneEvents = showDone ? allDoneEvents : [];
   const allEvents = fixedEvents.concat(taskEvents, doneEvents);
+  // 🔴 认证审计 L1-077：「这段时间没记录任何东西」的占用集合**永远包含已完成任务**，
+  //    与「眼睛」开关无关（上游 component.cljs:1299
+  //    `past-occupied-events (vec (concat events done-todos))`，:1327 传的就是它）。
+  //    用受 showDone 门控的集合会把已经干完的时间误标成空白斜纹。
+  const pastOccupiedEvents = fixedEvents.concat(taskEvents, allDoneEvents);
 
   // 空闲时段预览。过去的日子不给 —— "那天还剩多少空档"没有意义。
-  const offerFreeSlots = !ds || ds.showNow || !ds.showElapsed;
+  // 🔴 认证审计 L1-066：判据用引擎的 `showAvailableSlots`（log-core.js:342
+  //    `!past || simulated`），不自造公式。自造的 `showNow || !showElapsed` 在
+  //    「今天但此刻已过收工时间」和「回放游标落在窗口外」两处与上游分叉。
+  const offerFreeSlots = ds ? ds.showAvailableSlots === true : true;
   const freeSlots = offerFreeSlots
     ? core.availableSlotGroups({
       events: freeGaps(allEvents, workdayStart, workdayEnd)
@@ -1307,8 +1392,10 @@ export function renderSpiral(
       startMinutes: workdayStart,
       endMinutes: workdayEnd,
       nowMinutes: timelineMinute,
-      // 只有今天才裁到"此刻"；看明天时整天都还空着。
-      clampToNow: showNow,
+      // 🔴 认证审计 L1-085：上游 component.cljs:1334 是 `(or daily-page? playback?)`，
+      //    其中 daily-page? = interactive?。用 `showNow` 会额外要求「此刻落在窗口内」——
+      //    23:00 看今天（窗口 5–21）时会把已经过完的一整天当成还空着。
+      clampToNow: interactive || playbackActive,
     })
     : [];
 
@@ -1360,7 +1447,7 @@ export function renderSpiral(
     patternCounter += 1;
     const patternId = `nautilus-log-unplanned-${patternCounter}`;
     root.appendChild(pastUnplannedOverlay(
-      allEvents,
+      pastOccupiedEvents,
       center,
       s,
       SNAIL_INNER_RADIUS,
@@ -1371,10 +1458,16 @@ export function renderSpiral(
   const slotTitle = (slot: { availableNow: boolean }): string => (slot.availableNow
     ? (copy.tooltips?.availableNow || "Available now")
     : (copy.tooltips?.available || "Available slot"));
-  const freeLayer = freeSlotLayer(
-    freeSlots, center, s, SNAIL_INNER_RADIUS,
-    (slot) => `${slotTitle(slot)} ${minutesToTime(slot.start)}–${minutesToTime(slot.end)} ${durationLabel(slot.duration)}`,
-  );
+  // 🔴 认证审计 C1-102：空闲层**只在 hover 可用（非紧凑）时**渲染
+  //    （上游 component.cljs:1331-1332 `(and hover-enabled? (:showAvailableSlots …))`）。
+  //    紧凑模式下这些靶区带 tabindex=0 却因为提前返回而没有任何 tooltip ⇒
+  //    键盘用户会踩到一串毫无反馈的空焦点（与 P1-8 钉住的原则自相矛盾）。
+  const freeLayer = hoverEnabled
+    ? freeSlotLayer(
+      freeSlots, center, s, SNAIL_INNER_RADIUS,
+      (slot) => `${slotTitle(slot)} ${minutesToTime(slot.start)}–${minutesToTime(slot.end)} ${durationLabel(slot.duration)}`,
+    )
+    : { group: createSvg("g", { class: "nautilus-log-available-slots" }), targets: [] };
   root.appendChild(freeLayer.group);   // 在 slices 之前：实体切片压过靶区
   root.appendChild(sliceGroups);
   root.appendChild(snailBlueprintComponent(center, s, SNAIL_INNER_RADIUS, showElapsed, elapsedThrough));
