@@ -100,6 +100,21 @@ let primeReady: Promise<void> = Promise.resolve();
  *  init 时预热全部 markdown，并在每次 vault 文件改动 / 每次写回后刷新。 */
 const contentCache = new Map<string, string>();
 
+/** taskUid → 上一次扫描时那一行的【原始文本】。
+ *  🔴 本移植的 uid 是 `path:line`（PORTING-DECISIONS.md §D5 / 台账 §1），
+ *  行号会随编辑漂移；上游 Roam 的 block uid 不会。运行时把上一轮快照里的
+ *  taskUid 原样喂回 readEntriesForTaskUids()，用户在任务上方插一行后，
+ *  重新扫描算出的 taskUid 就与快照里的对不上 ⇒ 该任务的 CLOCK 在 refresh 里
+ *  【整批消失】。这张备忘让我们能按【内容】把漂掉的旧 uid 重新锚回去。
+ *  （认证审计 A1-026） */
+const taskLineMemo = new Map<string, string>();
+const TASK_LINE_MEMO_MAX = 5000;
+
+function rememberTaskLine(taskUid: string, rawLine: string): void {
+  if (taskLineMemo.size > TASK_LINE_MEMO_MAX) taskLineMemo.clear();
+  taskLineMemo.set(taskUid, rawLine);
+}
+
 function getApp(): App {
   if (!host?.app) throw new Error('Nautilus Log timing adapter is not initialised. Call initTimingObsidian() first.');
   return host.app;
@@ -192,6 +207,13 @@ export function disposeTimingObsidian(): void {
 
 /* ─────────────────────────── 行级小工具 ─────────────────────────── */
 
+/** 拆 uid。
+ *  🔴 契约（P1「契约漏洞 5」，见 PORTING-DECISIONS.md §D5）：
+ *  · uid 形如 `<vault 相对路径>:<行号>`，行号是 **0 起**（与 Editor API 一致，
+ *    与用户在编辑器里看到的 1 起行号差 1 —— 任何面向用户的显示都要 +1）。
+ *  · 路径与行号用 `lastIndexOf(':')` 切，不是 `split(':')`：Obsidian 允许文件名
+ *    里带冒号（`Journal/10:30 会议.md`），从左边切会把路径切碎。
+ *  · 因此 `idx <= 0` 直接判废：既排除空路径，也排除 `:12` 这种没有路径的串。 */
 function splitUid(uid: string): { path: string; line: number } | null {
   if (typeof uid !== 'string' || !uid) return null;
   const idx = uid.lastIndexOf(':');
@@ -202,6 +224,15 @@ function splitUid(uid: string): { path: string; line: number } | null {
   return { path, line };
 }
 
+/** 缩进深度 = 行首连续空白【字符个数】。
+ *  🔴 契约（P1「契约漏洞 3」，见 PORTING-DECISIONS.md §D5）：space 与 tab **各计 1**，
+ *  不按 tab 宽度展开。后果是明确的、也是有意的：
+ *  · 同一棵子树里混用 space 和 tab 时，层级判定按字符数而非视觉宽度 ——
+ *    一个 tab（视觉 4 格）只算 1，会被 2 个空格判成「更深」。
+ *  · 我们自己【写】出来的新行（LOGBOOK 抽屉、无历史 CLOCK 时的新 CLOCK）
+ *    一律用空格（`' '.repeat(...)`），不复制用户的 tab。
+ *  只要用户在同一棵子树里风格一致（Obsidian 默认如此），两者等价；
+ *  混用时的判定以字符数为准，别按视觉宽度推理。 */
 function leadingSpaces(line: string): number {
   let n = 0;
   while (n < line.length && (line[n] === ' ' || line[n] === '\t')) n += 1;
@@ -307,11 +338,14 @@ function scanFile(path: string, lines: string[]): TimingEntry[] {
     const parsed = parseClockLineFromLine(line);
     if (parsed && activeDrawer && indent > activeDrawer.indent) {
       const taskIndex = activeDrawer.taskIndex;
+      const taskUid = `${path}:${taskIndex}`;
+      const rawTask = taskIndex >= 0 ? lines[taskIndex] : '';
+      if (taskIndex >= 0) rememberTaskLine(taskUid, rawTask);
       entries.push(buildEntry(
         parsed,
         `${path}:${i}`,
-        `${path}:${taskIndex}`,
-        taskIndex >= 0 ? lines[taskIndex] : '',
+        taskUid,
+        rawTask,
         path,
       ));
     }
@@ -352,16 +386,6 @@ function locateClockLine(lines: string[], entry: TimingEntry, running: boolean |
   return hits.length === 1 ? hits[0] : -1;
 }
 
-function findClockIndexByStart(lines: string[], startMs: number | null, running: boolean | undefined): number {
-  const target = toMinuteMs(startMs);
-  if (target === null) return -1;
-  for (let i = 0; i < lines.length; i += 1) {
-    const p = parseClockLineFromLine(lines[i]);
-    if (!p || toMinuteMs(toMs(p.start)) !== target) continue;
-    if (running === undefined || p.running === running) return i;
-  }
-  return -1;
-}
 
 /* ─────────────────────────── 读（4） ─────────────────────────── */
 
@@ -377,21 +401,55 @@ export function readAllEntries(): TimingEntry[] {
   return entries.sort((x, y) => y.start.getTime() - x.start.getTime());
 }
 
-/** 只读指定任务 uid 集合下的条目。 */
+/** 只读指定任务 uid 集合下的条目。
+ *
+ *  🔴 A1-026「行漂后整批失配」：调用方（timing-runtime.js:205）喂进来的 uid 有一半
+ *  来自【上一轮快照】。本移植的 uid 是 `path:line`，用户在任务上方插一行，这一轮
+ *  扫描算出的 taskUid 就与快照里的旧 uid 对不上 ⇒ 纯字符串过滤会把那个任务的
+ *  CLOCK 全部滤掉 ⇒ 正在跑的番茄钟/activeWork 凭空消失。上游 block uid 不漂，无此问题。
+ *
+ *  取舍：旧 uid 本身不含任何内容信息，单靠它无法还原是哪一行。所以改成【按内容
+ *  重新锚定】—— scanFile 每次都把 `taskUid → 该任务行原文` 记进 taskLineMemo，
+ *  旧 uid 精确失配时用备忘里的原文在【本轮扫描结果】里找同文本的任务行。
+ *  ⚠️ 要求唯一命中：同一文件里两行任务文本完全相同时宁可放弃，也不猜。
+ *  （另一条路 —— 在 scanFile 里按抽屉归属回填 —— 解决不了这里的问题：抽屉归属
+ *  本来就已经算对了，错的是调用方手里的旧 uid。）
+ *  见 PORTING-DECISIONS.md §D5，有意偏离。 */
 export function readEntriesForTaskUids(taskUids: unknown[] = []): TimingEntry[] {
-  const uids = [...new Set((Array.isArray(taskUids) ? taskUids : []).filter(Boolean))];
+  const uids = [...new Set((Array.isArray(taskUids) ? taskUids : []).filter(Boolean))].map(String);
   if (uids.length === 0) return [];
   const uidSet = new Set(uids);
   const paths = new Set<string>();
   for (const uid of uids) {
-    const parsed = splitUid(String(uid));
+    const parsed = splitUid(uid);
     if (parsed) paths.add(parsed.path);
   }
   const entries: TimingEntry[] = [];
+  const rawTaskByUid = new Map<string, string>();
   for (const path of paths) {
     const lines = cachedLines(path);
     if (!lines) continue;
-    entries.push(...scanFile(path, lines));
+    for (const e of scanFile(path, lines)) {
+      entries.push(e);
+      const p = splitUid(e.taskUid);
+      if (p && p.line < lines.length) rawTaskByUid.set(e.taskUid, lines[p.line]);
+    }
+  }
+  // 旧 uid 精确失配 ⇒ 按备忘的行原文重新锚定（唯一命中才算数）。
+  for (const uid of uids) {
+    if (rawTaskByUid.has(uid)) continue;
+    const remembered = taskLineMemo.get(uid);
+    const stale = splitUid(uid);
+    if (typeof remembered !== 'string' || !stale) continue;
+    let hit: string | null = null;
+    let count = 0;
+    for (const [freshUid, rawLine] of rawTaskByUid) {
+      if (rawLine !== remembered) continue;
+      const p = splitUid(freshUid);
+      if (!p || p.path !== stale.path) continue;
+      hit = freshUid; count += 1;
+    }
+    if (count === 1 && hit) uidSet.add(hit);
   }
   return entries.filter((e) => uidSet.has(e.taskUid)).sort((x, y) => y.start.getTime() - x.start.getTime());
 }
@@ -491,10 +549,25 @@ async function writeChange(path: string, change: LineChange): Promise<void> {
       //    splice(idx + 1, 0, next) 语义一致。
       editor.replaceRange(`\n${change.next}`, { line: r.lineIndex, ch: editor.getLine(r.lineIndex).length });
     } else {
-      // remove：跨到下一行首删除整行（含换行）；末行则清空内容。
+      // remove：必须与 vault.process 分支的 `splice(idx, 1)` 【逐字符等价】——
+      // 两条通道走的是同一个 LineChange，产出的文件必须一模一样。
+      // 🔴 早期实现在末行只清空内容、留下一个空行，于是「笔记开着编辑器」时
+      //    deleteClock 会在抽屉里留一行空白，关掉编辑器再删就不会。（认证审计 A1-110 / A1-199）
+      // · 非末行：跨到下一行首，连换行一起删。
+      // · 末行且不是唯一一行：从【上一行行尾】删到本行行尾，把前面那个换行吃掉。
+      // · 唯一一行：清空内容（splice 后 join('\n') 也正是空串）。
       const last = editor.lineCount() - 1;
-      if (r.lineIndex < last) editor.replaceRange('', { line: r.lineIndex, ch: 0 }, { line: r.lineIndex + 1, ch: 0 });
-      else editor.replaceRange('', { line: r.lineIndex, ch: 0 }, { line: r.lineIndex, ch: editor.getLine(r.lineIndex).length });
+      if (r.lineIndex < last) {
+        editor.replaceRange('', { line: r.lineIndex, ch: 0 }, { line: r.lineIndex + 1, ch: 0 });
+      } else if (r.lineIndex > 0) {
+        editor.replaceRange(
+          '',
+          { line: r.lineIndex - 1, ch: editor.getLine(r.lineIndex - 1).length },
+          { line: r.lineIndex, ch: editor.getLine(r.lineIndex).length },
+        );
+      } else {
+        editor.replaceRange('', { line: 0, ch: 0 }, { line: 0, ch: editor.getLine(0).length });
+      }
     }
     contentCache.set(path, editor.getValue());
     return;
@@ -555,27 +628,39 @@ export async function createRunningClock(
       throw new Error('Could not create the LOGBOOK drawer for this task.');
     }
   }
-  // 锚点 = 抽屉下最后一条 CLOCK（复用其缩进/标记），否则锚在抽屉行。
-  let anchorIdx = drawerIdx;
+  // 锚点 = 抽屉行本身 ⇒ 新 CLOCK 插在抽屉【最前】。
+  // 🔴 与上游 `order: 0`（timing-roam.js 的 createBlock）对齐：最新的一条在最上面。
+  //    早期实现追加在最后一条 CLOCK 之后，引擎不受影响（出口一律按 start 降序排），
+  //    但用户在笔记里看到的顺序与上游相反。（认证审计 A1-074）
+  const anchorIdx = drawerIdx;
+  // 🔴 契约：新 CLOCK 的缩进与列表标记【从抽屉下已有的第一条 CLOCK 继承】，
+  //    一条都没有时才退回 `drawerIndent + INDENT` + `- `。理由：用户的笔记可能用
+  //    tab、可能用 `*`，跟着已有行走才不会在同一个抽屉里混出两种风格。
+  //    （P1「契约漏洞 4」）
   let newIndent = drawerIndent + INDENT;
   let marker = '- ';
   for (let i = drawerIdx + 1; i < lines.length; i += 1) {
     const l = lines[i];
     if (!l.trim() || leadingSpaces(l) <= drawerIndent) break;
     if (parseClockLineFromLine(l)) {
-      anchorIdx = i;
       const m = /^(\s*)([-*+]\s+)?/.exec(l);
       if (m) { newIndent = m[1].length; marker = m[2] || '- '; }
+      break;
     }
   }
   const newLine = ' '.repeat(newIndent) + marker + timingCore.formatClockLine(now);
   const anchorRaw = lines[anchorIdx];
   await writeChange(parsed.path, { kind: 'insert', after: anchorIdx, afterExpected: anchorRaw, next: newLine });
   // 确认已写入且为 running。
+  // 🔴 不能用「全文件扫第一条同起始分钟的 running CLOCK」来确认 —— 同一分钟内在
+  //    别的任务下也可能有一条 running CLOCK，那样 clockUid 会指到【别人的行】，
+  //    随后的 closeClock/deleteClock 就改错人。改成按锚点定位：新行必然紧跟锚点。
+  //    （认证审计 A1-078 / A1-113 同源）
   const fresh = await readFreshLines(parsed.path);
   if (!fresh) throw new Error('Clock In could not be confirmed.');
-  const ci = findClockIndexByStart(fresh, toMs(now), true);
-  if (ci < 0) throw new Error('Clock In could not be confirmed.');
+  const anchorAt = locateLine(fresh, anchorIdx, anchorRaw);
+  const ci = anchorAt < 0 ? -1 : anchorAt + 1;
+  if (ci < 0 || fresh[ci] !== newLine) throw new Error('Clock In could not be confirmed.');
   const clockParsed = parseClockLineFromLine(fresh[ci]);
   if (!clockParsed) throw new Error('Clock In could not be confirmed.');
   const taskString = knownTaskString || normalized;
@@ -599,7 +684,6 @@ export async function closeClock(entry: TimingEntry, now: Date): Promise<TimingE
   if (!parsed) throw new Error('Clock Out could not read the current CLOCK block.');
   const lines = await readFreshLines(parsed.path);
   if (!lines) throw new Error('Clock Out could not read the current CLOCK block.');
-  const startMs = toMs(entry.start);
   let idx = locateClockLine(lines, entry, true);
   if (idx < 0) {
     // 已是闭合状态（外部改动）→ 幂等返回当前值。
@@ -674,9 +758,11 @@ export async function completeTask(taskUid: string): Promise<boolean> {
   if (timingCore.taskStatus(normalizeTaskString(rawTask)) !== 'TODO') {
     throw new Error('Only unfinished TODO tasks can be completed.');
   }
-  // `- [ ]` / `- [/]` / `- [-]` … 任何非 x 的标记都当成未完成（与
-  // normalizeTaskString 的判定一致），统一改写成 `[x]`。
-  const next = rawTask.replace(/\[[^\]]?\]/, '[x]');
+  // `- [ ]` / `- [/]` / `- [-]` … 任何非 x 的标记都当成未完成，统一改写成 `[x]`。
+  // 🔴 正则必须与 normalizeTaskString 的 `^([-*+])\s+\[(.)\]` 【同形】：锚在行首的
+  //    列表标记上、方括号里恰好一个字符。写成裸的 `\[[^\]]?\]` 会去匹配行内
+  //    第一个方括号（`[[wiki 链接]]`、`[note]` 之类），有把正文改坏的风险。
+  const next = rawTask.replace(/^(\s*[-*+]\s+)\[.\]/, '$1[x]');
   if (next === rawTask) throw new Error('Could not check off the task.');
   await writeChange(parsed.path, { kind: 'replace', line: parsed.line, expected: rawTask, next });
   // 按内容确认（行号可能漂移）。
@@ -818,6 +904,33 @@ function revealLine(line: number, leaf?: { view?: unknown } | null): void {
   editor.scrollIntoView({ from: { line: target, ch: 0 }, to: { line: target, ch: 0 } }, true);
 }
 
+/** 定位高亮：给刚定位到的那一行挂 1200ms 的 `__located` 动画类再摘掉。
+ *  上游 openPrimaryPlan 定位后给目标 **block** 加这个类（timing-roam.js 的
+ *  `__located`）；Obsidian 没有 block 这个 DOM 单元，等价物是编辑器里的那一行。
+ *
+ *  🔴 有意偏离 / 已知限制（styles.css 的 `.nautilus-log-timing__located` 就是为它留的）：
+ *  · 取行的 DOM 走的是 CodeMirror 6 的 `.cm-active-line` —— setCursor 之后
+ *    CM 自己会把这个类挂到光标所在行上。本项目不依赖 `@codemirror/*`，
+ *    也不去碰未公开的 `editor.cm`，所以只能借这一个已渲染出来的钩子。
+ *  · 因此它是 **best-effort**：行被虚拟滚动裁掉、或该 leaf 没有 CM 编辑器时
+ *    静默跳过，绝不抛错 —— 纯视觉反馈不值得让 Clock In 失败。
+ *  （认证审计：上游 `__located` 平移；PORTING-DECISIONS.md §D3 同类） */
+const LOCATED_CLASS = 'nautilus-log-timing__located';
+const LOCATED_MS = 1200;
+
+function flashLocatedLine(leaf?: { view?: unknown } | null): void {
+  type Flashable = { classList?: { add(c: string): void; remove(c: string): void } };
+  const view = leaf?.view as { contentEl?: { querySelector?: (s: string) => unknown } } | undefined;
+  let node: Flashable | null = null;
+  try {
+    node = (view?.contentEl?.querySelector?.('.cm-active-line') as Flashable | null) || null;
+  } catch { return; }
+  const list = node?.classList;
+  if (!list) return;
+  try { list.add(LOCATED_CLASS); } catch { return; }
+  defer(() => { try { list.remove(LOCATED_CLASS); } catch { /* ignore */ } }, LOCATED_MS);
+}
+
 async function openTaskLeaf(taskUid: string, side: 'main' | 'right'): Promise<void> {
   const parsed = splitUid(taskUid);
   if (!parsed) throw new Error('This task has no file path.');
@@ -828,7 +941,7 @@ async function openTaskLeaf(taskUid: string, side: 'main' | 'right'): Promise<vo
   if (!leaf) throw new Error('Could not open the task: no workspace leaf available.');
   await leaf.openFile(f as TFile);
   revealLine(parsed.line, leaf);
-  window.setTimeout(() => revealLine(parsed.line, leaf), 60);
+  defer(() => { revealLine(parsed.line, leaf); flashLocatedLine(leaf); }, 60);
 }
 
 export async function openTaskInMainWindow(taskUid: string): Promise<{ ok: boolean }> {
@@ -874,8 +987,9 @@ export async function openPrimaryPlan(
   const leaf = a.workspace.getLeaf(false);
   if (!leaf) throw new Error('Could not open the plan: no workspace leaf available.');
   await leaf.openFile(f as TFile);
-  revealLine(parsed.line);
-  window.setTimeout(() => revealLine(parsed.line), 80);
+  // 🔴 leaf 必须传下去，理由同 revealLine 的注释（认证审计 A1-152）。
+  revealLine(parsed.line, leaf);
+  defer(() => { revealLine(parsed.line, leaf); flashLocatedLine(leaf); }, 80);
 }
 
 export function warmRightSidebarWindowCache(): Promise<{ ok: boolean; reason: string }> {
