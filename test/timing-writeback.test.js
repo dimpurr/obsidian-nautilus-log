@@ -391,3 +391,345 @@ test('RQ-4 resolve 的那一刻缓存必须已经填好（不是 onLayoutReady �
     'resolve 之后必须立刻读得到 —— 执行层就是等它才启动的');
   v.cleanup();
 });
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * 认证审计收口 · A1 数据层
+ * 每条测试都做过「回退实现 ⇒ 变红」验证（见本轮报告）。
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+const core = require('../src/vendor/timing-core');
+
+/* ─────────── A1-026：任务行漂移后 CLOCK 不得整批失配 ───────────
+ * uid 是 `path:line`，运行时（timing-runtime.js:205）把【上一轮快照】里的
+ * taskUid 原样喂回 readEntriesForTaskUids()。用户在任务上方插一行，
+ * 纯字符串过滤就会把这个任务的 CLOCK 全滤掉 —— 正在跑的番茄钟凭空消失。 */
+test('🔴 A1-026 任务行上方插行后，旧 taskUid 仍能按内容锚回它的 CLOCK', async () => {
+  const v=makeVault(); v.write('d.md',NOTE);
+  await T.createRunningClock('d.md:3', new Date(2026,7,24,10,0));
+  const before=T.readEntriesForTaskUids(['d.md:3']);
+  assert.equal(before.length,1,'前提：漂移前本来就读得到');
+  // 用户在文件开头插两行 —— 任务行从 3 漂到 5
+  v.write('d.md','新增一行\n又一行\n'+v.read('d.md'));
+  await T.primeTimingCache();
+  const after=T.readEntriesForTaskUids(['d.md:3']);
+  assert.equal(after.length,1,
+    '行漂后旧 uid 必须仍能命中；失配 = 该任务历史 CLOCK 在 refresh 里整批消失');
+  assert.equal(after[0].taskUid,'d.md:5','应锚到漂移后的新行号');
+  assert.equal(after[0].running,true);
+  v.cleanup();
+});
+
+test('🔴 A1-026 两行任务文本完全相同时宁可放弃，也不猜', async () => {
+  const v=makeVault();
+  v.write('d.md',['```naut','```','- [ ] 同名任务 30m','- [ ] 同名任务 30m'].join('\n'));
+  await T.createRunningClock('d.md:2', new Date(2026,7,24,9,0));
+  await T.primeTimingCache();
+  // 第二条同名任务也有自己的 CLOCK => 漂移后备忘里的原文两边都匹配 => 歧义
+  await T.createRunningClock('d.md:5', new Date(2026,7,24,9,30));
+  assert.equal(T.readEntriesForTaskUids(['d.md:2']).length,1,'前提：漂移前读得到');
+  v.write('d.md','新增一行\n'+v.read('d.md'));
+  await T.primeTimingCache();
+  assert.equal(T.readEntriesForTaskUids(['d.md:2']).length,0,
+    '歧义时必须放弃锚定 —— 猜错 = 把 CLOCK 记到另一个任务头上');
+  v.cleanup();
+});
+
+/* ─────────── A1-074：新 CLOCK 插在抽屉最前（对齐上游 order:0） ─────────── */
+test('🔴 A1-074 新 CLOCK 插在抽屉【最前】，与上游 order:0 一致', async () => {
+  const v=makeVault(); v.write('d.md',NOTE);
+  await T.createRunningClock('d.md:3', new Date(2026,7,24,10,0));
+  const first=(await T.readAllEntries()).find(e=>e.running);
+  await T.closeClock(first,new Date(2026,7,24,10,18));
+  await T.createRunningClock('d.md:3', new Date(2026,7,24,11,0));
+  const lines=v.read('d.md').split('\n');
+  const drawer=lines.findIndex(l=>/LOGBOOK::/.test(l));
+  assert.match(lines[drawer+1],/11:00/,'抽屉正下方必须是【最新】的那条 CLOCK');
+  assert.match(lines[drawer+2],/10:00/,'旧的那条排在它后面');
+  v.cleanup();
+});
+
+test('A1-074 新 CLOCK 的缩进/标记从已有 CLOCK 继承（契约漏洞 4）', async () => {
+  const v=makeVault();
+  v.write('d.md',['```naut','```','- [ ] 写周报 45m','  * LOGBOOK::',
+                  '      * CLOCK: [2026-08-25 Tue 09:00]--[2026-08-25 Tue 09:30] => 0:30'].join('\n'));
+  await T.primeTimingCache();
+  await T.createRunningClock('d.md:2', new Date(2026,7,25,11,0));
+  const line=v.read('d.md').split('\n').find(l=>/11:00/.test(l));
+  assert.equal(line,'      * CLOCK: [2026-08-25 Tue 11:00]',
+    '必须继承已有 CLOCK 的 6 空格缩进与 `* ` 标记，而不是 drawerIndent+4 + `- `');
+  v.cleanup();
+});
+
+/* ─────────── A1-078：Clock In 的确认不得认到别人的同分钟 CLOCK ─────────── */
+const SAME_MIN=[
+  '# 2026-08-25',                              // 0
+  '```naut',                                   // 1
+  '```',                                       // 2
+  '- [ ] 任务甲 30m',                           // 3
+  '    - LOGBOOK::',                           // 4
+  '        - CLOCK: [2026-08-25 Tue 10:00]',   // 5  ← 甲的，running
+  '- [ ] 任务乙 30m',                           // 6
+].join('\n');
+
+test('🔴 A1-078 Clock In 的确认按锚点定位，不得认到同分钟的另一条 running CLOCK', async () => {
+  const v=makeVault(); v.write('2026-08-25.md',SAME_MIN);
+  await T.primeTimingCache();
+  const { entry } = await T.createRunningClock('2026-08-25.md:6', new Date(2026,7,25,10,0));
+  assert.equal(entry.clockUid,'2026-08-25.md:8',
+    'clockUid 必须指向刚写下的那一行（7=新抽屉, 8=新 CLOCK）；'
+    +'指到第 5 行 = 之后 closeClock/deleteClock 全改到任务甲头上');
+  assert.equal(entry.taskUid,'2026-08-25.md:6');
+  await T.closeClock(entry,new Date(2026,7,25,10,25));
+  const out=v.read('2026-08-25.md').split('\n');
+  assert.equal(out[5],'        - CLOCK: [2026-08-25 Tue 10:00]','任务甲的 CLOCK 必须原封不动');
+  assert.match(out[8],/=> 0:25/,'该合上的是任务乙那一条');
+  v.cleanup();
+});
+
+/* ─────────── A1-095：重复 Clock Out 幂等 ─────────── */
+test('🔴 A1-095 重复 Clock Out 幂等：返回已闭合值，且不再写文件', async () => {
+  const v=makeVault(); v.write('d.md',NOTE);
+  await T.createRunningClock('d.md:3', new Date(2026,7,24,10,0));
+  const running=(await T.readAllEntries()).find(e=>e.running);
+  const first=await T.closeClock(running,new Date(2026,7,24,10,18));
+  const snapshot=v.read('d.md');
+  // 拿【同一个 running entry】再关一次（真实场景：两次点击 / 队列重放）
+  const again=await T.closeClock(running,new Date(2026,7,24,10,45));
+  assert.equal(v.read('d.md'),snapshot,
+    '第二次不得改文件 —— 否则 10:18 的记录会被 10:45 覆盖，用户凭空多出 27 分钟');
+  assert.equal(again.running,false,'必须返回已闭合状态');
+  assert.equal(again.minutes,first.minutes,'时长必须还是第一次那个');
+  assert.equal(again.end.getTime(),first.end.getTime());
+  v.cleanup();
+});
+
+/* ─────────── A1-110 / A1-199 / A1-202：editor 分支的 remove ─────────── */
+const LAST_LINE_NOTE=[
+  '# 2026-08-25',                              // 0
+  '```naut',                                   // 1
+  '```',                                       // 2
+  '- [ ] 写周报 45m',                           // 3
+  '    - LOGBOOK::',                           // 4
+  '        - CLOCK: [2026-08-25 Tue 10:00]',   // 5  ← 末行
+].join('\n');
+const LAST_LINE_ENTRY={ clockUid:'2026-08-25.md:5', taskUid:'2026-08-25.md:3',
+  running:true, start:new Date(2026,7,25,10,0) };
+
+test('🔴 A1-110 CLOCK 是文件末行时，editor 分支必须真删整行（不是清空留空行）', async () => {
+  const v=makeVaultWithEditor(); v.write('2026-08-25.md',LAST_LINE_NOTE);
+  await T.primeTimingCache();
+  await T.deleteClock({...LAST_LINE_ENTRY});
+  const out=v.read('2026-08-25.md');
+  assert.equal(out,['# 2026-08-25','```naut','```','- [ ] 写周报 45m','    - LOGBOOK::'].join('\n'),
+    '末行被删后不得留下一个空行');
+  v.cleanup();
+});
+
+test('🔴 A1-202 两条写回通道的 remove 必须逐字节等价', async () => {
+  for (const note of [LAST_LINE_NOTE, LAST_LINE_NOTE+'\n- [ ] 回邮件 30m']) {
+    const a=makeVault();            a.write('2026-08-25.md',note);
+    await T.primeTimingCache();
+    await T.deleteClock({...LAST_LINE_ENTRY});
+    const viaProcess=a.read('2026-08-25.md'); a.cleanup();
+
+    const b=makeVaultWithEditor();  b.write('2026-08-25.md',note);
+    await T.primeTimingCache();
+    await T.deleteClock({...LAST_LINE_ENTRY});
+    const viaEditor=b.read('2026-08-25.md'); b.cleanup();
+
+    assert.equal(viaEditor,viaProcess,
+      'editor 分支与 vault.process 分支产出必须一模一样 —— 同一个 LineChange 不许有两种语义');
+  }
+});
+
+test('A1-202 editor 分支删的是 CLOCK 行本身，任务行与抽屉都在', async () => {
+  const v=makeVaultWithEditor(); v.write('2026-08-25.md',LAST_LINE_NOTE+'\n- [ ] 回邮件 30m');
+  await T.primeTimingCache();
+  await T.deleteClock({...LAST_LINE_ENTRY});
+  const out=v.read('2026-08-25.md');
+  assert.ok(!/CLOCK:/.test(out),'CLOCK 行应被删除');
+  assert.match(out,/- \[ \] 写周报 45m/);
+  assert.match(out,/- \[ \] 回邮件 30m/);
+  v.cleanup();
+});
+
+/* ─────────── A1-113 / A1-124：updateGraphBlock 必须精确定位 ───────────
+ * 唯一调用者是 reconcileLegacyOverlap（timing-runtime.js:375），场景定义就是
+ * 「同一文件里多条 running CLOCK」。选错行之后写回乐观锁【不构成防护】：
+ * expected 取自已经选错的那一行，内容当然匹配。 */
+test('🔴 A1-113 updateGraphBlock 按 clockUid 精确命中，不改同分钟的另一条', async () => {
+  const v=makeVault(); v.write('2026-08-25.md',DUP_NOTE);
+  await T.primeTimingCache();
+  const closed=core.formatClockLine(new Date(2026,7,25,10,0), new Date(2026,7,25,10,20));
+  await T.updateGraphBlock('2026-08-25.md:8', closed);
+  const out=v.read('2026-08-25.md').split('\n');
+  assert.match(out[8],/=> 0:20/,'应改第 8 行（reconcile 要关掉的那条）');
+  assert.equal(out[5],'        - CLOCK: [2026-08-25 Tue 10:00]',
+    '第 5 行是 focused、必须保留 —— 全文件扫首个命中会把它关掉，'
+    +'而 runtime 的事后校验只查内存 Map、不重读文件，这次误写没有任何断言拦得住');
+  assert.match(out[8],/^\s+- CLOCK:/,'缩进与列表标记必须保留');
+  v.cleanup();
+});
+
+test('🔴 A1-113 行漂且歧义时 updateGraphBlock 拒写', async () => {
+  const v=makeVault(); v.write('2026-08-25.md',DUP_NOTE);
+  await T.primeTimingCache();
+  const before=v.read('2026-08-25.md');
+  const closed=core.formatClockLine(new Date(2026,7,25,10,0), new Date(2026,7,25,10,20));
+  // clockUid 指向一个不再是 CLOCK 的行 => 兜底扫描两条都匹配 => 必须拒写
+  await assert.rejects(()=>T.updateGraphBlock('2026-08-25.md:3', closed), /Aborting/);
+  assert.equal(v.read('2026-08-25.md'),before,'拒写后文件不得被改动');
+  v.cleanup();
+});
+
+/* ─────────── A1-127：非 x 标记的任务也要能勾完成 ─────────── */
+const MARK_NOTE=[
+  '# 2026-08-25',                   // 0
+  '```naut',                        // 1
+  '```',                            // 2
+  '- [/] 进行中的任务 30m',           // 3
+  '- [-] 取消的任务 30m',             // 4
+  '- [ ] 带 [[链接]] 的任务 30m',      // 5
+  '\t- [>] 推迟的子步骤',             // 6
+].join('\n');
+
+test('🔴 A1-127 `- [/]` / `- [-]` / `- [>]` 都能被 completeTask 勾成 `- [x]`', async () => {
+  const v=makeVault(); v.write('2026-08-25.md',MARK_NOTE);
+  await T.primeTimingCache();
+  for (const n of [3,4,6]) {
+    await T.completeTask(`2026-08-25.md:${n}`);
+    await T.primeTimingCache();
+  }
+  const out=v.read('2026-08-25.md').split('\n');
+  assert.equal(out[3],'- [x] 进行中的任务 30m',
+    '读侧把 `- [/]` 当成 TODO（进 Plan、吃容量、能 Clock In），完成这一步就必须也能走通');
+  assert.equal(out[4],'- [x] 取消的任务 30m');
+  assert.equal(out[6],'\t- [x] 推迟的子步骤','缩进与 tab 必须原样保留');
+  v.cleanup();
+});
+
+test('A1-127 判定与 normalizeTaskString 完全一致：非 x 即未完成、x 即已完成', async () => {
+  const v=makeVault(); v.write('2026-08-25.md',MARK_NOTE);
+  await T.primeTimingCache();
+  // 读侧：三种标记都被判成 TODO
+  for (const n of [3,4,6]) {
+    assert.match(T.readBlockString(`2026-08-25.md:${n}`),/^\{\{TODO\}\}/,
+      `第 ${n} 行读侧必须是 TODO —— 读侧说 TODO、写侧却完不成，就是死路`);
+  }
+  // 写侧：勾完之后读侧必须变 DONE，且第二次调用被守卫拒绝
+  await T.completeTask('2026-08-25.md:3');
+  await T.primeTimingCache();
+  assert.match(T.readBlockString('2026-08-25.md:3'),/^\{\{DONE\}\}/);
+  await assert.rejects(()=>T.completeTask('2026-08-25.md:3'),/Only unfinished/);
+  v.cleanup();
+});
+
+test('A1-127 勾选不得动到正文里的方括号（`[[链接]]` 必须完好）', async () => {
+  const v=makeVault(); v.write('2026-08-25.md',MARK_NOTE);
+  await T.primeTimingCache();
+  await T.completeTask('2026-08-25.md:5');
+  assert.equal(v.read('2026-08-25.md').split('\n')[5],'- [x] 带 [[链接]] 的任务 30m');
+  v.cleanup();
+});
+
+/* ─────────── A1-152：revealLine 必须用传进来的 leaf ───────────
+ * `getRightLeaf(false).openFile()` 不设 active ⇒ getActiveLeaf() 仍是用户的主笔记。
+ * 拿 active 的 editor 去 setCursor = 把用户的光标扔到【另一个文件的行号】上，
+ * 并 scrollIntoView。默认开侧栏时【每次 Clock In 都撞一次】，60ms 后再来一遍。 */
+function makeVaultWithLeaves(){
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'nl-leaf-'));
+  const abs=p=>path.join(dir,p);
+  const files=new Map();
+  function makeEditor(p){
+    return { path:p, cursor:null, scrolled:null, opened:[],
+      getValue(){ return fs.readFileSync(abs(this.path),'utf8'); },
+      lineCount(){ return this.getValue().split('\n').length; },
+      getLine(i){ return this.getValue().split('\n')[i] ?? ''; },
+      setCursor(pos){ this.cursor=pos; },
+      scrollIntoView(range){ this.scrolled=range; },
+    };
+  }
+  function makeLeaf(p){
+    const editor=makeEditor(p);
+    const node={ classes:new Set(),
+      classList:{ add(c){ node.classes.add(c); }, remove(c){ node.classes.delete(c); } } };
+    const leaf={ editor, node, opened:[],
+      view:{ file:{path:p}, editor,
+             contentEl:{ querySelector:(sel)=> sel==='.cm-active-line' ? node : null } },
+      // 真实行为：openFile 之后这个 leaf 显示的是新文件（编辑器内容随之换掉）
+      openFile:async(f)=>{ leaf.opened.push(f.path); editor.path=f.path; leaf.view.file={path:f.path}; },
+    };
+    return leaf;
+  }
+  const mainLeaf=makeLeaf('主笔记.md');
+  const rightLeaf=makeLeaf('主笔记.md');   // openFile 之后才换文件，但 editor 是它自己的
+  // 🔴 现实：openFile 是异步的、getRightLeaf(false) 更是根本不设 active，
+  //    所以 getActiveLeaf() 返回的【不是】我们刚打开的那个 leaf。
+  const strayLeaf=makeLeaf('主笔记.md');
+  const api={ dir, mainLeaf, rightLeaf, strayLeaf,
+    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,{path:p}); return files.get(p); },
+    read(p){ return fs.readFileSync(abs(p),'utf8'); },
+    cleanup(){ fs.rmSync(dir,{recursive:true,force:true}); } };
+  const vault={
+    getAbstractFileByPath:p=>files.get(p)||null,
+    getMarkdownFiles:()=>[...files.values()],
+    cachedRead:async f=>fs.readFileSync(abs(f.path),'utf8'),
+    read:async f=>fs.readFileSync(abs(f.path),'utf8'),
+    process:async(f,fn)=>{ const cur=fs.readFileSync(abs(f.path),'utf8');
+      const next=fn(cur); fs.writeFileSync(abs(f.path),next); return next; },
+  };
+  const app={vault,
+    workspace:{ iterateAllLeaves(){},
+      getActiveLeaf:()=>strayLeaf,
+      getLeaf:()=>mainLeaf,
+      getRightLeaf:()=>rightLeaf,
+      openLinkText:async()=>{} },
+    metadataCache:{on(){},off(){}}};
+  T.initTimingObsidian({app});
+  return api;
+}
+const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
+
+test('🔴 A1-152 送侧栏时光标只动侧栏那个 leaf，绝不劫持主编辑器', async () => {
+  const v=makeVaultWithLeaves();
+  v.write('主笔记.md','用户正在写的东西\n第二行\n第三行');
+  v.write('任务.md',NOTE);
+  const r=await T.frontBlockInRightSidebar('任务.md:3');
+  assert.equal(r.ok,true);
+  await sleep(120);   // 等 60ms 的重放也跑完
+  assert.deepEqual(v.rightLeaf.editor.cursor,{line:3,ch:0},'侧栏 leaf 的光标才是该动的');
+  assert.equal(v.mainLeaf.editor.cursor,null,
+    '主编辑器光标不得被动 —— 早期实现取 getActiveLeaf() 的 editor，'
+    +'把用户光标扔到另一个文件的行号上，且每次 Clock In 都撞一次');
+  assert.equal(v.mainLeaf.editor.scrolled,null,'主编辑器也不得被滚动');
+  assert.equal(v.strayLeaf.editor.cursor,null,'getActiveLeaf() 返回的那个 leaf 更不该被动');
+  v.cleanup();
+});
+
+test('🔴 A1-152 openPrimaryPlan 走主编辑区时同样用它自己 openFile 的那个 leaf', async () => {
+  const v=makeVaultWithLeaves();
+  v.write('主笔记.md','用户正在写的东西\n第二行\n第三行');
+  v.write('计划.md',NOTE);
+  await T.openPrimaryPlan('计划.md:3');
+  await sleep(140);
+  assert.deepEqual(v.mainLeaf.editor.cursor,{line:3,ch:0});
+  assert.deepEqual(v.mainLeaf.opened,['计划.md'],'必须是它自己 openFile 的那个 leaf');
+  assert.equal(v.strayLeaf.editor.cursor,null,
+    'openFile 是异步的、active 会滞后 —— 定位必须认 leaf，不许回落 getActiveLeaf()');
+  v.cleanup();
+});
+
+test('定位高亮 __located：挂上 1200ms 再摘掉（上游 timing-roam.js 的 __located）', async () => {
+  const v=makeVaultWithLeaves();
+  v.write('主笔记.md','x');
+  v.write('任务.md',NOTE);
+  await T.frontBlockInRightSidebar('任务.md:3');
+  await sleep(120);
+  assert.ok(v.rightLeaf.node.classes.has('nautilus-log-timing__located'),
+    '定位后必须给那一行挂上高亮类（styles.css 里的规则一直是孤儿）');
+  assert.ok(!v.mainLeaf.node.classes.has('nautilus-log-timing__located'),'不得挂到主编辑器上');
+  await sleep(1300);
+  assert.ok(!v.rightLeaf.node.classes.has('nautilus-log-timing__located'),
+    '1200ms 后必须摘掉 —— 不摘就再也触发不了第二次动画');
+  v.cleanup();
+});
