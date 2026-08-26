@@ -420,7 +420,14 @@ function click(el, mods = {}) {
 test("🔴 P1-046 状态栏三态：title 承诺的三条分支与真实行为逐条对得上", () => {
   const { el, calls } = startStatusBar({ language: "zh" });
   assert.ok(el.title, "状态栏没有任何 title —— 三态此前只存在于代码注释里");
-  assert.equal(el.getAttribute("aria-label"), el.title);
+  // aria-label 不是 title 的镜像 —— 状态栏把【当前状态 + 容量摘要】也折进去了
+  // （屏幕阅读器用户拿不到 title）。要求它同样承诺那三态即可。
+  const aria = el.getAttribute("aria-label");
+  assert.ok(aria, "状态栏必须有 aria-label");
+  for (const needle of ["⌥", "⇧"]) {
+    assert.ok(aria.includes(needle),
+      `aria-label 少了 ${needle} —— 三态对屏幕阅读器用户不可见`);
+  }
   // 文案承诺三件事：普通点击开侧栏、⌥ 在编辑区定位、⇧ 定位到右侧栏。
   assert.match(el.title, /点击：打开.*侧栏/);
   assert.match(el.title, /⌥.*编辑区定位/);

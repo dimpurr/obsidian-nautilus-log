@@ -887,16 +887,19 @@ export default class NautilusLogPlugin extends Plugin {
       // 🔴 认证审计 P1-046：三态此前**只存在于这条注释里**，元素上没有任何
       //    title/aria —— 用户无从发现，也无从核对。文案由下面这个回调**同源**
       //    地描述它自己的三个分支，改行为不改文案会被 block-render 测试抓住。
-      el.title = localCopy(this.settings.language).statusBarHint;
-      el.setAttribute('aria-label', el.title);
-      this.statusBar = renderTimingStatusBar(el, this.execContext(), (ev: MouseEvent) => {
+      // title 由 statusbar.ts 独占渲染（它每次 render 都会重写）——
+      // 这里只把宿主才知道的「普通点击开侧栏 + ⌥/⇧」三态交给它。
+      // 见 PORTING-DECISIONS.md §D2。
+      // 🔴 第二参传【取值函数】而不是值 —— 状态栏每次 render 现读设置，
+      //    否则改了番茄钟阈值/语言要重启执行层才生效（认证审计 T3-034）。
+      this.statusBar = renderTimingStatusBar(el, () => this.execContext(), (ev: MouseEvent) => {
         if (ev.altKey || ev.shiftKey) {
           const rt = this.timingRuntime;
           if (rt) { void Promise.resolve(rt.locate({ sidebar: ev.shiftKey })).catch(() => { /* 已由 runtime notice 报出 */ }); }
           return;
         }
         void this.activateSidebar();
-      });
+      }, () => localCopy(this.settings.language).statusBarHint);
       return true;
     } catch (err) {
       // 执行层起不来不该带走整个插件 —— 规划与可视化必须还能用。

@@ -115,6 +115,9 @@ export function renderTimingStatusBar(
   el: HTMLElement,                     // plugin.addStatusBarItem() 给的元素
   ctxSource: ExecContextSource,        // 值或取值函数（见文件头 T3-034）
   onClick: (ev: MouseEvent, hint?: StatusBarClickHint) => void,
+  /** 宿主补充的提示文案（§D2 的修饰键三态）。宿主知道普通点击接的是什么，
+   *  状态栏不知道 —— 所以由宿主给，而不是在这里硬编码。 */
+  hostHint?: () => string,
 ): StatusBarHandle {
   el.classList.add('nautilus-log-statusbar');
 
@@ -215,7 +218,11 @@ export function renderTimingStatusBar(
   };
 
   /** 上游 updateTriggerCapacity：填 token 文本 + 全文 title，并把摘要拼进 aria-label。 */
-  const updateCapacity = (ariaLabel: string): void => {
+  const updateCapacity = (baseLabel: string): void => {
+    // 🔴 无障碍名必须把 §D2 的修饰键三态也带上 —— 只有明眼人能看到 title，
+    //    屏幕阅读器用户拿到的是 aria-label（认证审计 P1-046 + T3-013）。
+    const gestures = hostHint?.();
+    const ariaLabel = [baseLabel, gestures].filter(Boolean).join(', ');
     const summary = currentCapacitySummary();
     if (!summary || !capacitySeparatorEl || !capacityTokenEl || !capacityValueEl) {
       if (capacitySeparatorEl) capacitySeparatorEl.hidden = true;
@@ -248,7 +255,12 @@ export function renderTimingStatusBar(
     // T3-013 / T3-021 / P1-102：三态提示文案 —— 本移植的常驻层没有 topbar，
     // 提示挂在状态栏自身的 aria-description + title 上。
     el.setAttribute('aria-description', text.actions.openPanelHint);
-    el.title = text.actions.openPanelHint;
+    // 🔴 title 由【状态栏】独占 —— main.ts 那边也曾写一次，被这里覆盖掉
+    //    （两路 agent 并行时的集成冲突）。合并成一条：引擎自带的
+    //    `openPanelHint` + §D2 的修饰键三态。三态只写在代码注释里没用，
+    //    用户看不见（认证审计 P1-046）。
+    const hint = hostHint?.();
+    el.title = [text.actions.openPanelHint, hint].filter(Boolean).join('\n');
 
     /* ── 独立 POMO：elapsed · POMO ─────────────────────────────────── */
     if (standalone) {

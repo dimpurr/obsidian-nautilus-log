@@ -1,22 +1,14 @@
 {
   "orphanCss": [
     "nautilus-log-burning-summary",
-    "nautilus-log-collapsed",
-    "nautilus-log-container",
-    "nautilus-log-content",
     "nautilus-log-context-probe",
     "nautilus-log-hover-tooltip",
     "nautilus-log-hover-tooltip--positioned",
     "nautilus-log-hover-tooltip-meta",
     "nautilus-log-hover-tooltip-title",
-    "nautilus-log-shell",
     "nautilus-log-timing__brand-icon",
-    "nautilus-log-timing__capacity",
     "nautilus-log-timing__capacity-metric",
     "nautilus-log-timing__capacity-part",
-    "nautilus-log-timing__capacity-separator",
-    "nautilus-log-timing__capacity-token",
-    "nautilus-log-timing__capacity-value",
     "nautilus-log-timing__empty",
     "nautilus-log-timing__forgotten-signal",
     "nautilus-log-timing__identity",
@@ -24,8 +16,6 @@
     "nautilus-log-timing__identity-hint",
     "nautilus-log-timing__identity-name",
     "nautilus-log-timing__list",
-    "nautilus-log-timing__located",
-    "nautilus-log-timing__mode-separator",
     "nautilus-log-timing__notice",
     "nautilus-log-timing__plan-heading",
     "nautilus-log-timing__plan-label",
@@ -51,14 +41,10 @@
     "nautilus-log-timing__row-title",
     "nautilus-log-timing__tab",
     "nautilus-log-timing__tabs",
-    "nautilus-log-timing__threads",
     "nautilus-log-timing__topbar",
-    "nautilus-log-timing__trigger-separator",
     "nautilus-log-visual"
   ],
-  "orphanCopy": [
-    "timing-core.js:openPanelHint"
-  ],
+  "orphanCopy": [],
   "unreachableExports": [
     "log-core.js:END_HOURS",
     "log-core.js:START_HOURS",
@@ -72,9 +58,7 @@
     "timing-topbar.js:createTimingTopbar"
   ],
   "unmappedSettingKeys": [],
-  "testsWithoutSrc": [
-    "test/locate.test.js"
-  ],
+  "testsWithoutSrc": [],
   "__why": {
     "__检测器修复说明": "2026-08-26 认证审计发现检测器有 4 处假阴性（死模块当发射面/当消费者、注释当发射、只认 CJS export、只认 X={ 不认 Object.freeze({），修完后欠账从 8 条暴露到 55 条。这份 baseline 是修复后的真实基线。同日新增第 7 号检测器「空转测试」。",
     "nautilus-log-timing__* (44 条)": "上游 topbar 的样式族。§D3：topbar 手写重实现（挂载被 .rm-topbar 门控），这些类的对应物用 -exec- 前缀重写。⚠️ 这【不是】永久豁免：其中 nautilus-log-timing__capacity* 一族正在被接回（状态栏/面板发射），接回后这些条目会自然消失 —— 消失了就必须从本文件删掉（脚本会把残留报成 __staleBaseline）。剩下真正无对应 DOM 的（__topbar / __popover* / __trigger-separator / __mode-separator / __brand-icon / __visual / __burning-summary）应当【删除 styles.css 里的死规则】而不是长期挂在这里。",
@@ -88,6 +72,10 @@
     "actualMinutesToday": "✅ 真实理由（此前写「待评估」，那不是理由）：它是 timing-core 【自己内部】就在用的助手（buildDailyReview 与 durationMetadata 各调它算 Actual 分钟数），本移植需要的数字通过那两个更高层的 API 拿到，不必也不该自己再调一次。⇒ 不是欠账，是「不需要直接调用的内部导出」。",
     "START_HOURS/END_HOURS": "✅ 真实理由：这两个是引擎给【下拉选项】用的整点列表（0..23 / 1..24）。本移植的设置页用 slider 而不是 select，直接写 setLimits(0,23,1) / setLimits(1,24,1)，不需要列表本身。⚠️ 代价是端点被抄了一份：改上游量程时这两处不会跟着动 —— 升级 vendor 时要手动核对（认证审计 P1-117 / L1-003/004）。",
     "ACTIVE_WORK_WINDOW_MINUTES/FORGOTTEN_CLOCK_MINUTES": "✅ 真实理由：这两个是 timing-core 内部的【默认参数兜底值】（buildActiveWork 的 windowMinutes、isForgottenClock 的 thresholdMinutes），本移植的每个调用点都【显式传值】（ctx.recentRetentionMinutes / ctx.forgottenTimerMinutes），所以永远走不到兜底，自然零引用。⚠️ 它们的值（45 / 120）与 DEFAULT_SETTINGS 的 recentRetentionMinutes / forgottenTimerMinutes 是同一个数字，被抄了一份 —— 升级 vendor 时要核对是否仍然相等，不等就是静默的行为漂移（认证审计 P1-117）。",
-    "test/locate.test.js": "🔴 真欠账，不是豁免：这个文件把 main.ts 的 locateInText 算法在测试里【重写了一遍】然后测那份重写 —— 改坏 src/ 它也不会红。**由 main agent 处理中**（重写成引用 src/ 的真测试、或删除）。处理完就把这条从 baseline 删掉。"
+    "test/locate.test.js": "🔴 真欠账，不是豁免：这个文件把 main.ts 的 locateInText 算法在测试里【重写了一遍】然后测那份重写 —— 改坏 src/ 它也不会红。**由 main agent 处理中**（重写成引用 src/ 的真测试、或删除）。处理完就把这条从 baseline 删掉。",
+    "__2026-08-26 收口": "认证审计 7 路收口后重定。孤儿 CSS 55->43（消化了骨架类族 + timing__capacity 族 + __located）；孤儿文案 1->0（openPanelHint 已接）；空转测试 0（locate.test.js 已删）",
+    "nautilus-log-timing__* 剩余 33 条": "🔴 全部是 §D3 手写重实现后的死规则（exec-panel 有一一对应的 -exec- 前缀实现）。**待办：删除这批 CSS**，不是永久豁免",
+    "nautilus-log-timing__forgotten-signal / __topbar": "🔴 功能欠账：忘关提示的子节点未发射；topbar[data-density] 那套响应式降级整体缺失",
+    "nautilus-log-hover-tooltip* / burning-summary / context-probe / visual": "上游结构，本移植用自己的实现替代或无对应 DOM"
   }
 }

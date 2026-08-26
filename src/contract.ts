@@ -65,6 +65,10 @@ export interface PlanWarning {
   code: string;
   /** 本地化后的可读文案；引擎文案表里查不到该 code 时回落成 code 本身。 */
   message: string;
+  /** 出问题那一行的【清洗后标题】（＝上游的 :description）。
+   *  🔴 没有它，警告面板左栏只能显示 `L12` 这样的行号 —— 上游显示的是任务标题
+   *  （认证审计 C2-107）。由 parser 的 stripTaskTokens 产出。 */
+  text?: string;
 }
 
 /** What the code-block parser hands to the engine and the renderer. */
@@ -76,20 +80,22 @@ export interface ParsedPlan {
   warnings: PlanWarning[];
 }
 
-/** Mirrors the 8 base settings upstream exposes, plus the 5 execution-layer
- *  settings. `actualTimeTracking` is the master switch: while it is off the
- *  four settings below it are not revealed in the settings tab. */
+/** 本移植的设置面：**6 项常驻 + 5 项执行层 = 11 项**。
+ *  🔴 原注释写「8 base + 5 execution」（＝13），与实际字段数不符（认证审计 P1）。
+ *  上游 12 项里 `prefix-str` 有意不移植（§D12，Roam 专有的组件前缀文本），
+ *  其余口径见 docs/PORTING-DECISIONS.md §1.3。
+ *  `actualTimeTracking` 是总开关：关着时它下面 4 项不在设置页显示。 */
 export interface NautilusSettings {
   language: "en" | "zh";
   workdayStartHour: number;   // 0..23
   workdayEndHour: number;     // 1..24; <= start means "next day"
-  descLength: number;         // 15..30
+  descLength: number;         // 14..28（DESC_LENGTH_SLIDER；上游列表端点）
   todoDuration: number;       // 5..60, fallback for untimed tasks
   urgentTrigger: string;      // "" disables
   // ── Execution layer ──
   actualTimeTracking: boolean;    // master switch; off hides the 4 below
   timingLineSidebar: boolean;     // Clock In pins current task to right sidebar
-  pomodoroMinutes: number;        // pomodoro threshold; 0 = off, never stops work
+  pomodoroMinutes: number;        // 15..90（POMODORO_SLIDER）；到点只变信号，never stops work，【关不掉】
   recentRetentionMinutes: number; // Recent retention; 0 = off
   forgottenTimerMinutes: number;  // forgotten-timer warning; 0 = off, warn only
 }
