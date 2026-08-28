@@ -49,7 +49,13 @@ const logCore = require('./vendor/log-core') as {
   isCompactChartWidth(width: number): boolean;
 };
 
-export const NAUTILUS_VIEW_TYPE = 'nautilus-logger-view';
+/* 🔴 这个字符串**故意保持旧名**，不跟随插件改名（nautilus-log → nautilus-logger）。
+ *  view type 是**持久化标识**：它被写进用户的 `.obsidian/workspace.json`。改掉它，
+ *  Obsidian 就实例化不出布局里已有的 leaf，每个老用户的侧栏会静默消失 ——
+ *  2026-08-28 真机冒烟实测到了这一点（workspace.json 里躺着 2 个 nautilus-log-view）。
+ *  而它对用户不可见，改名一分收益也没有。id 和 name 是被唯一性规则逼着改的，这个不是。
+ *  竞品 accessiblefish/obsidian-nautilus-log 没有注册任何 view，不存在撞名风险。 */
+export const NAUTILUS_VIEW_TYPE = 'nautilus-log-view';
 
 /* ------------------------------------------------------------------ */
 /* Today's Daily Note resolution                                       */

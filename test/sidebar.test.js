@@ -220,7 +220,7 @@ test("view exposes the standard ItemView surface", async () => {
 
   assert.ok(view instanceof ItemView, "NautilusSidebarView extends ItemView");
   assert.equal(view.getViewType(), NAUTILUS_VIEW_TYPE);
-  assert.equal(NAUTILUS_VIEW_TYPE, "nautilus-logger-view");
+  assert.equal(NAUTILUS_VIEW_TYPE, "nautilus-log-view");
   assert.equal(typeof view.getDisplayText(), "string");
   assert.equal(typeof view.getIcon(), "string");
 });
