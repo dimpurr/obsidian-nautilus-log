@@ -1,5 +1,5 @@
 /*
- * spiral.ts — the Nautilus Log spiral day-chart renderer.
+ * spiral.ts — the Nautilus Logger spiral day-chart renderer.
  *
  * This is a 1:1 TypeScript port of the upstream ClojureScript `show-events`
  * component (the thin shell).  ALL geometry — arc radii, label avoidance,
@@ -1217,7 +1217,7 @@ function resolveDisplayedDayStart(
 let patternCounter = 0;
 
 /**
- * Render the Nautilus Log spiral into `container`.
+ * Render the Nautilus Logger spiral into `container`.
  *
  * The chart is treated as the current day's Daily Page: elapsed shading is
  * drawn up to `nowMinutes` and the red needle marks the current instant.  No

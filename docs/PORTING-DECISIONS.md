@@ -220,7 +220,7 @@ openPrimaryPlan · warmRightSidebarWindowCache · legacyLogbookIsRunning · show
 | 2 | `sidebar.ts` `FENCE_OPEN_RE` | 🔴 **否**，硬编码的独立正则 |
 | 3 | `timing-obsidian.ts` `FENCE_OPEN_RE` | 🔴 **否**，硬编码的独立正则 |
 
-漏掉 2 或 3 的后果是**静默的**：代码块照样渲染，但侧栏与执行层认不出这个块 ⇒ 面板说「今天没有 Nautilus Log」。
+漏掉 2 或 3 的后果是**静默的**：代码块照样渲染，但侧栏与执行层认不出这个块 ⇒ 面板说「今天没有 Nautilus Logger」。
 
 ### §D5 层级靠缩进还原
 
@@ -237,7 +237,7 @@ openPrimaryPlan · warmRightSidebarWindowCache · legacyLogbookIsRunning · show
 |---|---|
 | **问题** | 引擎在 `refresh()` 里**同步**调 `readPrimaryPlan` / `readAllEntries` / `readBlockString`，而 Obsidian vault API 全是异步 |
 | **本移植** | 自建 `contentCache: Map<path, string>`，init 时预热全部 markdown，并在每次 vault 文件改动 / 每次写回后刷新 |
-| **🔴 时序陷阱** | 预热**必须等 `workspace.onLayoutReady`**。插件 `onload` 时 vault 还没索引完，`getMarkdownFiles()` 返回空数组 ⇒ 缓存永远 0 条 ⇒ 执行层永远报「今天没有 Nautilus Log」 |
+| **🔴 时序陷阱** | 预热**必须等 `workspace.onLayoutReady`**。插件 `onload` 时 vault 还没索引完，`getMarkdownFiles()` 返回空数组 ⇒ 缓存永远 0 条 ⇒ 执行层永远报「今天没有 Nautilus Logger」 |
 | **🔴 连锁陷阱** | 上一条修好后引入了新问题：`initialize()` 也在 `onload` 内发起，早于预热 ⇒ `initialEntries` 恒空 ⇒ runtime 的两件**一次性**修复（`reconcileLegacyOverlap` / `closeDoneClocks`）空转。**启动执行层也必须等 onLayoutReady**（audit §P0-2） |
 | **兜底** | `cachedLines()` 未命中时顺手 `primeFile()`，下一次 refresh 就能命中 |
 
@@ -333,7 +333,7 @@ Roam 专有的「组件前缀文本」，Obsidian 无对应概念。**这是上�
 | `warmRightSidebarWindowCache()` | 读 `getWindows()` 预热右侧栏窗口缓存，带 revision 守卫 | **恒返回 `Promise.resolve({ ok: false, reason: 'unavailable' })`** —— 与上游「API 不可用」那个分支**逐字相同**，形状兼容不是杜撰 | Obsidian 的右侧栏是**单个 leaf**，没有 Roam 那种多窗口栈，无缓存可预热。✅ 已核实**确无后果**：① runtime 调用点是 `void warmRightSidebarWindowCache()`，返回值被丢弃、无 `.then`/`.catch` 消费者；② 它预热的 `knownSidebarWindows` 只服务上游 `frontBlockInRightSidebar` 的去重快路径，而本移植的 `frontBlockInRightSidebar` 根本没有那套缓存；③ 返回 resolved promise，不会 unhandled reject |
 | `legacyLogbookIsRunning()` | 探测 Roam Logbook 扩展：`#roam-logbook-topbar, .rlb-topbar` DOM + `window.roamLogbookExtensionData?.running` | **恒返回 `false`** | 那两个信号是 Roam Logbook 扩展专属的，Obsidian 侧**没有任何等价的可靠探测信号**。runtime 里这个守卫为 true 时会 `showToast(…, 'danger')` **并抛错**，`initialize()` 整个失败 ⇒ 强行猜测并返回 true 就会**误伤到执行层连启动都不行**，那是比漏报严重得多的失败模式 |
 
-🔴 **代价（必须让用户知道）**：上游那条「检测到第二个 CLOCK 写入者就拒绝启动」的安全承诺，在本移植里**不存在**。如果 vault 里还有别的插件在写 `LOGBOOK::` 抽屉（Day Planner 之类），Nautilus Log 不会察觉。真正的兜底不在这里，而在**定位侧**：`locateClockLine` 命中多行时**歧义拒写**、`locateLine` 的内容乐观锁拒写变化过的行（注意 §D9 里那条边界 —— 锁不防「选错人」）。
+🔴 **代价（必须让用户知道）**：上游那条「检测到第二个 CLOCK 写入者就拒绝启动」的安全承诺，在本移植里**不存在**。如果 vault 里还有别的插件在写 `LOGBOOK::` 抽屉（Day Planner 之类），Nautilus Logger 不会察觉。真正的兜底不在这里，而在**定位侧**：`locateClockLine` 命中多行时**歧义拒写**、`locateLine` 的内容乐观锁拒写变化过的行（注意 §D9 里那条边界 —— 锁不防「选错人」）。
 
 ---
 
@@ -583,7 +583,7 @@ vendored runtime 的数据结构里有几个字段在 Obsidian 没有对应概�
   └─ tombarys/roam-depot-nautilus          发明螺旋（外圈时间长内圈短 = 一天中衰减的精力）
        └─ hopeserena/nautilus-enhanced     净增 40 行：修内存泄漏 + 汉字排版 + 双语；砍掉 iCal
             └─ 404KSG/roam-nautilus-log    质变：容量模型 / CLOCK / POMO / Review / 跨午夜
-                 └─ dimpurr/obsidian-nautilus-log   ← 本仓库
+                 └─ dimpurr/obsidian-nautilus-logger   ← 本仓库
 ```
 
 MIT，版权行三代未改，本移植同样不改。

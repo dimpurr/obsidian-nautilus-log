@@ -1,5 +1,5 @@
 /*
- * Settings tab for Nautilus Log.  Mirrors the 11 settings pinned in
+ * Settings tab for Nautilus Logger.  Mirrors the 11 settings pinned in
  * src/contract.ts: 6 base settings plus the 5 execution-layer settings.
  * The execution-layer items sit behind `actualTimeTracking`, the master
  * switch — while it is off they are hidden (the toggle re-renders the page).
@@ -72,7 +72,7 @@ export const LOCAL_COPY: { en: LocalCopy; zh: LocalCopy } = {
     clockOut: 'Clock out',
     needTodo: 'Focus an unfinished TODO block before starting timing.',
     onlyTodo: 'Only an unfinished TODO can own the Timing Line.',
-    statusBarHint: 'Click: open the Nautilus Log sidebar · Alt-click: locate today\u2019s plan in the editor · Shift-click: locate it in the right sidebar',
+    statusBarHint: 'Click: open the Nautilus Logger sidebar · Alt-click: locate today\u2019s plan in the editor · Shift-click: locate it in the right sidebar',
   },
   zh: {
     unknownConfig: '无法识别的配置项。支持：start、end、default-duration、legend-length、urgent、language',
@@ -86,7 +86,7 @@ export const LOCAL_COPY: { en: LocalCopy; zh: LocalCopy } = {
     clockOut: '结束计时',
     needTodo: '请先把光标放在一条未完成的任务行上。',
     onlyTodo: '只有未完成的任务才能占用 Timing Line。',
-    statusBarHint: '点击：打开 Nautilus Log 侧栏 · ⌥ 点击：在编辑区定位今天的计划 · ⇧ 点击：定位到右侧栏',
+    statusBarHint: '点击：打开 Nautilus Logger 侧栏 · ⌥ 点击：在编辑区定位今天的计划 · ⇧ 点击：定位到右侧栏',
   },
 };
 
@@ -191,13 +191,13 @@ export function settingsCopy(language: string): SettingsCopy {
  * 上游没有命令名文案表：Obsidian 的 addCommand 是命令面板的挂载面（§5），
  * 名字只能本移植自拟。此前把它们硬编码成「斜杠拼中英」——
  * 每个用户同时看到两种语言，根本不是 i18n；且命令面板已把命令归属在插件名下，
- * 名字里再重复「Nautilus Log」官方 review 会打回。
+ * 名字里再重复「Nautilus Logger」官方 review 会打回。
  *
  * 文案纪律：
  *  · 命令名不再带插件名；sentence case（只首字母与专有名词大写 —— Timing Line /
  *    Primary Plan 是本插件的概念名，保持大写）。
  *  · ribbon tooltip 例外：图标孤悬在侧栏、没有「归属插件」的上下文，
- *    所以它保留插件名（`Open Nautilus Log` / `打开 Nautilus Log`）。
+ *    所以它保留插件名（`Open Nautilus Logger` / `打开 Nautilus Logger`）。
  *  · 命令名只在 onload 注册时取一次，用户改语言后要重载插件才生效 ——
  *    见 SETTINGS_COPY.languageDesc 的说明（D2），不做动态重注册。 */
 export interface CommandCopy {
@@ -223,7 +223,7 @@ export const COMMAND_COPY: { en: CommandCopy; zh: CommandCopy } = {
     focusCurrentBlock: 'Focus current block on the Timing Line',
     clockOutTimingLine: 'Clock out Timing Line',
     locatePrimaryPlan: 'Locate Primary Plan',
-    ribbonOpen: 'Open Nautilus Log',
+    ribbonOpen: 'Open Nautilus Logger',
   },
   zh: {
     openSidebar: '打开侧栏',
@@ -234,7 +234,7 @@ export const COMMAND_COPY: { en: CommandCopy; zh: CommandCopy } = {
     focusCurrentBlock: '将当前行聚焦到 Timing Line',
     clockOutTimingLine: '结束当前计时',
     locatePrimaryPlan: '定位今天的主计划',
-    ribbonOpen: '打开 Nautilus Log',
+    ribbonOpen: '打开 Nautilus Logger',
   },
 };
 

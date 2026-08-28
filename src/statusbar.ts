@@ -170,10 +170,10 @@ export function renderTimingStatusBar(
     ev.stopPropagation();
     try {
       void Promise.resolve(runtime.stopStandalonePomodoro()).catch((error: unknown) => {
-        console.error('[Nautilus Log] stopStandalonePomodoro failed', error);
+        console.error('[Nautilus Logger] stopStandalonePomodoro failed', error);
       });
     } catch (error) {
-      console.error('[Nautilus Log] stopStandalonePomodoro failed', error);
+      console.error('[Nautilus Logger] stopStandalonePomodoro failed', error);
     }
   };
   pomoCloseEl.addEventListener('click', onPomoClose);

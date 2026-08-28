@@ -1,5 +1,5 @@
 /*
- * Code-block parser for Nautilus Log on Obsidian.
+ * Code-block parser for Nautilus Logger on Obsidian.
  *
  * Turns the self-contained ```nautilus block into a ParsedPlan (see
  * src/contract.ts).  Time and duration tokens are NOT parsed here — they are

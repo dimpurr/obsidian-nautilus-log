@@ -104,8 +104,8 @@ test("COMMAND_COPY 命令名不带插件名、sentence case（ribbon tooltip 是
   assert.equal(en.focusCurrentBlock, "Focus current block on the Timing Line");
   assert.equal(en.locatePrimaryPlan, "Locate Primary Plan");
   // ribbon tooltip 孤悬在侧栏，没有「归属插件」的上下文，保留插件名
-  assert.equal(en.ribbonOpen, "Open Nautilus Log");
-  assert.equal(S.COMMAND_COPY.zh.ribbonOpen, "打开 Nautilus Log");
+  assert.equal(en.ribbonOpen, "Open Nautilus Logger");
+  assert.equal(S.COMMAND_COPY.zh.ribbonOpen, "打开 Nautilus Logger");
 });
 
 test("localCopy 未知语言退回英文，'zh' 拿到中文", () => {

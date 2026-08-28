@@ -366,7 +366,7 @@ export function renderChartControls(
     const label = copyLabel(
       controlsCopy,
       current.collapsed ? "expand" : "collapse",
-      current.collapsed ? "Expand Nautilus Log" : "Collapse Nautilus Log",
+      current.collapsed ? "Expand Nautilus Logger" : "Collapse Nautilus Logger",
     );
     setButtonA11y(collapseBtn, label);
     collapseBtn.setAttribute("aria-expanded", String(!current.collapsed));

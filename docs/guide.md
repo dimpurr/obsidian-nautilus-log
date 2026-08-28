@@ -1,11 +1,11 @@
-# Nautilus Log 使用指南
+# Nautilus Logger 使用指南
 
 > 本指南描述**本仓库实际实现**的行为，每一条都对着 `src/` 核对过。
 > 与 Roam 原版的有意差异汇总在文末「与上游的差异」。
 
 ## 计划格式
 
-一个 Nautilus Log 由两块组成：
+一个 Nautilus Logger 由两块组成：
 
 - **块**（```nautilus ``` 全名或 ```naut ``` 短别名）：放**当天的配置覆盖**，
   空块＝完全沿用全局设置。
@@ -132,7 +132,7 @@ default-duration: 30
 
 ## 侧栏
 
-右侧栏有一个 Nautilus Log 视图（`nautilus-log-view`）：把今天 Daily Note 的
+右侧栏有一个 Nautilus Logger 视图（`nautilus-logger-view`）：把今天 Daily Note 的
 **第一个** nautilus 块的计划画成容量头 + 螺旋，不用打开笔记就能看到今天这盘菜。
 
 - 每分钟 tick 一次；主计划文件改动时重渲染。
@@ -238,10 +238,10 @@ minutes 会变成忘关告警态（`is-forgotten`）。
 | 命令 | 作用 |
 | --- | --- |
 | **打开侧栏（Open sidebar）** | 打开右侧栏视图（与 ribbon 的指南针图标同义） |
-| **诊断执行层（Diagnose execution layer）** | 把执行层这条链的每一环取值报成一条 Notice：注入路径 / 文件是否存在 / 同步缓存命中数 / 围栏正则是否命中。面板说「今天没有 Nautilus Log」时按它，别猜 |
+| **诊断执行层（Diagnose execution layer）** | 把执行层这条链的每一环取值报成一条 Notice：注入路径 / 文件是否存在 / 同步缓存命中数 / 围栏正则是否命中。面板说「今天没有 Nautilus Logger」时按它，别猜 |
 | **勾选任务并记录完成时间（Complete task with timestamp）** | 勾选光标所在任务行并追加 `dHH:MM` 完成锚点。默认不绑快捷键，可在 设置 → 快捷键 自行绑定。非任务行、或已有锚点时**静默不动** |
 | **创建测试笔记（Create test note）** | 生成一份带测试场景的笔记（同名已存在就加序号，绝不覆盖） |
-| **Open Nautilus Log settings** | 打开设置 |
+| **Open Nautilus Logger settings** | 打开设置 |
 
 后 3 条是上游原有的执行层命令，**只在总开关 Actual time tracking 打开时出现**
 （关着时命令面板里一条都搜不到）：

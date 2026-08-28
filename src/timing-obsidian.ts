@@ -116,7 +116,7 @@ function rememberTaskLine(taskUid: string, rawLine: string): void {
 }
 
 function getApp(): App {
-  if (!host?.app) throw new Error('Nautilus Log timing adapter is not initialised. Call initTimingObsidian() first.');
+  if (!host?.app) throw new Error('Nautilus Logger timing adapter is not initialised. Call initTimingObsidian() first.');
   return host.app;
 }
 
@@ -182,7 +182,7 @@ function warnIfCacheStillCold(): void {
   if (total === 0) return;   // vault 里本来就没有 markdown，不是降级
   // eslint-disable-next-line no-console
   console.warn(
-    '[Nautilus Log] 同步内容缓存预热后仍为空'
+    '[Nautilus Logger] 同步内容缓存预热后仍为空'
     + `（vault 报告 ${total} 个 markdown 文件）。执行层会全面失明：`
     + 'readPrimaryPlan / readAllEntries 都只认这份缓存。'
     + ' 见 test/reality-quirks.md RQ-4；用命令「Diagnose execution layer」看断在哪一环。',
@@ -1018,7 +1018,7 @@ export function warmRightSidebarWindowCache(): Promise<{ ok: boolean; reason: st
 export function showToast(message: string, intent: 'warning' | 'danger' = 'warning'): void {
   const h = host;
   if (h?.notify) { h.notify(message, intent); return; }
-  console[intent === 'danger' ? 'error' : 'warn'](`[Nautilus Log] ${message}`);
+  console[intent === 'danger' ? 'error' : 'warn'](`[Nautilus Logger] ${message}`);
 }
 
 export function legacyLogbookIsRunning(): boolean {
@@ -1028,7 +1028,7 @@ export function legacyLogbookIsRunning(): boolean {
 }
 
 /* ─────────────────────────── 诊断 ───────────────────────────
- * 执行层「找不到今天的 Nautilus Log」时，把链路上每一环的实际取值报出来。
+ * 执行层「找不到今天的 Nautilus Logger」时，把链路上每一环的实际取值报出来。
  * 🔴 这条链有四个独立的失败点（注入的路径 / 文件存在 / 同步缓存命中 /
  *    围栏正则命中），靠猜会连着猜错——本项目在这上面栽过三次。 */
 export function diagnoseTiming(date = new Date()): string {

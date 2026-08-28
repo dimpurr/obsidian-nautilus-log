@@ -123,7 +123,7 @@ test("compact event list renders the upstream details/summary/list skeleton (P1-
   assert.ok(list, "the body is an <ol class=nautilus-log-compact-list>");
   assert.strictEqual(
     list.getAttribute("aria-label"),
-    "Nautilus Log scheduled items",
+    "Nautilus Logger scheduled items",
     "list is labelled like upstream",
   );
   assert.strictEqual(

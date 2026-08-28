@@ -1,5 +1,5 @@
 /*
- * exec-panel.ts — Nautilus Log 执行层面板（E · 执行层面板 · 三视图）。
+ * exec-panel.ts — Nautilus Logger 执行层面板（E · 执行层面板 · 三视图）。
  *
  * 把上游 timing-topbar 的 popover 三视图（Timing / Plan / Review）做成
  * Obsidian 侧栏里的常驻面板。数据【全部】来自 ctx.runtime.getSnapshot()，
@@ -195,10 +195,10 @@ export function renderExecPanel(
   const runAction = (action: () => unknown): void => {
     try {
       void Promise.resolve(action()).catch((error) => {
-        console.error('[Nautilus Log] execution panel action failed', error);
+        console.error('[Nautilus Logger] execution panel action failed', error);
       });
     } catch (error) {
-      console.error('[Nautilus Log] execution panel action failed', error);
+      console.error('[Nautilus Logger] execution panel action failed', error);
     }
   };
 

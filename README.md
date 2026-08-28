@@ -1,10 +1,13 @@
-# Nautilus Log for Obsidian
+# Nautilus Logger for Obsidian
 
 > **Give every minute a job.**
 
-A visual day planner for [Obsidian](https://obsidian.md/). Nautilus Log turns one
+A visual day planner for [Obsidian](https://obsidian.md/). Nautilus Logger turns one
 note into a living spiral schedule: fixed events stay fixed, flexible tasks flow
 into the time that remains, and overload never disappears from view.
+
+
+![Nautilus Logger — spiral day planner with explicit time capacity](https://raw.githubusercontent.com/dimpurr/obsidian-nautilus-logger/main/docs/assets/overview.png)
 
 ## Where this comes from
 
@@ -43,17 +46,17 @@ of this port.
    Obsidian's Community Plugins.
 2. BRAT settings → **Add Beta plugin** → paste:
    ```
-   dimpurr/obsidian-nautilus-log
+   dimpurr/obsidian-nautilus-logger
    ```
-3. Enable **Nautilus Log** in Community Plugins.
+3. Enable **Nautilus Logger** in Community Plugins.
 
 BRAT tracks this repo's GitHub releases and updates the plugin for you.
 
 ### Option 2 — Manual
 
 1. Download `main.js`, `manifest.json` and `styles.css` from the
-   [latest release](https://github.com/dimpurr/obsidian-nautilus-log/releases/latest).
-2. Create the folder `<your vault>/.obsidian/plugins/nautilus-log/`.
+   [latest release](https://github.com/dimpurr/obsidian-nautilus-logger/releases/latest).
+2. Create the folder `<your vault>/.obsidian/plugins/nautilus-logger/`.
 3. Put the three files in it.
 4. Restart Obsidian (or **Reload app without saving**), then enable the plugin
    in Community Plugins.
@@ -63,17 +66,17 @@ BRAT tracks this repo's GitHub releases and updates the plugin for you.
 Run from **inside your vault folder**:
 
 ```bash
-mkdir -p .obsidian/plugins/nautilus-log && cd .obsidian/plugins/nautilus-log && \
-  curl -LO https://github.com/dimpurr/obsidian-nautilus-log/releases/latest/download/main.js && \
-  curl -LO https://github.com/dimpurr/obsidian-nautilus-log/releases/latest/download/manifest.json && \
-  curl -LO https://github.com/dimpurr/obsidian-nautilus-log/releases/latest/download/styles.css
+mkdir -p .obsidian/plugins/nautilus-logger && cd .obsidian/plugins/nautilus-logger && \
+  curl -LO https://github.com/dimpurr/obsidian-nautilus-logger/releases/latest/download/main.js && \
+  curl -LO https://github.com/dimpurr/obsidian-nautilus-logger/releases/latest/download/manifest.json && \
+  curl -LO https://github.com/dimpurr/obsidian-nautilus-logger/releases/latest/download/styles.css
 ```
 
 Then reload Obsidian and enable the plugin.
 
 ### Getting started
 
-After enabling, run the command **"Create Nautilus Log test note"** from the
+After enabling, run the command **"Create Nautilus Logger test note"** from the
 command palette — it writes a small example note so you can see the spiral
 immediately. Or add this to today's Daily Note:
 
@@ -213,7 +216,7 @@ Time is written into your note next to the task as Org-style CLOCK lines under a
 - The **forgotten-timer warning** (120 min) flags a CLOCK left running that long.
   It warns — it never stops or deletes a CLOCK. `0` disables it.
 - Actual time is never capped at Planned. Without an explicit completion anchor
-  (`dHH:MM`) or an Actual end, Nautilus Log does not invent history.
+  (`dHH:MM`) or an Actual end, Nautilus Logger does not invent history.
 
 ### Status bar timer
 
@@ -265,7 +268,7 @@ as a single notice.
 | Task identity | `:block/uid` | `filepath:line` |
 | Reactivity | `roam.datascript.reactive` | `metadataCache` events |
 | Renderer | ClojureScript / Reagent (SCI) | TypeScript / SVG |
-| Panel mount | DOM-scraped Roam topbar | Obsidian right-sidebar ItemView (`nautilus-log-view`) |
+| Panel mount | DOM-scraped Roam topbar | Obsidian right-sidebar ItemView (`nautilus-logger-view`) |
 | iCal subscriptions | dropped upstream in gen 3 | not planned |
 
 The scheduling and capacity engine is reused **unchanged** from the Roam version.
@@ -300,7 +303,7 @@ from them directly.
   drew on for compatible CLOCK tracking.
 
 The time-allocation philosophy is inspired by the
-[YNAB Method](https://www.ynab.com/the-four-rules/). Nautilus Log is not
+[YNAB Method](https://www.ynab.com/the-four-rules/). Nautilus Logger is not
 affiliated with YNAB.
 
 Released under the original MIT license, unchanged.

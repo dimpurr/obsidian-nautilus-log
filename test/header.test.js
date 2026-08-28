@@ -297,7 +297,7 @@ test("header mounts the HTML colour legend (P1-8)", () => {
   assert.ok(legend, "header renders one .nautilus-log-html-legend");
   assert.strictEqual(
     legend.getAttribute("aria-label"),
-    "Nautilus Log legend",
+    "Nautilus Logger legend",
     "legend is labelled like upstream html-legend-component",
   );
 

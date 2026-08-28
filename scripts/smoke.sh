@@ -24,7 +24,7 @@ VAULT="${VAULT:?请用 VAULT=<vault 绝对路径> 调用}"
 WINDOW_TITLE="${WINDOW_TITLE:-Obsidian}"
 OUT_DIR="${OUT_DIR:-${TMPDIR:-/tmp}/nautilus-smoke}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PLUGIN_DIR="$VAULT/.obsidian/plugins/nautilus-log"
+PLUGIN_DIR="$VAULT/.obsidian/plugins/nautilus-logger"
 
 command -v cua-driver >/dev/null || { echo "✗ 未找到 cua-driver"; exit 1; }
 cua-driver status >/dev/null 2>&1 || { echo "✗ cua-driver daemon 没起：cua-driver serve"; exit 1; }

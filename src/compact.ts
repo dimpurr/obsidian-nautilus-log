@@ -209,7 +209,7 @@ export function renderCompactEventList(
     `${panels.schedule || "Schedule"} · ${items.length} ${itemLabel(copy, items.length)}`;
 
   const list = el("ol", "nautilus-log-compact-list");
-  list.setAttribute("aria-label", "Nautilus Log scheduled items");
+  list.setAttribute("aria-label", "Nautilus Logger scheduled items");
   for (const event of items) {
     const title = cleanTitle(event.text);
     const li = el(

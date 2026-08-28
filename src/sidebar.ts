@@ -1,5 +1,5 @@
 /*
- * sidebar.ts — the Nautilus Log sidebar view (P · 侧栏视图壳).
+ * sidebar.ts — the Nautilus Logger sidebar view (P · 侧栏视图壳).
  *
  * Puts the spiral into the right sidebar so today's plate is visible without
  * opening the Daily Note.  This file only *hosts* the chart — the geometry is
@@ -49,7 +49,7 @@ const logCore = require('./vendor/log-core') as {
   isCompactChartWidth(width: number): boolean;
 };
 
-export const NAUTILUS_VIEW_TYPE = 'nautilus-log-view';
+export const NAUTILUS_VIEW_TYPE = 'nautilus-logger-view';
 
 /* ------------------------------------------------------------------ */
 /* Today's Daily Note resolution                                       */
@@ -240,7 +240,7 @@ export class NautilusSidebarView extends ItemView {
   }
 
   getViewType(): string { return NAUTILUS_VIEW_TYPE; }
-  getDisplayText(): string { return 'Nautilus Log'; }
+  getDisplayText(): string { return 'Nautilus Logger'; }
   getIcon(): string { return 'compass'; }
 
   async onOpen(): Promise<void> {
@@ -351,7 +351,7 @@ export class NautilusSidebarView extends ItemView {
       this.exec = renderExecPanel(host.createDiv({ cls: 'nautilus-log-exec-slot' }), ctx);
     } catch (err) {
       // 执行层挂了不该带走螺旋图 —— 规划视图必须还在。
-      console.error('[Nautilus Log] execution panel failed', err);
+      console.error('[Nautilus Logger] execution panel failed', err);
       host.remove();
     }
   }
@@ -488,7 +488,7 @@ export class NautilusSidebarView extends ItemView {
       chart.remove();
       const warn = content.createDiv({ cls: 'nautilus-log-chart-error' });
       warn.setText('⚠ chart failed to render (capacity figures above are still valid)');
-      console.error('[Nautilus Log] sidebar renderSpiral failed', err);
+      console.error('[Nautilus Logger] sidebar renderSpiral failed', err);
     }
 
     // 🔴 认证审计 C2-101：溢出/警告面板必须排在**图之后**（上游

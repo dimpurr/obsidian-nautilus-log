@@ -1,5 +1,5 @@
 /*
- * Nautilus Log for Obsidian — plugin entry point.
+ * Nautilus Logger for Obsidian — plugin entry point.
  *
  * Stage one: register the ```nautilus code-block processor, render a text-only
  * capacity bar, expose the settings tab and a command.  Obsidian has no
@@ -366,7 +366,7 @@ export class NautilusLogView extends MarkdownRenderChild {
       chart.remove();
       const warn = root.createDiv({ cls: 'nautilus-log-chart-error' });
       warn.setText('⚠ chart failed to render (capacity figures above are still valid)');
-      console.error('[Nautilus Log] renderSpiral failed', err);
+      console.error('[Nautilus Logger] renderSpiral failed', err);
     }
 
 
@@ -374,7 +374,7 @@ export class NautilusLogView extends MarkdownRenderChild {
     // 不可折叠的 div 且丢了 unplacedMinutes 总计）。标题仍走 MarkdownRenderer，
     // 这样 [[链接]] / #标签 是活的。
     // 🔴 项目符号必须留在 DOM 层，不能进 markdown 字符串 —— 行首的 `· ` 会被
-    //    Markdown 当成列表标记吃掉（实测 `· Nautilus Log 插件完善 30m`
+    //    Markdown 当成列表标记吃掉（实测 `· Nautilus Logger 插件完善 30m`
     //    渲染成 `· ... 30m`）。renderOverflowPanel 内部已经这么处理。
     renderOverflowPanel(root, capacity, logCore.uiCopy(settings.language) as never,
       (host, task) => {
@@ -701,7 +701,7 @@ export default class NautilusLogPlugin extends Plugin {
     this.addCommand({
       id: 'diagnose-execution-layer',
       name: cmd.diagnoseExecutionLayer,
-      callback: () => { new Notice(`[Nautilus Log] ${diagnoseTiming()}`, 15000); },
+      callback: () => { new Notice(`[Nautilus Logger] ${diagnoseTiming()}`, 15000); },
     });
 
     this.registerTimingCommands();
@@ -727,7 +727,7 @@ export default class NautilusLogPlugin extends Plugin {
       id: 'create-test-note',
       name: cmd.createTestNote,
       callback: async () => {
-        const base = 'Nautilus Log 测试';
+        const base = 'Nautilus Logger 测试';
         let path = `${base}.md`;
         // 已存在就加序号，绝不覆盖用户已有的笔记
         for (let n = 2; this.app.vault.getAbstractFileByPath(path); n += 1) {
@@ -758,8 +758,8 @@ export default class NautilusLogPlugin extends Plugin {
    *  绝不让 promise rejection 冒到控制台之外。 */
   private runTimingAction(action: () => Promise<unknown> | unknown): void {
     const fail = (error: unknown) => {
-      console.error('[Nautilus Log] timing command failed', error);
-      new Notice(`[Nautilus Log] ${(error as Error)?.message || 'could not complete that action.'}`);
+      console.error('[Nautilus Logger] timing command failed', error);
+      new Notice(`[Nautilus Logger] ${(error as Error)?.message || 'could not complete that action.'}`);
     };
     try {
       Promise.resolve(action()).catch(fail);
@@ -786,7 +786,7 @@ export default class NautilusLogPlugin extends Plugin {
         const line = editor.getLine(lineNo);
         const problem = focusCurrentBlockError(line);
         if (problem) {
-          new Notice(`[Nautilus Log] ${localCopy(this.settings.language)[problem]}`);
+          new Notice(`[Nautilus Logger] ${localCopy(this.settings.language)[problem]}`);
           return true;
         }
         this.runTimingAction(() => runtime.startTask(uidForLine(path, lineNo), line));
@@ -884,7 +884,7 @@ export default class NautilusLogPlugin extends Plugin {
     if (enabled && !this.startExecutionLayer()) {
       this.settings.actualTimeTracking = false;           // 回滚
       await this.saveSettings();
-      new Notice('[Nautilus Log] 执行层启动失败，已关闭「实际用时」开关。详见 console。');
+      new Notice('[Nautilus Logger] 执行层启动失败，已关闭「实际用时」开关。详见 console。');
     }
     if (!enabled) this.stopExecutionLayer({ closeActive: true });
     this.refreshSidebars();
@@ -916,8 +916,8 @@ export default class NautilusLogPlugin extends Plugin {
       // 🔴 initialize() 是异步的，失败发生在 setTrackingEnabled 早已返回之后
       //    —— 所以回滚也必须在这里再做一次（E1-016 的异步那一半）。
       void this.timingRuntime.initialize().catch((err: unknown) => {
-        console.error('[Nautilus Log] 执行层初始化失败', err);
-        new Notice('[Nautilus Log] 执行层初始化失败，已停用。详见 console。');
+        console.error('[Nautilus Logger] 执行层初始化失败', err);
+        new Notice('[Nautilus Logger] 执行层初始化失败，已停用。详见 console。');
         this.stopExecutionLayer();
         this.settings.actualTimeTracking = false;
         void this.saveSettings();
@@ -946,7 +946,7 @@ export default class NautilusLogPlugin extends Plugin {
       return true;
     } catch (err) {
       // 执行层起不来不该带走整个插件 —— 规划与可视化必须还能用。
-      console.error('[Nautilus Log] execution layer failed to start', err);
+      console.error('[Nautilus Logger] execution layer failed to start', err);
       this.stopExecutionLayer();
       return false;
     }

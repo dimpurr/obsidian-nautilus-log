@@ -1,5 +1,5 @@
 /*
- * header.ts — the Nautilus Log capacity header.
+ * header.ts — the Nautilus Logger capacity header.
  *
  * Replaces the single-line capacity readout with the upstream header: a summary
  * row (Planned · Remaining/Overload/No-fitting-slot · left %) and a capacity
@@ -359,7 +359,7 @@ export function renderHtmlLegend(
 ): HTMLElement {
   const legendCopy = copy?.legend || {};
   const root = el("div", "nautilus-log-html-legend");
-  root.setAttribute("aria-label", "Nautilus Log legend");
+  root.setAttribute("aria-label", "Nautilus Logger legend");
   const tones: [string, string][] = [
     ["urgent", legendCopy.urgent || "Urgent"],
     ["event", legendCopy.event || "Event"],
