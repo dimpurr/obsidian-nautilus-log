@@ -27,6 +27,7 @@
 6. 按 §5 重排挂载面。
 7. 按 §6 决定超集特性要不要一起做。
 8. 按 §7 建立防复发检测器。
+9. 要上架社区目录再读 §10 —— 尤其 **§P3「有意不修的」**，那节挡的是「照着 lint 报告一路清到 vendor 里去」这个最容易犯的错。
 
 ---
 
@@ -598,3 +599,101 @@ vendored runtime 的数据结构里有几个字段在 Obsidian 没有对应概�
 ```
 
 MIT，版权行三代未改，本移植同样不改。
+
+---
+
+## 10. 社区目录审核（2026-08-28 上架）
+
+提交流程**不是 PR**。去 `community.obsidian.md` 登录、绑 GitHub、网页表单填仓库名，
+其余字段系统从默认分支 HEAD 的 `manifest.json` 自动读，然后跑一套自动审核。
+审核结果分三级：**Error 会让整个 entry 标 Failed，Warning 和 Recommendation 不拦发布。**
+
+### §P1 · 改名：`nautilus-log` → `nautilus-logger`
+
+官方规则：`id` 和 `name` **都**必须全局唯一。2026-08-27 另一个同源移植
+（`accessiblefish/obsidian-nautilus-log`，同样从 404KSG 移植，独立实现、无 vendor）
+占用了 `nautilus-log` / `Nautilus Log`，我们必须换。
+
+改名时分了两类，**重做移植时要照样分**：
+
+| 改 | 不改 |
+|---|---|
+| `manifest.json` 的 `id` / `name`、`package.json` name、仓库名、插件目录名、README 链接 | 上游引用 `404KSG/roam-nautilus-log` |
+| 面向用户的插件身份文案（ribbon tooltip、`getDisplayText`、`[Nautilus Logger]` Notice 前缀） | **CSS 类名 `nautilus-log-*`（366 处）** —— 纯内部，改了只有风险 |
+| | **指代「计划块」而非插件的文案** —— 那些在 vendor 引擎里，不可改。插件叫 Nautilus Logger，笔记里那个块仍叫 a Nautilus Log |
+
+🔴 **`NAUTILUS_VIEW_TYPE` 也不改。** 见 `src/sidebar.ts` 的注释：它是**持久化标识**，
+写在用户的 `workspace.json` 里。我们一度改成 `nautilus-logger-view`，结果 Obsidian
+实例化不出布局里已有的 leaf，**侧栏静默消失**。真机冒烟抓到（workspace.json 里躺着
+2 个 `nautilus-log-view`），0.5.0 回退。占用旧 id 的那个插件不注册任何 view，无撞名风险。
+
+### §P2 · 修掉的四条 Error
+
+| Error | 根因 | 修法 |
+|---|---|---|
+| 用了比 `minAppVersion` 新的 API | `workspace.revealLeaf()`，而 `minAppVersion` 写的 `1.5.0` **从来没验证过** | 抬到 `1.11.4` |
+| 未加说明的 directive comment | 一行 `// eslint-disable-next-line no-console` | 删掉。`console.error` 本身合规 |
+| 不许禁用 `no-console` | **同一行注释造出两条 Error** | 同上 |
+| 直接写 style | `tooltip.ts` 的 `left`/`top`/`visibility` | 改用 `el.setCssStyles()`。⚠️ 语义没错（那是测量协议不是显隐切换），错的是机制 —— Obsidian 就有这个 helper |
+
+⚠️ **`minAppVersion` 该填多少,别靠「我这台跑的是哪个版本」判。** macOS 上
+`Info.plist` 报的版本会陈旧（Obsidian 自更新 JS bundle 不改 .app），窗口标题才是准的。
+更硬的裁判是**审核器本身** —— 它有 API 版本数据库，`1.11.4` 提交后它不再报，
+说明按官方数据这个下限是够的。
+
+### §P3 · 🔴 有意不修的（重做移植时同样不要修）
+
+**`src/vendor/**` 里的一条都不修。** 报告里绝大多数 warning 出自那里：
+`log-core.js` / `timing-core.js` / `timing-runtime.js` 的 `no-unsafe-*` 数百条、
+`upstream-extension.css` 的 39 处 `!important` 和 4 处 `multicolumn`、
+`timing-runtime.js:66` 的 `globalThis`。
+
+理由：逐字照搬是跟上游同步的**唯一**手段。上游 2026-08-25→28 三天推了 16 个提交
+4004 行（含全新的 `tidy-plan.js`）。动 vendor 就断了 byte-identical，此后每次同步
+都要人肉三方合并。**拿一个会复利的能力换一个装饰性分数是亏的。**
+
+（另外这套 lint 是拿 TypeScript 规则扫我们 vendor 的纯 JS，`no-unsafe-*` 必然大面积命中，
+它不是在报 bug。）
+
+**我们自己的也有三类不修**：
+
+- `prefer-create-el`（13 处 `document.createElement`）：纯风格，且多在 SVG 构造路径上，
+  那里 `createElementNS` 才是对的
+- `getSettingDefinitions()` 声明式设置 API：要 Obsidian **1.13+**，而手上最高只有
+  1.12.7，**改了无法验证**。刚因为「声明了没验证过的东西」吃过一条 Error，不重复犯
+- `styles.css` 的 28 处 `!important`：从上游 CSS 移植来的，动它等于重做主题层
+
+### §P4 · Vault Enumeration：不改代码，改成如实披露
+
+审核报 `Recommendation: Enumerates all files in the vault`。**属实**：执行层开启时
+`primeTimingCache` / `readAllEntries` 会扫全 vault 找 `CLOCK:` 行，因为计过时的任务
+可能在任何一篇笔记里。这是上游的数据模型，改它要动架构。
+
+处理方式是在中英 README 都加一节「它会碰你 vault 里的什么」，把读 / 写 / 存三件事说全，
+包括「这个插件里没有任何联网代码」。
+
+⚠️ 上游 2026-08-25 的 PR #1434 做过这方面的收窄
+（"read CLOCK data only from tasks relevant to the active Plan and Review"），
+跟随 vendor 基线时会一并拿到。
+
+### §P5 · 发布链路
+
+`.github/workflows/release.yml`：push tag → checkout → `npm ci` → **`npm test` 门禁** →
+build → `actions/attest-build-provenance`（需 `id-token: write` + `attestations: write`）
+→ `gh release create` 传三件套。
+
+🔴 **tag 不带 `v` 前缀**，必须与 `manifest.json` 的 version 精确一致。
+
+审核有两项与此直接相关，都拿到 Pass，值得保住：
+
+- `main.js` / `styles.css` 的 **artifact attestation 已验证**
+- **Build reproduced the release main.js byte-for-byte** —— 审核方独立重建并逐字节对上
+
+⚠️ 改 `esbuild.config.mjs` 时要保住上面第二项。0.4.0 把 `builtin-modules` 换成 Node 自带的
+`module.builtinModules`（严格超集 68 ⊃ 41，且本项目 **0 个** Node 内置模块 import，
+这个 external 列表本来就空转）。
+
+### §P6 · 版本号
+
+一天之内从 0.1.0 飙到 0.5.0，每回应一轮审核就升一次 minor，版本号变成了
+「第几次尝试」的计数器。纪律见 [`CLAUDE.md`](../CLAUDE.md) §版本号纪律：**默认 patch。**
