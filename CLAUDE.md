@@ -68,3 +68,17 @@ UPSTREAM_DIR=<上游 clone> npm test
 
 LICENSE 保持不变（MIT，`Copyright (c) 2022 Matt Vogel`）——它继承自整条 fork 链的
 最上游模板。README 的致谢链**不许精简**，那是本项目合法性的一部分。
+
+## 🔴 版本号纪律
+
+**默认走 patch（0.5.0 → 0.5.1 → 0.5.2）。**
+
+2026-08-28 一天之内从 0.1.0 飙到 0.5.0 —— 每修一批审核意见就升一次 minor，
+版本号变成了「第几次尝试」的计数器，而不是「变化有多大」的信号。
+
+- **patch**：修 bug、过 lint、补文档、发布流程调整 —— 也就是绝大多数情况
+- **minor**：真的新增了用户能感知的特性
+- **major**：破坏性变更（改 plugin id、改笔记语法、删设置项）
+
+⚠️ tag 必须与 `manifest.json` 的 version 精确一致且**不带 `v` 前缀**（Obsidian 官方硬性要求），
+`versions.json` 要同步加一行 `"<version>": "<minAppVersion>"`。
