@@ -199,7 +199,6 @@ function warnIfCacheStillCold(): void {
   if (total === 0) return;   // vault 里本来就没有 markdown，不是降级
   // 🔴 用 console.error 而不是 console.warn —— 社区审核指南要求默认控制台只该
   //    出现 error。这确实是该让用户看见的失败（执行层全面失明），不是噪声。
-  // eslint-disable-next-line no-console
   console.error(
     '[Nautilus Logger] 同步内容缓存预热后仍为空'
     + `（vault 报告 ${total} 个 markdown 文件）。执行层会全面失明：`
