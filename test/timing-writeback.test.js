@@ -1644,3 +1644,62 @@ test('本组-M2 CRLF 读侧契约：readBlockString 的任务行原文不得带 
     '读侧产出的任务串必须干净（无 \\r），否则寻址与 memo 重锚会带着 CRLF 脏尾比较');
   v.cleanup();
 });
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * vendor 14e8d07 升级 · 数据层签名变化
+ * 这三条钉住本次升级（86b97c0 → 14e8d07）带来的新接口：
+ *  · pageTitleFor —— runtime 每次 refresh 都调（timing-runtime.js:222），
+ *    拿「今日 Daily Note 标识」做相等比较，决定能否复用上一帧的 plan uid；
+ *  · projectPrimaryPlanPull —— Pull Watch 桥（§D11 不移植），恒返回 null；
+ *  · completeTask 第二参 —— 带默认值 ⇒ JS 会静默丢参、不报错不炸测试，
+ *    必须显式接住（台账 §3 血的教训）。全部做过「回退实现 ⇒ 变红」验证。
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+test('🔴 pageTitleFor：同一天恒等、跨天必变，且与 readPrimaryPlan.pageTitle 同源', async () => {
+  const v=makeVault();
+  v.write('2026-08-25.md',['# 2026-08-25','```naut','```','- [ ] 写周报 45m'].join('\n'));
+  await T.primeTimingCache();
+  const sameDay1=T.pageTitleFor(new Date(2026,7,25,9,0));
+  const sameDay2=T.pageTitleFor(new Date(2026,7,25,22,30));
+  const nextDay =T.pageTitleFor(new Date(2026,7,26,0,5));
+  assert.equal(sameDay1,sameDay2,'同一天必须恒等 —— runtime 靠它在两次 refresh 之间复用 plan uid');
+  assert.notEqual(sameDay1,nextDay,'跨天必须变 —— 午夜后不得复用昨天的 plan uid');
+  // 🔴 必须与 readPrimaryPlan 的 pageTitle 同源：previous.pageTitle 就是上一帧
+  //    readPrimaryPlan 的产出，`previous?.pageTitle === pageTitleFor(now)` 才能在
+  //    同一天成立；两边各算各的、相等恒 false = 这个复用优化永远不触发。
+  assert.equal(sameDay1,T.readPrimaryPlan(new Date(2026,7,25,9,0)).pageTitle,
+    'pageTitleFor 与 readPrimaryPlan.pageTitle 必须逐字一致（§D16：都是 vault 相对路径）');
+  v.cleanup();
+});
+
+test('🔴 projectPrimaryPlanPull 恒返回 null（不移植 Pull Watch，runtime 能安全回退）', () => {
+  assert.equal(T.projectPrimaryPlanPull(null), null);
+  assert.equal(T.projectPrimaryPlanPull(undefined), null);
+  assert.equal(T.projectPrimaryPlanPull({}, null), null);
+  // runtime 的实际调用形态（timing-runtime.js:164 与 228）：Roam Pull + 上一帧快照 + 兜底分钟
+  assert.equal(T.projectPrimaryPlanPull(
+    { 'block/uid': 'abc', 'block/string': '', 'block/children': [] },
+    { plan: { uid: 'abc' }, pageTitle: '2026-08-25.md' },
+    20,
+  ), null, '无论喂什么都要返回 null —— 调用方以 projected?.plan?.string 判空后落到 readPrimaryPlan');
+});
+
+test('🔴 §3 钉子：completeTask 接受第二参 statusOwnerUid；两者不同时显式拒绝（不勾另一行）', async () => {
+  const v=makeVault();
+  v.write('d.md',['# 2026-08-25','- [ ] 任务甲 30m','- [ ] 任务乙 30m'].join('\n'));
+  await T.primeTimingCache();
+  // runtime 恒以 (taskUid, task.statusOwnerUid || taskUid) 调用（timing-runtime.js:533），
+  // 本移植不移植块引用（§D10）⇒ statusOwnerUid 恒 === taskUid。若某处真的传入
+  // 不同的 uid，必须显式拒绝 —— 静默按第二参勾另一行 = 把完成动作写到错误的任务头上。
+  await assert.rejects(()=>T.completeTask('d.md:1','d.md:2'), /statusOwnerUid/i,
+    '第二参与第一参不同必须抛错。把第二参从签名里删掉（或忽略它）时，'
+    + '这条会静默勾掉任务甲、测试变红 —— 这正是防下次升级静默丢参的钉子');
+  const out=v.read('d.md').split('\n');
+  assert.equal(out[1],'- [ ] 任务甲 30m','任务甲不得被勾选');
+  assert.equal(out[2],'- [ ] 任务乙 30m','任务乙也不得被勾选');
+  // runtime 的实际调用形态（statusOwnerUid === taskUid）必须照常工作，与单参等价
+  await T.completeTask('d.md:1','d.md:1');
+  await T.primeTimingCache();
+  assert.equal(v.read('d.md').split('\n')[1],'- [x] 任务甲 30m','相同第二参必须与单参等价');
+  v.cleanup();
+});

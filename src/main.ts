@@ -17,7 +17,7 @@ import { resolveDayState } from './daystate';
 import { NAUTILUS_VIEW_TYPE, NautilusSidebarView, resolveDailyNoteInfo, primeDailyNotesConfig } from './sidebar';
 import {
   initTimingObsidian, diagnoseTiming, timingCacheReady, bumpProgress,
-  hasDoneAtAnchor, doneAtStamp,
+  hasDoneAtAnchor, doneAtStamp, setDailyNoteRefreshCallback, disposeTimingObsidian,
 } from './timing-obsidian';
 
 // 这两个纯函数按「单一正则真源」迁到了 timing-obsidian.ts（自动打戳与手动命令
@@ -917,6 +917,12 @@ export default class NautilusLogPlugin extends Plugin {
           }),
         },
       }) as unknown as TimingRuntime;
+      // 🔴 今日日记一变就立刻 requestRefresh —— 执行层从「轮询」变「事件驱动」。
+      //    vendor 的轮询间隔（15s / 上游 HEAD 起 5min）对「用户手动改日记」太钝，
+      //    而上游兜底用的 Roam PullWatch 桥本移植明确不移植（台账 §D11）。
+      //    stopExecutionLayer / disposeTimingObsidian 会把它摘掉 —— 执行层
+      //    关闭或插件卸载后一个事件钩子都不留。
+      setDailyNoteRefreshCallback(() => { void this.timingRuntime?.requestRefresh?.(); });
       // 🔴 必须 await + catch：initialize() 是异步的，`void` 会让 rejection
       //    逃出上面那个 try/catch —— 状态栏已经挂上、runtime 却永停 'loading'，
       //    没有 ticker、用户零提示（认证审计 T2-019 / E1-054）。
@@ -961,6 +967,9 @@ export default class NautilusLogPlugin extends Plugin {
 
   onunload(): void {
     this.stopExecutionLayer();
+    // 🔴 摘掉 timing-obsidian 的 metadataCache 监听（含今日日记刷新钩子）：
+    //    插件卸载后一个事件监听都不许留在 vault 上。社区审核会查这条。
+    disposeTimingObsidian();
   }
 
   /** 总开关切换后，让已经打开的侧栏立刻反映变化 —— 否则要关掉侧栏再开才生效。 */
@@ -982,6 +991,8 @@ export default class NautilusLogPlugin extends Plugin {
     this.statusBar = null;
     const rt = this.timingRuntime;
     this.timingRuntime = null;
+    // 执行层关：摘掉今日日记刷新钩子（关闭后连一个待触发的防抖都不留）。
+    setDailyNoteRefreshCallback(null);
     if (!rt) return;
     try {
       // 🔴 `disable()` 实际是**异步**的（vendor timing-runtime.js:536 走 enqueue），

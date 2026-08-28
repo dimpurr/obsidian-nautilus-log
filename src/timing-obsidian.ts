@@ -99,6 +99,15 @@ let metadataListener: ((file: TFile) => void) | null = null;
 /** 同步缓存首轮预热的完成信号。见 timingCacheReady()。 */
 let primeReady: Promise<void> = Promise.resolve();
 
+/** 今日日记变更 → requestRefresh 的接线点。由主会话在 startExecutionLayer /
+ *  stopExecutionLayer 时置位 / 清空（见 setDailyNoteRefreshCallback）。
+ *  🔴 与 host 分离：总开关是【运行时动态切换】的，host 是一次性注入的。 */
+let dailyNoteChangedCallback: (() => void) | null = null;
+/** 防抖 pending 句柄。非 null 表示已有一次刷新被调度，后续事件并入那一次
+ *  （与上游 timing-runtime.js 的 watchedPlanRefreshHandle 同思路）。 */
+let dailyNoteRefreshHandle: number | null = null;
+const DAILY_NOTE_REFRESH_DEBOUNCE_MS = 150;
+
 /** 同步读的内容缓存。Obsidian 的 vault 全是异步 API，而运行时在 refresh()
  *  里同步调 readPrimaryPlan / readAllEntries / readBlockString —— 只能靠缓存。
  *  init 时预热全部 markdown，并在每次 vault 文件改动 / 每次写回后刷新。 */
@@ -158,17 +167,27 @@ export function initTimingObsidian(next: TimingHost): void {
     try { mc.off('changed', metadataListener); } catch { /* ignore */ }
   }
   metadataListener = (file) => {
+    // 🔴 卸载后防御：off() 挡得住「还没出发」的事件，挡不住已排队的。
+    if (!host) return;
     if (!isFileLike(file)) return;
+    // 🔴 事件到达这一刻就定格「是不是我们自己的写回」—— 异步链跑完时
+    //    writeChange 早就返回、selfWritePaths 可能已被兜底定时器清掉，
+    //    只有事件时刻的 set 状态才可信。
+    const selfWrite = selfWritePaths.has(file.path);
     // 缓存里存的是【改动前】的正文（primeFile 之前还没更新），
     // 正好拿来做「勾选跃迁」的 diff —— 见 stampCheckedTasks。
     const prev = contentCache.get(file.path);
-    void primeFile(file.path).then(() => {
+    void primeFile(file.path).then(async () => {
       const fresh = contentCache.get(file.path);
       if (typeof prev === 'string' && typeof fresh === 'string' && prev !== fresh) {
         // 🔴 自动打戳是 best-effort：乐观锁失败（用户在我们读到之后又改了行）
         //    是预期内的事，静默放弃，不把错误甩进 metadataCache 的事件循环。
-        void stampCheckedTasks(file.path, prev, fresh).catch(() => { /* ignore */ });
+        // 这里【await】：requestRefresh 要读到的是【打戳完成之后】的正文，
+        // 不能在写回落盘之前抢跑 —— 否则面板会漏掉刚补上的 dHH:MM 锚点。
+        try { await stampCheckedTasks(file.path, prev, fresh); } catch { /* ignore */ }
       }
+      if (selfWrite) return;   // 我们自己的写回 → runtime 内部已自刷，不拉第二轮
+      scheduleDailyNoteRefresh(file.path);
     });
   };
   if (mc?.on) {
@@ -223,6 +242,54 @@ export function disposeTimingObsidian(): void {
   }
   metadataListener = null;
   host = null;
+  dailyNoteChangedCallback = null;
+  clearDailyNoteRefreshTimer();
+  selfWritePaths.clear();
+}
+
+/* ─────────────────── 今日日记变更 → requestRefresh ───────────────────
+ * vendor 的 runtime 靠内部轮询（15s / 上游 HEAD 起 5min）刷新执行层；
+ * 本移植不移植 Roam PullWatch 桥（台账 §D11），轮询间隔一拉长用户手动改
+ * 日记后面板要等几分钟才反映。这里把执行层接到 metadataCache 'changed' 上：
+ * 今天的日记一变 → 防抖合并 → 调一次 requestRefresh。 */
+
+/** 执行层开/关的接线点。主会话在 startExecutionLayer 传回调、在
+ *  stopExecutionLayer / onunload 传 null。传 null 同时清掉 pending 的防抖
+ *  —— 关闭后绝不允许还有延迟触发的刷新。 */
+export function setDailyNoteRefreshCallback(cb: (() => void) | null): void {
+  dailyNoteChangedCallback = cb;
+  if (cb == null) clearDailyNoteRefreshTimer();
+}
+
+function clearDailyNoteRefreshTimer(): void {
+  if (dailyNoteRefreshHandle !== null) {
+    const clear = typeof window !== 'undefined' && typeof window.clearTimeout === 'function'
+      ? window.clearTimeout : clearTimeout;
+    if (typeof clear === 'function') clear(dailyNoteRefreshHandle);
+    dailyNoteRefreshHandle = null;
+  }
+}
+
+/** 今日日记的 'changed' 事件入口（已被 selfWrite 闸门滤过）。防抖合并：
+ *  用户连续打字/勾选会在几百毫秒内触发大量事件，全量刷新（读盘 + 投影 +
+ *  重渲染）不能每事件一次。pending 句柄非 null 即已有刷新被调度 —— 后续
+ *  事件都并入那一次，与上游 timing-runtime.js 的 watchedPlanRefreshHandle
+ *  同思路；只是上游在同 tick 内合并，这里给 150ms 让打字风暴聚成一个桶。 */
+function scheduleDailyNoteRefresh(path: string): void {
+  if (!dailyNoteChangedCallback) return;              // 执行层关闭 → 不调度
+  const todayPath = dailyNotePath(new Date());        // 每次现算：日期/配置变化立刻生效
+  if (!todayPath || todayPath !== path) return;       // 🔴 只对【今天】的日记生效
+  if (dailyNoteRefreshHandle !== null) return;        // 已在合并窗口中
+  const timer = typeof window !== 'undefined' && typeof window.setTimeout === 'function'
+    ? window.setTimeout : setTimeout;
+  if (typeof timer !== 'function') return;
+  // `timer` 是 window.setTimeout 与全局 setTimeout 的并集 —— 返回值在 DOM 是
+  // number、在 Node 是 Timeout。句柄按代码库惯例存成 number（真机恒走 window）。
+  dailyNoteRefreshHandle = timer(() => {
+    dailyNoteRefreshHandle = null;
+    const cb = dailyNoteChangedCallback;
+    if (cb) cb();
+  }, DAILY_NOTE_REFRESH_DEBOUNCE_MS) as unknown as number;
 }
 
 /* ─────────────────────────── `dHH:MM` 自动完成锚点 ─────────────────────────
@@ -315,6 +382,29 @@ export function planCheckTransitions(
 /** 正在自动打戳的文件路径 —— 防重入：我们自己的写回会再触发一次
  *  metadataCache 'changed'，处理中直接跳过，不许起第二轮。 */
 const stampingPaths = new Set<string>();
+
+/** 本插件自己写回过的文件路径 —— 防重入闸门。见 markSelfWrite。
+ *  🔴 与 stampingPaths 同哲学，但覆盖【所有】写回通道：stampingPaths 只管
+ *  自动打戳那一路，Clock In/Out / completeTask / bumpProgress 等写回同样会
+ *  再触发一次 'changed'，也要闸住，否则「写回 → 事件 → 刷新 → 写回」没有
+ *  收敛保证。writeChange 是全部写回的汇聚点，在那里统一置位。 */
+const selfWritePaths = new Set<string>();
+/** 闸门存活时长。'changed' 事件在写回【之后】异步触发（编辑通道还要等 Obsidian
+ *  保存），必须活到事件链读完它；超过即强制清除，绝不把 path 永久留在闸门里
+ *  —— 否则下一次【用户】编辑同一文件会被误判成「我们自己的写回」而错过刷新。 */
+const SELF_WRITE_GUARD_MS = 500;
+
+function markSelfWrite(path: string): void {
+  selfWritePaths.add(path);
+  const timer = typeof window !== 'undefined' && typeof window.setTimeout === 'function'
+    ? window.setTimeout : setTimeout;
+  if (typeof timer !== 'function') return;
+  const handle = timer(() => { selfWritePaths.delete(path); }, SELF_WRITE_GUARD_MS);
+  // 🔴 兜底定时器只是安全网（真机里 'changed' 事件几毫秒就到，几乎轮不到它）。
+  //  Node 测试环境里让它 unref：否则每个写回都让测试进程多挂 500ms。
+  //  浏览器里 window.setTimeout 返回 number，`unref` 不存在 → 空操作。
+  (handle as { unref?: () => void })?.unref?.();
+}
 
 /** 定位今天计划正文：文件里第一个 nautilus 围栏的闭合线之后、第一个空行之前。
  *  与 readPrimaryPlan 同款边界（同一个「计划块管辖范围」）。 */
@@ -697,6 +787,11 @@ async function writeChange(path: string, change: LineChange): Promise<void> {
   const a = getApp();
   const f = a.vault.getAbstractFileByPath(path);
   if (!(f instanceof TFile)) throw new Error(`Target file not found: ${path}`);
+  // 🔴 置位防重入闸门：这次写回落盘后 metadataCache 会再触发一次 'changed'，
+  //    那一次是【我们自己的写回】—— runtime 内部已自刷，不许再拉一轮
+  //    requestRefresh（见 selfWritePaths / 台账 §D11）。任何写回通道都从这里过。
+  //    放在文件存在性校验之后：找不到文件就根本没写，闸门不必置位。
+  markSelfWrite(path);
   const editor = findEditorFor(path);
   if (editor) {
     const lines = editor.getValue().split(/\r?\n/);
@@ -915,7 +1010,18 @@ export async function updateGraphBlock(clockUid: string, newContent: string): Pr
  *  （`- [/]` 进行中、`- [-]` 取消…）都判成 TODO，于是它们进 Plan、吃容量、
  *  能 Clock In，但完成时却无从下手、必抛错。上游同一情形走前缀路径会成功。
  *  （认证审计 A1-127） */
-export async function completeTask(taskUid: string): Promise<boolean> {
+export async function completeTask(taskUid: string, statusOwnerUid = taskUid): Promise<boolean> {
+  // 🔴 第二参是上游 14e8d07 加的：runtime 以 `completeTask(taskUid,
+  //    task.statusOwnerUid || taskUid)` 调用（timing-runtime.js:533），statusOwnerUid
+  //    服务于 Roam 的「引用任务归属」。本移植不移植块引用（§D10），
+  //    task.statusOwnerUid 恒 undefined ⇒ runtime 恒传 statusOwnerUid === taskUid。
+  //    带默认值 + 显式拒不同：若真有人传入不同的 uid，那是没移植的概念，宁可
+  //    抛错也不猜着去勾另一行（§D15 保守拒写一族）。签名保留第二参是为了与
+  //    上游形状兼容，防止下次升级再次静默丢参（台账 §3 血的教训）。
+  const targetUid = statusOwnerUid || taskUid;
+  if (targetUid !== taskUid) {
+    throw new Error('Different statusOwnerUid is not supported: referenced-task ownership (Roam block references) is not ported. See PORTING-DECISIONS.md §D10.');
+  }
   const parsed = splitUid(taskUid);
   if (!parsed) throw new Error('Task not found.');
   const lines = await readFreshLines(parsed.path);
@@ -997,6 +1103,22 @@ function dailyNotePath(date: Date): string | null {
     if (isFileLike(f)) return f.path;
   }
   return null;
+}
+
+/** 今日 Daily Note 的标识 —— vendored runtime 的 readAuthoritativePlan 每次
+ *  refresh 都调它，判断「当前页标题变没变」以决定能否复用上一帧的 plan uid。
+ *  返回值只被用来做相等比较（`previous?.pageTitle === currentPageTitle`），
+ *  所以形式不重要，重要的是「同一天恒等、跨天必变」。
+ *
+ *  🔴 必须与 readPrimaryPlan 的 pageTitle【同源】（两边都是 `dailyNotePath(date)
+ *  || localYMD(date)`）：previous 就是上一帧 readPrimaryPlan 的产出，两边各算
+ *  各的、同一天却不相等，等于这个复用优化永远不触发。
+ *  沿用执行层自己的 dailyNotePath 链（台账 §1「执行层不走 resolveDailyNoteInfo」，
+ *  P1-011），不另起一套、也不去调 sidebar 的 resolveDailyNoteInfo —— 两条链在
+ *  「daily-notes 内置插件被禁用 + 用户配了 folder」时会得出不同结果。
+ *  pageTitle 的取值语义见 PORTING-DECISIONS.md §D16（= vault 相对路径）。 */
+export function pageTitleFor(date = new Date()): string {
+  return dailyNotePath(date) || localYMD(date);
 }
 
 const FENCE_OPEN_RE = /^\s*```+\s*(?:nautilus|naut)\s*$/;
@@ -1217,6 +1339,25 @@ export function legacyLogbookIsRunning(): boolean {
   // Obsidian 没有 Roam Logbook 这类会抢写 LOGBOOK 的扩展；其它可能写 LOGBOOK
   // 抽屉的插件也没有可靠的探测信号。拿不准就返回 false，避免误伤启动。
   return false;
+}
+
+/** 上游只在 Roam 的 PullWatch 桥里用：把一次 Roam pull 投影成 planSnapshot。
+ *  本移植不移植 plan-watch（PORTING-DECISIONS.md §D11，watchPlan 参数不传），
+ *  也没有 pull 这个概念 ⇒ 做成恒返回 null 的形状兼容空实现。
+ *  （§D14 先例：legacyLogbookIsRunning 恒返回 false，有意做成空壳并登记。）
+ *
+ *  ✅ 已核实返回 null 时 runtime 安全回退（对两个调用点都逐行确认过）：
+ *  · readAuthoritativePlan（timing-runtime.js:228）`projected?.plan?.string`
+ *    对 null 取 undefined，`isNautilusComponent(undefined)` 恒 false ⇒ 落到
+ *    `readPrimaryPlan` 重新读盘 —— 就是上一帧不可复用时的正常路径；
+ *  · syncPlanWatch（timing-runtime.js:164）`planSnapshot || snapshot.planSnapshot`
+ *    ⇒ 保留上一帧快照。且本移植 watchPlan 恒为 null，该回调根本不会被触发。 */
+export function projectPrimaryPlanPull(
+  pull: unknown,
+  previous: unknown = null,
+  fallbackMinutes = 15,
+): null {
+  return null;
 }
 
 /* ─────────────────────────── 诊断 ───────────────────────────

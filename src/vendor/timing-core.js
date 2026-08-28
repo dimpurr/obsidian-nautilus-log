@@ -15,6 +15,7 @@ const BLOCK_REF_RE = /\(\(([a-zA-Z0-9_-]{6,})\)\)/g;
 const DURATION_TOKEN_RE = /(?:^|\s)(\d+h(?:\d+(?:min|m))?|\d+(?:min|m))(?=\s|$)/gi;
 const DONE_TIME_RE = /(?:^|\s)d(\d{1,2})(?::(\d{1,2}))?(?=\s|$)/i;
 const PROGRESS_RE = /(?:^|\s)d(\d{1,3})%(?=\s|$)/i;
+const STRUCTURAL_DIVIDER_RE = /^\s*(?:-{3,}|_{3,}|\*{3,})\s*$/;
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const ACTIVE_WORK_WINDOW_MINUTES = 45;
 const FORGOTTEN_CLOCK_MINUTES = 120;
@@ -198,6 +199,10 @@ function taskTitle(string) {
   return cleaned || '(untitled)';
 }
 
+function isStructuralBlock(string) {
+  return typeof string === 'string' && STRUCTURAL_DIVIDER_RE.test(string);
+}
+
 function plannedMinutes(string, fallback = 15) {
   return logCore.parseDurationToken({ text: string, fallback }).minutes;
 }
@@ -294,7 +299,7 @@ function resolveTaskInstance({
     const source = read(referenceUid);
     if (!source) return null;
     const status = taskStatus(source);
-    if (status) return status;
+    if (status) return { status, ownerUid: referenceUid };
     const nestedUid = referenceUids(source)[0] || null;
     return nestedUid
       ? resolveSourceStatus(nestedUid, [...stack, referenceUid])
@@ -305,7 +310,8 @@ function resolveTaskInstance({
   const sourceUid = refs[0] || null;
   const source = sourceUid ? resolveSource(sourceUid) : '';
   const explicitStatus = taskStatus(local);
-  const sourceStatus = sourceUid ? resolveSourceStatus(sourceUid) : null;
+  const sourceState = sourceUid ? resolveSourceStatus(sourceUid) : null;
+  const sourceStatus = sourceState?.status || null;
   const localDone = doneTime(local);
   const localProgress = taskProgress(local);
   const localDurations = durationTokens(local);
@@ -325,33 +331,40 @@ function resolveTaskInstance({
   const body = removeTimeRange(removeDurationTokens(removeTaskState(resolvedContent)))
     .replace(/\s+/g, ' ')
     .trim();
-  const status = explicitStatus || sourceStatus || 'TODO';
-  const statusOrigin = explicitStatus ? 'local' : sourceStatus ? 'source' : 'implicit';
-  const marker = `{{[[${status}]]}}`;
+  // Roam dividers are outline structure, not work. Only a bare divider is
+  // ignored: an explicit TODO/DONE marker still wins as deliberate intent.
+  const structural = !explicitStatus && !range && isStructuralBlock(body);
+  const status = structural ? null : explicitStatus || sourceStatus || 'TODO';
+  const statusOrigin = structural ? 'structure' : explicitStatus ? 'local' : sourceStatus ? 'source' : 'implicit';
+  const statusOwnerUid = explicitStatus ? uid : sourceState?.ownerUid || uid;
+  const marker = structural ? '' : `{{[[${status}]]}}`;
   const rangeToken = range?.text || '';
   const progressToken = localProgress > 0 ? `d${localProgress}%` : '';
   const doneToken = explicitStatus === 'DONE' ? localDone.token : '';
-  const durationToken = range ? '' : `${planned}m`;
-  const effectiveString = [marker, rangeToken, body, durationToken, progressToken, doneToken]
-    .filter(Boolean)
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const durationToken = range || structural ? '' : `${planned}m`;
+  const effectiveString = structural
+    ? local.trim()
+    : [marker, rangeToken, body, durationToken, progressToken, doneToken]
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
 
   return {
     uid,
     sourceUid,
     localString: local,
     effectiveString,
-    title: taskTitle(body),
+    title: structural ? '' : taskTitle(body),
     status,
     statusOrigin,
+    statusOwnerUid,
     explicitStatus,
-    plannedMinutes: planned,
-    progress: localProgress,
-    remainingMinutes: Math.max(0, Math.round(planned * (1 - localProgress / 100))),
+    plannedMinutes: structural ? 0 : planned,
+    progress: structural ? 0 : localProgress,
+    remainingMinutes: structural ? 0 : Math.max(0, Math.round(planned * (1 - localProgress / 100))),
     doneAt: explicitStatus === 'DONE' ? localDone.minutes : null,
-    kind: range ? 'event' : 'task',
+    kind: structural ? 'structure' : range ? 'event' : 'task',
     range,
   };
 }
@@ -427,8 +440,16 @@ function projectPlan(rows = [], planUid, fallbackMinutes = 15) {
     .filter((task) => task.status === 'TODO');
 }
 
+function projectReviewCandidates(rows = [], planUid, fallbackMinutes = 15) {
+  // Keep source-completed wrappers as lightweight candidates until today's
+  // wrapper-owned CLOCK data is known. buildDailyReview then excludes an
+  // inherited DONE source with no same-day Actual, while preserving a task
+  // that was genuinely worked on and completed today.
+  return projectDirectTasks(rows, planUid, fallbackMinutes);
+}
+
 function projectReviewTasks(rows = [], planUid, fallbackMinutes = 15) {
-  return projectDirectTasks(rows, planUid, fallbackMinutes)
+  return projectReviewCandidates(rows, planUid, fallbackMinutes)
     .filter((task) => !(task.status === 'DONE' && task.statusOrigin === 'source'));
 }
 
@@ -536,6 +557,7 @@ function buildDailyReview({ tasks = [], entries = [], now = new Date() } = {}) {
     const closedEntries = taskEntries.filter((entry) => !entry.running);
     const closedActual = actualMinutesToday(task.uid, closedEntries, now);
     const currentActual = actualMinutesToday(task.uid, taskEntries, now);
+    if (task.status === 'DONE' && task.statusOrigin === 'source' && currentActual <= 0) return null;
     const completed = task.status === 'DONE';
     const live = !completed && currentActual > 0 && taskEntries.some((entry) => entry.running);
     const comparable = completed && closedActual > 0;
@@ -555,7 +577,7 @@ function buildDailyReview({ tasks = [], entries = [], now = new Date() } = {}) {
       actualMinutes: actual,
       varianceMinutes: comparable ? actual - task.plannedMinutes : null,
     };
-  });
+  }).filter(Boolean);
 
   const compared = rows.filter((row) => row.state === 'compared');
   const planned = compared.reduce((total, row) => total + row.plannedMinutes, 0);
@@ -686,6 +708,7 @@ module.exports = {
   formatClockLine,
   formatElapsed,
   isNautilusComponent,
+  isStructuralBlock,
   isForgottenClock,
   nextPomodoroState,
   nextStandalonePomodoroState,
@@ -696,6 +719,7 @@ module.exports = {
   taskProgress,
   parseTimeRangeMinutes,
   projectPlan,
+  projectReviewCandidates,
   projectReviewTasks,
   projectFixedEvents,
   resolveBlockReferences,
