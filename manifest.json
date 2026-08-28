@@ -1,7 +1,7 @@
 {
   "id": "nautilus-logger",
   "name": "Nautilus Logger",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "minAppVersion": "1.11.4",
   "description": "A spiral day planner with explicit time capacity. Fixed events stay fixed, flexible tasks flow into what remains, and overload never disappears from view.",
   "author": "dimpurr",
