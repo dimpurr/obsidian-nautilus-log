@@ -94,7 +94,7 @@ export function createTooltip(host: HTMLElement): TooltipController {
     }
     // 先显示再量尺寸，否则 offsetWidth 是 0，定位会全部挤到左上角。
     tip.classList.remove('nautilus-log-tooltip--hidden');
-    tip.style.visibility = 'hidden';   // ⚠️ 测量协议，见 PROGRESS.md —— 不是 display 切换
+    tip.setCssStyles({ visibility: 'hidden' });   // ⚠️ 测量协议，见 PROGRESS.md —— 不是 display 切换
 
     const anchor = core.radialTooltipGeometry({
       startMinutes: t.startMinutes, endMinutes: t.endMinutes,
@@ -133,10 +133,12 @@ export function createTooltip(host: HTMLElement): TooltipController {
     });
     if (!placed) { hide(); return; }
 
-    tip.style.left = `${placed.x - hostBox.left}px`;
-    tip.style.top = `${placed.y - hostBox.top}px`;
+    tip.setCssStyles({
+      left: `${placed.x - hostBox.left}px`,
+      top: `${placed.y - hostBox.top}px`,
+    });
     tip.dataset.placement = placed.placement;
-    tip.style.visibility = 'visible';
+    tip.setCssStyles({ visibility: 'visible' });
   }
 
   return {

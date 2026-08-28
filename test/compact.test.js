@@ -500,6 +500,10 @@ test("warning panel points at the offending line, or its text when given (P1-8)"
       warnings: [
         { line: 3, uid: "n.md:3", code: "sameTime" },
         { uid: "n.md:7", code: "sameTime", text: "- 09:00-09:00 Standup" },
+        // 自定义复选框状态（[/] 进行中 / [-] 已取消）也要剥 —— CHECKBOX_RE 去掉了
+        // `\-` 的转义（字符类末尾的 `-` 本就是字面量），这组输入钉住匹配行为没变。
+        { uid: "n.md:8", code: "sameTime", text: "- [/] In progress 30m" },
+        { uid: "n.md:9", code: "sameTime", text: "- [-] Cancelled 30m" },
       ],
     },
     copyEn,
@@ -515,6 +519,8 @@ test("warning panel points at the offending line, or its text when given (P1-8)"
     "09:00-09:00 Standup",
     "text wins when the parser supplies it",
   );
+  assert.strictEqual(textOf(rows[2].firstChild), "In progress 30m", "[/] 复选框状态必须剥掉，时长原样保留");
+  assert.strictEqual(textOf(rows[3].firstChild), "Cancelled 30m", "[-] 复选框状态必须剥掉，时长原样保留");
 });
 
 test("warning panel degrades safely when plan.warnings is absent (P1-8)", () => {

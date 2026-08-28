@@ -121,7 +121,7 @@ function makeDetails(
 /** 行首列表标记 / 复选框。**只**用于警告面板的左栏（`describeWarning`）——
  *  标题清洗已经统一到 `parser.ts stripTaskTokens`（认证审计 L1-031）。 */
 const LIST_MARKER_RE = /^\s*[-*+]\s*/;
-const CHECKBOX_RE = /^\[[ xX/\-]\]\s*/;
+const CHECKBOX_RE = /^\[[ xX/-]\]\s*/;
 
 /** 把一行原文变成可读标题 —— 对齐上游事件上的 `:description`。
  *

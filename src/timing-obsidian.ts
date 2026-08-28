@@ -26,7 +26,7 @@
  * 磁盘上的【原始行】，写回去的仍是 `- [x]`，不把 Roam 语法写进 Obsidian 笔记。
  */
 
-import type { App, TFile, Editor } from 'obsidian';
+import { TFile, type App, type Editor } from 'obsidian';
 import { extractPlanBody } from './blockconfig';
 import { bumpProgressInLine } from './parser';
 
@@ -124,7 +124,9 @@ function getApp(): App {
   return host.app;
 }
 
-/** duck-typing 判文件 —— TFile 是 type-only import，运行时不能 `instanceof`。 */
+/** duck-typing 判「这个 abstract file 至少能取出 path」。
+ *  🔴 只用于取路径的场合（metadataCache 事件 / 诊断 / 名字兜底）。
+ *  真正会拿去做 IO 的路径一律用 `f instanceof TFile` 窄化，绝不 `as TFile` 强转。 */
 function isFileLike(f: unknown): f is { path: string } {
   return !!f && typeof (f as { path?: unknown }).path === 'string';
 }
@@ -132,9 +134,9 @@ function isFileLike(f: unknown): f is { path: string } {
 async function primeFile(path: string): Promise<string | null> {
   const a = getApp();
   const f = a.vault.getAbstractFileByPath(path);
-  if (!isFileLike(f)) return null;
+  if (!(f instanceof TFile)) return null;
   try {
-    const text = await a.vault.cachedRead(f as TFile);
+    const text = await a.vault.cachedRead(f);
     contentCache.set(path, text);
     return text;
   } catch {
@@ -678,11 +680,11 @@ function findEditorFor(path: string): Editor | null {
 async function readFreshLines(path: string): Promise<string[] | null> {
   const a = getApp();
   const f = a.vault.getAbstractFileByPath(path);
-  if (!isFileLike(f)) return null;
+  if (!(f instanceof TFile)) return null;
   const editor = findEditorFor(path);
   if (editor) return editor.getValue().split(/\r?\n/);
   try {
-    const text = await a.vault.read(f as TFile);
+    const text = await a.vault.read(f);
     return text.split(/\r?\n/);
   } catch {
     return null;
@@ -694,7 +696,7 @@ async function readFreshLines(path: string): Promise<string[] | null> {
 async function writeChange(path: string, change: LineChange): Promise<void> {
   const a = getApp();
   const f = a.vault.getAbstractFileByPath(path);
-  if (!isFileLike(f)) throw new Error(`Target file not found: ${path}`);
+  if (!(f instanceof TFile)) throw new Error(`Target file not found: ${path}`);
   const editor = findEditorFor(path);
   if (editor) {
     const lines = editor.getValue().split(/\r?\n/);
@@ -733,7 +735,7 @@ async function writeChange(path: string, change: LineChange): Promise<void> {
     contentCache.set(path, editor.getValue());
     return;
   }
-  const result = await a.vault.process(f as TFile, (data: string) => {
+  const result = await a.vault.process(f, (data: string) => {
     // 🔴 先探测文件的行尾风格（CRLF / LF），切分与回拼都用同一套，
     //    否则对 CRLF 笔记做写回会把新行写成裸 LF、与全文 CRLF 混在一起
     //    （认证审计 A1-066：两处切分规则不一致）。
@@ -1068,8 +1070,11 @@ export function readPrimaryPlan(date = new Date(), fallbackMinutes = 15): Primar
 /* ─────────────────────────── 导航（5） ─────────────────────────── */
 
 function defer(fn: () => void, ms: number): void {
-  const globalTimer = (globalThis as unknown as { setTimeout?: (f: () => void, n: number) => unknown }).setTimeout;
-  const timer = typeof window !== 'undefined' && typeof window.setTimeout === 'function' ? window.setTimeout : globalTimer;
+  // 用 `window` 不用 `activeWindow`：这里只是挂一个计时器，回调真正操作的是
+  // 已经拿到的 leaf/editor（可能属于弹出窗口），不依赖「当前聚焦窗口」的全局。
+  // `window` 在 Obsidian 渲染进程里恒存在；Node 测试里没有 window，回落全局
+  // setTimeout —— 不用 globalThis（lint 规则禁止，弹出窗口里它指向的 realm 不可信）。
+  const timer = typeof window !== 'undefined' && typeof window.setTimeout === 'function' ? window.setTimeout : setTimeout;
   if (typeof timer === 'function') timer(fn, ms);
 }
 
@@ -1130,10 +1135,10 @@ async function openTaskLeaf(taskUid: string, side: 'main' | 'right'): Promise<vo
   if (!parsed) throw new Error('This task has no file path.');
   const a = getApp();
   const f = a.vault.getAbstractFileByPath(parsed.path);
-  if (!isFileLike(f)) throw new Error('This task has no file path.');
+  if (!(f instanceof TFile)) throw new Error('This task has no file path.');
   const leaf = side === 'right' ? a.workspace.getRightLeaf(false) : a.workspace.getLeaf(false);
   if (!leaf) throw new Error('Could not open the task: no workspace leaf available.');
-  await leaf.openFile(f as TFile);
+  await leaf.openFile(f);
   revealLine(parsed.line, leaf);
   defer(() => { revealLine(parsed.line, leaf); flashLocatedLine(leaf); }, 60);
 }
@@ -1185,10 +1190,10 @@ export async function openPrimaryPlan(
   if (sidebar) { await openTaskInRightSidebar(planUid); return; }
   const a = getApp();
   const f = a.vault.getAbstractFileByPath(parsed.path);
-  if (!isFileLike(f)) throw new Error('No Primary Nautilus Log was found today.');
+  if (!(f instanceof TFile)) throw new Error('No Primary Nautilus Log was found today.');
   const leaf = a.workspace.getLeaf(false);
   if (!leaf) throw new Error('Could not open the plan: no workspace leaf available.');
-  await leaf.openFile(f as TFile);
+  await leaf.openFile(f);
   // 🔴 leaf 必须传下去，理由同 revealLine 的注释（认证审计 A1-152）。
   revealLine(parsed.line, leaf);
   defer(() => { revealLine(parsed.line, leaf); flashLocatedLine(leaf); }, 80);

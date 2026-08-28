@@ -46,7 +46,8 @@ function makeEl(){
   if (g) { const d=g.createElement('div'); patch(d); return d; }
   return patch({ children:[], empty(){}, createDiv(){return makeEl();},
                  createEl(){return makeEl();}, addClass(){}, removeClass(){},
-                 setText(){}, appendChild(){}, });
+                 setText(){}, appendChild(){},
+                 style:{ setProperty(k,v){ this[k]=v; } }, });
 }
 function patch(el){
   if (el && typeof el.createDiv !== 'function') {
@@ -60,6 +61,10 @@ function patch(el){
     el.addClass=(c)=>el.classList&&el.classList.add(c);
     el.removeClass=(c)=>el.classList&&el.classList.remove(c);
     el.setText=(t)=>{ el.textContent=t; };
+    // Obsidian 给 HTMLElement 加的扩展方法（obsidian.d.ts:105）。忠实实现：
+    // 写进 el.style，不能是空函数（reality-quirks.md RQ-5）。
+    el.setCssStyles=(styles)=>{ Object.assign(el.style, styles); };
+    el.setCssProps=(props)=>{ for (const k of Object.keys(props)) el.style.setProperty(k, props[k]); };
   }
   return el;
 }

@@ -7,14 +7,23 @@ const test=require('node:test'), assert=require('node:assert/strict');
 const fs=require('fs'), os=require('os'), path=require('path');
 const esbuild=require('esbuild');
 
-esbuild.buildSync({entryPoints:[path.join(__dirname,'../src/timing-obsidian.ts')],bundle:true,
-  format:'cjs',platform:'node',outfile:path.join(__dirname,'.tw.cjs'),external:['obsidian'],logLevel:'error'});
-const T=require('./.tw.cjs');
+const MOCK_OBSIDIAN=path.join(__dirname,'obsidian-mock.cjs');
+const { TFile }=require(MOCK_OBSIDIAN);
+
+/** obsidian 保持 external，但用 mockRequire 把它接回 mock —— bundle 与夹具共享
+ *  同一个 TFile 类，`instanceof TFile` 才能跨 bundle 边界成立（与 sidebar.test.js 同款）。 */
+function loadTimingBundle(){
+  const result=esbuild.buildSync({entryPoints:[path.join(__dirname,'../src/timing-obsidian.ts')],bundle:true,
+    format:'cjs',platform:'node',write:false,external:['obsidian'],logLevel:'error'});
+  const shim={ exports:{} };
+  const mockRequire=(id)=>(id==='obsidian'?require(MOCK_OBSIDIAN):require(id));
+  new Function('module','exports','require',result.outputFiles[0].text)(shim,shim.exports,mockRequire);
+  return shim.exports;
+}
+const T=loadTimingBundle();
 // 冷缓存告警的独立 bundle：主 bundle 的 contentCache 会被前面的测试填满，
 // 而「预热后仍为空」要求全局缓存为空 —— 只有一份全新模块实例才撑得出这场景。
-esbuild.buildSync({entryPoints:[path.join(__dirname,'../src/timing-obsidian.ts')],bundle:true,
-  format:'cjs',platform:'node',outfile:path.join(__dirname,'.tw-cold.cjs'),external:['obsidian'],logLevel:'error'});
-const TC=require('./.tw-cold.cjs');
+const TC=loadTimingBundle();
 
 /** 用真实文件系统撑起一个最小 vault。vault.process 走真实原子读改写。
  *  externalEdit 非空时：在【第一次】vault.process 落笔前，先把外部编辑写进磁盘
@@ -25,7 +34,7 @@ function makeVault(externalEdit){
   const files=new Map();
   const api={
     dir,
-    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,{path:p}); return files.get(p); },
+    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,new TFile(p)); return files.get(p); },
     read(p){ return fs.readFileSync(abs(p),'utf8'); },
     cleanup(){ fs.rmSync(dir,{recursive:true,force:true}); },
   };
@@ -200,7 +209,7 @@ function makeVaultWithEditor(){
   }
   const api={
     dir,
-    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,{path:p});
+    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,new TFile(p));
                    editors.set(p,makeEditor(p)); return files.get(p); },
     read(p){ return fs.readFileSync(abs(p),'utf8'); },
     cleanup(){ fs.rmSync(dir,{recursive:true,force:true}); },
@@ -405,7 +414,7 @@ function makeLateIndexVault(){
   const readyCbs=[];
   const api={
     dir,
-    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,{path:p}); return files.get(p); },
+    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,new TFile(p)); return files.get(p); },
     /** 模拟 Obsidian 建完索引并触发 onLayoutReady。 */
     finishIndexing(){ indexed=true; readyCbs.splice(0).forEach(cb=>cb()); },
     cleanup(){ fs.rmSync(dir,{recursive:true,force:true}); },
@@ -460,7 +469,7 @@ test('RQ-4 resolve 的那一刻缓存必须已经填好（不是 onLayoutReady �
  * console 只该有 error。这条守卫 console.error / 不退回 console.warn。 */
 test('🔴 预热后缓存仍为空时用 console.error 告警（不是 console.warn）', async () => {
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'nl-cold-'));
-  const files=new Map([['2026-08-26.md',{path:'2026-08-26.md'}]]);
+  const files=new Map([['2026-08-26.md',new TFile('2026-08-26.md')]]);
   const readyCbs=[];
   const vault={
     getAbstractFileByPath:p=>files.get(p)||null,
@@ -615,7 +624,7 @@ function makeRacingEditorVault(){
   const snapshots=new Map();   // path -> { first, rest, calls }
   const api={
     dir,
-    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,{path:p});
+    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,new TFile(p));
       snapshots.set(p,{first:text, rest:text, calls:0}); return files.get(p); },
     /** 让「下一次写回提交」看到一份与读取时不同的文件（模拟外部并发编辑）。 */
     mutateBeforeWrite(p,newText){ const s=snapshots.get(p); s.rest=newText; fs.writeFileSync(abs(p),newText); return api; },
@@ -963,7 +972,7 @@ function makeVaultWithLeaves(){
   //    所以 getActiveLeaf() 返回的【不是】我们刚打开的那个 leaf。
   const strayLeaf=makeLeaf('主笔记.md');
   const api={ dir, mainLeaf, rightLeaf, strayLeaf,
-    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,{path:p}); return files.get(p); },
+    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,new TFile(p)); return files.get(p); },
     read(p){ return fs.readFileSync(abs(p),'utf8'); },
     cleanup(){ fs.rmSync(dir,{recursive:true,force:true}); } };
   const vault={
@@ -1028,6 +1037,35 @@ test('定位高亮 __located：挂上 1200ms 再摘掉（上游 timing-roam.js �
   assert.ok(!v.rightLeaf.node.classes.has('nautilus-log-timing__located'),
     '1200ms 后必须摘掉 —— 不摘就再也触发不了第二次动画');
   v.cleanup();
+});
+
+test('🔴 目录（TFolder）不是 TFile：openTask 必须显式拒掉，绝不拿文件夹 openFile', async () => {
+  // 回归钉：旧的 isFileLike 只认 `{path: string}`，TFolder 也满足 ⇒ 文件夹会被
+  // 一路当成 TFile 送进 openFile（对着错误的对象做 IO）。换成 `instanceof TFile`
+  // 之后必须显式失败。回退实现（isFileLike + as TFile）本测试会红。
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'nl-folder-'));
+  const abs=p=>path.join(dir,p);
+  const { TFolder }=require('./obsidian-mock.cjs');
+  const folder=new TFolder('folder');
+  const files=new Map([['folder',folder]]);
+  const opened=[];
+  const vault={
+    getAbstractFileByPath:p=>files.get(p)||null,
+    getMarkdownFiles:()=>[...files.values()],
+    cachedRead:async f=>fs.readFileSync(abs(f.path),'utf8'),
+    read:async f=>fs.readFileSync(abs(f.path),'utf8'),
+    process:async()=>{ throw new Error('文件夹不该走 vault.process'); },
+  };
+  const app={vault,
+    workspace:{ iterateAllLeaves(){}, getActiveLeaf:()=>null,
+      getLeaf:()=>({ opened, openFile:async f=>opened.push(f.path) }),
+      getRightLeaf:()=>null, openLinkText:async()=>{} },
+    metadataCache:{on(){},off(){}}};
+  T.initTimingObsidian({app});
+  await assert.rejects(()=>T.openTaskInMainWindow('folder:0'), /no file path/i,
+    '文件夹路径必须被拒（instanceof TFile 窄化失败）');
+  assert.deepEqual(opened,[], '绝不允许把 TFolder 送进 openFile');
+  fs.rmSync(dir,{recursive:true,force:true});
 });
 
 /* ─────────── A1-066：CRLF 文件必须整份一致，不许混行尾 ───────────
@@ -1129,7 +1167,7 @@ function makeToastHost(){
   const files=new Map();
   const notify=[];   // 记录 (message, intent)
   const api={ dir,
-    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,{path:p}); return files.get(p); },
+    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,new TFile(p)); return files.get(p); },
     cleanup(){ fs.rmSync(dir,{recursive:true,force:true}); } };
   const vault={
     getAbstractFileByPath:p=>files.get(p)||null, getMarkdownFiles:()=>[...files.values()],
@@ -1247,7 +1285,7 @@ function makeRaceVault(){
   const files=new Map();
   let stale=null, staleServed=false;
   const api={ dir,
-    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,{path:p}); return files.get(p); },
+    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,new TFile(p)); return files.get(p); },
     read(p){ return fs.readFileSync(abs(p),'utf8'); },
     /** 让「第一个读」返回旧快照，之后的读一律回到磁盘当前内容。 */
     setStale(text){ stale=text; staleServed=false; },
@@ -1309,7 +1347,7 @@ test('🔴 乐观锁：editor 通道同样必须拒写 —— 两个读之间 CL
     const seq=new Map();   // path -> [stale, live]
     const counts=new Map();
     const api={ dir,
-      write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,{path:p}); return files.get(p); },
+      write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,new TFile(p)); return files.get(p); },
       read(p){ return fs.readFileSync(abs(p),'utf8'); },
       setSeq(p,a,b){ seq.set(p,[a,b]); counts.set(p,0); },
       cleanup(){ fs.rmSync(dir,{recursive:true,force:true}); } };
@@ -1395,7 +1433,7 @@ function makeRacingVault_g5(raceFn){
   const abs=p=>path.join(dir,p);
   const files=new Map();
   const api={ dir,
-    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,{path:p}); return files.get(p); },
+    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,new TFile(p)); return files.get(p); },
     read(p){ return fs.readFileSync(abs(p),'utf8'); },
     cleanup(){ fs.rmSync(dir,{recursive:true,force:true}); } };
   const vault={
@@ -1547,7 +1585,7 @@ function makeTickVault_g6(){
     fs.writeFileSync(abs(p), t.replace('- [ ] 写周报 45m','- [ ] 写周报（正在被用户改写）45m')); };
   const api={
     dir,
-    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,{path:p});
+    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,new TFile(p));
                    editors.set(p,makeEditor(p)); return files.get(p); },
     read(p){ return fs.readFileSync(abs(p),'utf8'); },
     cleanup(){ fs.rmSync(dir,{recursive:true,force:true}); },

@@ -245,8 +245,6 @@ export class NautilusLogView extends MarkdownRenderChild {
 
     // P1-8：这四处空态/警告文案引擎的 uiCopy 里没有对应 key（已枚举），走本地双语表。
     const local = localCopy(settings.language);
-    const copy = logCore.uiCopy(settings.language).capacity;
-    const panelCopy = logCore.uiCopy(settings.language).panels;
     const schedule = logCore.normalizeScheduleSettings({
       startHour: settings.workdayStartHour,
       endHour: settings.workdayEndHour,

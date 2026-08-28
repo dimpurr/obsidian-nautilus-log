@@ -6,6 +6,14 @@ esbuild.buildSync({entryPoints:[path.join(__dirname,'../src/tooltip.ts')],bundle
   platform:'node',outfile:path.join(__dirname,'.t.cjs'),external:['obsidian'],logLevel:'error'});
 const {createTooltip}=require('./.t.cjs');
 
+// Obsidian 给 HTMLElement 加的扩展方法（obsidian.d.ts:105）。tooltip.ts 用它写
+// 运行时坐标 / visibility —— 社区审核 obsidianmd/no-static-styles-assignment
+// 要求的形态。夹具必须忠实实现：写进 el.style，不能是空函数（reality-quirks.md
+// RQ-5：「样式没生效」这类 bug 全靠它暴露）。
+dom.window.HTMLElement.prototype.setCssStyles = function setCssStyles(styles) {
+  Object.assign(this.style, styles);
+};
+
 function setup(){
   const host=document.getElementById('h');
   host.innerHTML='';
@@ -134,5 +142,49 @@ test('🔴 RQ-8 定位必须减去宿主偏移（jsdom 尺寸恒 0，掩盖了�
     + `${l1 - l0} 说明没减 hostBox.left`);
   assert.equal(t1, t0,
     `同上，差值 ${t1 - t0} 说明没减 hostBox.top`);
+  tt.destroy();
+});
+
+/* ─── 社区审核 obsidianmd/no-static-styles-assignment 的修复钉子 ───────────
+ * src/tooltip.ts 原来的 4 处 `.style.` 直接赋值换成 `setCssStyles`（Obsidian
+ * 给 HTMLElement 加的扩展方法，obsidian.d.ts:105）。审核的机械检查就是扫
+ * `\.style\.` 赋值，所以这里用同一条 grep 钉死，回退立即红。 */
+test('🔴 tooltip.ts 不再有 `.style.` 直接赋值（审核机械检查）', () => {
+  const fs = require('fs');
+  const src = fs.readFileSync(path.join(__dirname, '../src/tooltip.ts'), 'utf8');
+  const hits = [...src.matchAll(/\.style\s*\.\s*[A-Za-z_$]/g)];
+  assert.equal(hits.length, 0,
+    `src/tooltip.ts 仍含 ${hits.length} 处 \`.style.…\` —— 该用 setCssStyles`);
+});
+
+test('🔴 两阶段渲染顺序不变：hidden 量尺寸 → left/top 定位 → visible', () => {
+  const { host, el, tt } = setup();
+  const tip = host.querySelector('.nautilus-log-tooltip');
+  const calls = [];
+  const proto = dom.window.HTMLElement.prototype;
+  const orig = proto.setCssStyles;
+  // 只记录 tip 自己的调用；忠实实现仍然生效（样式照常写进 el.style）。
+  proto.setCssStyles = function (styles) {
+    if (this === tip) calls.push({ ...styles });
+    return orig.call(this, styles);
+  };
+  try {
+    el.dispatchEvent(new dom.window.Event('mouseenter'));
+    assert.equal(calls.length, 3,
+      `应恰有 3 次 setCssStyles（hidden / 定位 / visible），实际 ${calls.length}`);
+    assert.deepEqual(calls[0], { visibility: 'hidden' },
+      '第 1 步先 hidden —— 用 visibility 不用 display，量 offsetWidth/offsetHeight');
+    assert.deepEqual(Object.keys(calls[1]).sort(), ['left', 'top'],
+      '第 2 步 left/top 合成一次调用');
+    assert.ok(/px$/.test(calls[1].left) && /px$/.test(calls[1].top),
+      `left/top 是算出来的像素坐标，实际 ${JSON.stringify(calls[1])}`);
+    assert.deepEqual(calls[2], { visibility: 'visible' }, '第 3 步最后 visible');
+    // 语义没被架空：坐标真的写进了 style，能被读回。
+    assert.match(tip.style.left, /px$/);
+    assert.match(tip.style.top, /px$/);
+    assert.equal(tip.style.visibility, 'visible');
+  } finally {
+    proto.setCssStyles = orig;
+  }
   tt.destroy();
 });

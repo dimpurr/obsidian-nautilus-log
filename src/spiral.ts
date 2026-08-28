@@ -17,7 +17,7 @@
 import * as logCoreModule from "./vendor/log-core";
 import { createSvg } from "./svg-util";
 import { createTooltip, type TooltipTarget } from "./tooltip";
-import { renderCompactEventList, type CompactState } from "./compact";
+import { renderCompactEventList } from "./compact";
 // P1-1：盘上标签必须用【清洗后】的文本，不能是整行原始 markdown。
 // 上游的清洗链是 parse-URLs + parse-rest（component.cljs:638-665），切片只用
 // 清洗结果 `:description`。本移植的等价物是 parser.ts 的 taskDescription()。
@@ -928,7 +928,6 @@ function calculateSliceParams(
   pastStatus: string | null;
   progress: number;
 } {
-  const outerRadius = spiralOuterRadius(event.start, settings);
   const startAngle = minToAngle(event.start);
   const endAngle = minToAngle(event.end);
   const { todo, meeting, done, urgent } = event;

@@ -27,9 +27,20 @@ const test=require('node:test'), assert=require('node:assert/strict');
 const fs=require('fs'), os=require('os'), path=require('path');
 const esbuild=require('esbuild');
 
-esbuild.buildSync({entryPoints:[path.join(__dirname,'../src/timing-obsidian.ts')],bundle:true,
-  format:'cjs',platform:'node',outfile:path.join(__dirname,'.ts.cjs'),external:['obsidian'],logLevel:'error'});
-const T=require('./.ts.cjs');
+const MOCK_OBSIDIAN=path.join(__dirname,'obsidian-mock.cjs');
+const { TFile }=require(MOCK_OBSIDIAN);
+
+/** obsidian 保持 external，但用 mockRequire 把它接回 mock —— bundle 与夹具共享
+ *  同一个 TFile 类，`instanceof TFile` 才能跨 bundle 边界成立（与 sidebar.test.js 同款）。 */
+function loadTimingBundle(){
+  const result=esbuild.buildSync({entryPoints:[path.join(__dirname,'../src/timing-obsidian.ts')],bundle:true,
+    format:'cjs',platform:'node',write:false,external:['obsidian'],logLevel:'error'});
+  const shim={ exports:{} };
+  const mockRequire=(id)=>(id==='obsidian'?require(MOCK_OBSIDIAN):require(id));
+  new Function('module','exports','require',result.outputFiles[0].text)(shim,shim.exports,mockRequire);
+  return shim.exports;
+}
+const T=loadTimingBundle();
 
 /** 真实文件系统 vault。hostOverrides 注入 dailyNotePath / shouldStampCompletion /
  *  metadataCache（默认不记录监听器）。externalEdit 非空时在【第一次】vault.process
@@ -40,7 +51,7 @@ function makeVault({ host={}, externalEdit=null }={}){
   const files=new Map();
   const api={
     dir,
-    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,{path:p}); return files.get(p); },
+    write(p,text){ fs.writeFileSync(abs(p),text); files.set(p,new TFile(p)); return files.get(p); },
     read(p){ return fs.readFileSync(abs(p),'utf8'); },
     cleanup(){ fs.rmSync(dir,{recursive:true,force:true}); },
   };

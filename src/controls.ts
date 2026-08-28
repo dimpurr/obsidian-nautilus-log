@@ -44,10 +44,6 @@ export interface ChartControlHandlers {
   onChange(next: ChartControlState): void;
 }
 
-/* Playback pacing: the whole remaining day replays in about a minute. */
-const PLAYBACK_TICK_MS = 1000;
-const PLAYBACK_TICK_COUNT = 60;
-
 /* uiCopy has no label for the "playing" state of the play button (upstream
  * disables the button instead of re-labelling it).  We complement it here
  * rather than touching the vendored copy table.
