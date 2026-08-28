@@ -252,6 +252,24 @@ display day; otherwise it falls back to today.
 The rules for the three cases come from the upstream engine's `timelineDayState`;
 this port only tells it *which day the note is about*.
 
+## What it touches in your vault
+
+The directory's automated review flags two of these. Both are real, so here is
+the full picture.
+
+**Reading.** With the execution layer on, the plugin scans every Markdown file in
+the vault for `CLOCK:` lines, because a task you timed can live in any note. With
+the execution layer off, it only reads the note being displayed. Nothing is sent
+anywhere: this plugin contains no network code.
+
+**Writing.** Writes stay inside the plan block of the daily note on screen. They
+are CLOCK lines under `LOGBOOK::`, the `dHH:MM` completion anchor, and `dNN%`
+progress. Each one matches its target line by content before touching the file,
+and refuses to write at all if the match is ambiguous.
+
+**Storing.** Settings live in the plugin's own `data.json`. Whether a chart is
+collapsed is remembered per device through Obsidian's local storage API.
+
 ## Troubleshooting
 
 The execution-layer chain has four independent failure points (injection path /

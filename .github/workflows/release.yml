@@ -9,6 +9,10 @@ on:
 
 permissions:
   contents: write
+  # 构建溯源证明（attestation）需要这两项：id-token 用来向 Sigstore 取短期证书，
+  # attestations 用来把证明写回仓库。社区插件审核会检查 release 资产有没有它。
+  id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -29,6 +33,16 @@ jobs:
 
       - name: Build plugin
         run: npm run build
+
+      # 让用户能用 `gh attestation verify main.js -R dimpurr/obsidian-nautilus-logger`
+      # 验证这些文件确实由本仓库的这次 workflow 构建，而不是谁手工传上来的。
+      # manifest.json 是仓库里的原文件、不是构建产物，不需要证明。
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            main.js
+            styles.css
 
       - name: Create release with plugin files
         env:
