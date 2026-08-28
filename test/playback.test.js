@@ -1,12 +1,15 @@
 const test=require('node:test'), assert=require('node:assert/strict');
 const {JSDOM}=require('jsdom'), esbuild=require('esbuild'), path=require('path');
 const dom=new JSDOM('<!doctype html><body><div id=h></div></body>',{url:'https://localhost/'});
-global.window=dom.window; global.document=dom.window.document; global.localStorage=dom.window.localStorage;
+global.window=dom.window; global.document=dom.window.document;
 esbuild.buildSync({entryPoints:[path.join(__dirname,'../src/controls.ts')],bundle:true,format:'cjs',
   platform:'node',outfile:path.join(__dirname,'.pb.cjs'),external:['obsidian'],logLevel:'error'});
 const {renderChartControls}=require('./.pb.cjs');
 const S={language:'en',workdayStartHour:5,workdayEndHour:21,descLength:22,todoDuration:15,urgentTrigger:''};
 const OPTS={workdayStartMinutes:300,workdayEndMinutes:1260,nowMinutes:720};
+// 存储缝用内存 Map 模拟（折叠态持久化已改为注入式，2026-08-28）。
+const store=new Map();
+const storage={read:k=>store.get(k)===true, write:(k,v)=>{store.set(k,v);}};
 
 /** 复刻宿主行为：每次 onChange 都整块重渲染（destroy 旧 controls，建新的）。
  *  这正是当初制造孤儿定时器的那个循环。 */
@@ -18,7 +21,7 @@ function host(){
     renders++;
     handle?.destroy();
     box.innerHTML='';
-    handle=renderChartControls(box,state,{onChange:n=>{state=n; rerender();}},S,OPTS,'k');
+    handle=renderChartControls(box,state,{onChange:n=>{state=n; rerender();}},S,OPTS,'k',storage);
   }
   rerender();
   return {get state(){return state;}, get renders(){return renders;},
@@ -65,7 +68,7 @@ test('没有可回放区间时不启动（now <= 起点）', () => {
   const box=document.getElementById('h'); box.innerHTML='';
   let st={showDone:true,collapsed:false,playback:null};
   renderChartControls(box,st,{onChange:n=>{st=n;}},S,
-    {workdayStartMinutes:300,workdayEndMinutes:1260,nowMinutes:300},'k2');
+    {workdayStartMinutes:300,workdayEndMinutes:1260,nowMinutes:300},'k2',storage);
   box.querySelectorAll('button')[1].dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true}));
   assert.equal(st.playback,null);
 });

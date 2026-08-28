@@ -20,7 +20,7 @@
 import { ItemView, TFile, normalizePath, type App, type WorkspaceLeaf } from 'obsidian';
 import { renderSpiral, type SpiralHandle } from './spiral';
 import { renderCapacityHeader, enableContainerQueries } from './header';
-import { renderChartControls, type ChartControlState } from './controls';
+import { renderChartControls, collapsedStorageFromApp, type ChartControlState } from './controls';
 import { renderCompactOverview, renderOverflowPanel, renderWarningPanel } from './compact';
 import { parsePlan } from './parser';
 import { parseBlockConfig, applyOverrides, extractPlanBody } from './blockconfig';
@@ -533,6 +533,8 @@ export class NautilusSidebarView extends ItemView {
       },
       // 侧栏的「块」就是当天的 Primary Plan；同一篇笔记的折叠态跟着它走。
       `${this.primaryPath ?? 'primary'}:sidebar`,
+      // 折叠态走 Obsidian 官方 device-local 存储（注入，不在 controls 里摸全局）。
+      collapsedStorageFromApp(this.app),
     );
   }
 }

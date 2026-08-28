@@ -113,6 +113,8 @@ function makeApp(files, dnOptions) {
       return Promise.resolve(files[file.path]);
     },
   };
+  // 折叠态走 Obsidian 官方 device-local API（注入式，2026-08-28）。
+  const local = new Map();
   return {
     vault,
     metadataCache,
@@ -120,6 +122,11 @@ function makeApp(files, dnOptions) {
       plugins: dnOptions
         ? { "daily-notes": { instance: { options: dnOptions } } }
         : {},
+    },
+    loadLocalStorage(key) { return local.has(key) ? local.get(key) : null; },
+    saveLocalStorage(key, data) {
+      if (data === null) local.delete(key);
+      else local.set(key, data);
     },
   };
 }
