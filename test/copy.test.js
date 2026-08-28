@@ -88,6 +88,26 @@ test("LOCAL_COPY 的 en / zh 键集完全一致（少一个 key 就是一处 und
   for (const k of en) assert.equal(typeof S.LOCAL_COPY.zh[k], typeof S.LOCAL_COPY.en[k]);
 });
 
+test("COMMAND_COPY 的 en / zh 键集完全一致（命令名少一个 key 就是一处 undefined 文案）", () => {
+  const en = Object.keys(S.COMMAND_COPY.en).sort();
+  const zh = Object.keys(S.COMMAND_COPY.zh).sort();
+  assert.deepEqual(zh, en);
+  for (const k of en) assert.equal(typeof S.COMMAND_COPY.zh[k], typeof S.COMMAND_COPY.en[k]);
+});
+
+test("COMMAND_COPY 命令名不带插件名、sentence case（ribbon tooltip 是例外）", () => {
+  const en = S.COMMAND_COPY.en;
+  assert.equal(en.openSidebar, "Open sidebar");
+  assert.equal(en.openSettings, "Open settings");
+  assert.equal(en.createTestNote, "Create test note");
+  // Timing Line / Primary Plan 是本插件的概念名，sentence case 下保持大写
+  assert.equal(en.focusCurrentBlock, "Focus current block on the Timing Line");
+  assert.equal(en.locatePrimaryPlan, "Locate Primary Plan");
+  // ribbon tooltip 孤悬在侧栏，没有「归属插件」的上下文，保留插件名
+  assert.equal(en.ribbonOpen, "Open Nautilus Log");
+  assert.equal(S.COMMAND_COPY.zh.ribbonOpen, "打开 Nautilus Log");
+});
+
 test("localCopy 未知语言退回英文，'zh' 拿到中文", () => {
   assert.equal(S.localCopy("zh").clockIn, "开始计时");
   assert.equal(S.localCopy("en").clockIn, "Clock in");
