@@ -137,7 +137,7 @@ export interface SettingsCopy {
 export const SETTINGS_COPY: { en: SettingsCopy; zh: SettingsCopy } = {
   en: {
     language: 'Language',
-    languageDesc: 'Select the settings language (takes effect immediately).',
+    languageDesc: 'Select the interface language. Settings apply immediately; command names and the ribbon tooltip update after reloading Obsidian.',
     start: 'Chart Start Time',
     startDesc: 'Choose any whole-hour start from 00:00 to 23:00. Defaults to 05:00.',
     end: 'Chart End Time',
@@ -160,7 +160,7 @@ export const SETTINGS_COPY: { en: SettingsCopy; zh: SettingsCopy } = {
   },
   zh: {
     language: '语言 / Language',
-    languageDesc: '选择设置面板显示的语言（切换后立即生效）。',
+    languageDesc: '选择界面语言。设置项立即生效；命令名与 ribbon 图标提示需重载 Obsidian 后更新。',
     start: '图表开始时间',
     startDesc: '选择计划日的开始整点（00:00–23:00）。默认 05:00。',
     end: '图表结束时间',
@@ -185,6 +185,61 @@ export const SETTINGS_COPY: { en: SettingsCopy; zh: SettingsCopy } = {
 
 export function settingsCopy(language: string): SettingsCopy {
   return language === 'zh' ? SETTINGS_COPY.zh : SETTINGS_COPY.en;
+}
+
+/* ── 命令面板命令名 + ribbon tooltip 的双语表 ────────────────────────────────
+ * 上游没有命令名文案表：Obsidian 的 addCommand 是命令面板的挂载面（§5），
+ * 名字只能本移植自拟。此前把它们硬编码成「斜杠拼中英」——
+ * 每个用户同时看到两种语言，根本不是 i18n；且命令面板已把命令归属在插件名下，
+ * 名字里再重复「Nautilus Log」官方 review 会打回。
+ *
+ * 文案纪律：
+ *  · 命令名不再带插件名；sentence case（只首字母与专有名词大写 —— Timing Line /
+ *    Primary Plan 是本插件的概念名，保持大写）。
+ *  · ribbon tooltip 例外：图标孤悬在侧栏、没有「归属插件」的上下文，
+ *    所以它保留插件名（`Open Nautilus Log` / `打开 Nautilus Log`）。
+ *  · 命令名只在 onload 注册时取一次，用户改语言后要重载插件才生效 ——
+ *    见 SETTINGS_COPY.languageDesc 的说明（D2），不做动态重注册。 */
+export interface CommandCopy {
+  openSidebar: string;
+  diagnoseExecutionLayer: string;
+  completeWithTimestamp: string;
+  createTestNote: string;
+  openSettings: string;
+  focusCurrentBlock: string;
+  clockOutTimingLine: string;
+  locatePrimaryPlan: string;
+  /** ribbon 图标的 hover tooltip（addRibbonIcon 的第二个参数）。 */
+  ribbonOpen: string;
+}
+
+export const COMMAND_COPY: { en: CommandCopy; zh: CommandCopy } = {
+  en: {
+    openSidebar: 'Open sidebar',
+    diagnoseExecutionLayer: 'Diagnose execution layer',
+    completeWithTimestamp: 'Complete task with timestamp',
+    createTestNote: 'Create test note',
+    openSettings: 'Open settings',
+    focusCurrentBlock: 'Focus current block on the Timing Line',
+    clockOutTimingLine: 'Clock out Timing Line',
+    locatePrimaryPlan: 'Locate Primary Plan',
+    ribbonOpen: 'Open Nautilus Log',
+  },
+  zh: {
+    openSidebar: '打开侧栏',
+    diagnoseExecutionLayer: '诊断执行层',
+    completeWithTimestamp: '勾选任务并记录完成时间',
+    createTestNote: '创建测试笔记',
+    openSettings: '打开设置',
+    focusCurrentBlock: '将当前行聚焦到 Timing Line',
+    clockOutTimingLine: '结束当前计时',
+    locatePrimaryPlan: '定位今天的主计划',
+    ribbonOpen: '打开 Nautilus Log',
+  },
+};
+
+export function commandCopy(language: string): CommandCopy {
+  return language === 'zh' ? COMMAND_COPY.zh : COMMAND_COPY.en;
 }
 
 /** 上游 index.js:355-363 `updateExecutionMinutes` 的等价物 —— E1-021/E1-022：

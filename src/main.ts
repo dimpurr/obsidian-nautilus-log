@@ -21,7 +21,7 @@ import type { ExecViewContext, TimingRuntime, TimingSnapshot } from './timing-co
 import { createTimingRuntime } from './vendor/timing-runtime';
 import { parseBlockConfig, applyOverrides, extractPlanBody } from './blockconfig';
 import TEST_NOTE from '../docs/test-note.md';
-import { NautilusLogSettingTab, localCopy, type LocalCopy } from './settings';
+import { NautilusLogSettingTab, localCopy, commandCopy, type LocalCopy } from './settings';
 import { DEFAULT_SETTINGS, type NautilusSettings, type LogCore } from './contract';
 
 const logCore = require('./vendor/log-core') as unknown as LogCore;
@@ -640,6 +640,9 @@ export default class NautilusLogPlugin extends Plugin {
 
   async onload(): Promise<void> {
     await this.loadSettings();
+    // 命令名 + ribbon tooltip 在注册时定死（见 settings.ts COMMAND_COPY 的注释）：
+    // 用户改语言后要重载插件才生效，设置项描述里已写明，不做动态重注册。
+    const cmd = commandCopy(this.settings.language);
 
     // 两个都认：`nautilus` 是全名，`naut` 是好记的短写。
     // 🔴 新增别名时必须同步改 locateByFile() 的围栏正则，否则兜底定位不到该块。
@@ -664,10 +667,10 @@ export default class NautilusLogPlugin extends Plugin {
     // 右侧栏视图 —— 不打开笔记也能看今天的盘。共用 renderSpiral。
     this.registerView(NAUTILUS_VIEW_TYPE, (leaf) => new NautilusSidebarView(
       leaf, this.settings, () => (this.timingRuntime ? this.execContext() : null)));
-    this.addRibbonIcon('compass', 'Open Nautilus Log', () => { void this.activateSidebar(); });
+    this.addRibbonIcon('compass', cmd.ribbonOpen, () => { void this.activateSidebar(); });
     this.addCommand({
       id: 'open-sidebar',
-      name: 'Open Nautilus Log sidebar / 打开侧栏',
+      name: cmd.openSidebar,
       callback: () => { void this.activateSidebar(); },
     });
 
@@ -697,7 +700,7 @@ export default class NautilusLogPlugin extends Plugin {
     // 执行层链路诊断 —— 面板说「今天没有 Nautilus Log」时按这条命令看到底断在哪。
     this.addCommand({
       id: 'diagnose-execution-layer',
-      name: 'Diagnose execution layer / 诊断执行层',
+      name: cmd.diagnoseExecutionLayer,
       callback: () => { new Notice(`[Nautilus Log] ${diagnoseTiming()}`, 15000); },
     });
 
@@ -711,7 +714,7 @@ export default class NautilusLogPlugin extends Plugin {
     // 而没有锚点的已完成任务在盘上画不出来（引擎拒绝编造历史）。
     this.addCommand({
       id: 'complete-with-timestamp',
-      name: 'Complete task with timestamp / 勾选并打完成时间戳',
+      name: cmd.completeWithTimestamp,
       editorCallback: (editor: Editor) => {
         const cursor = editor.getCursor();
         const next = completeWithTimestamp(editor.getLine(cursor.line), doneAtStamp(new Date()));
@@ -722,7 +725,7 @@ export default class NautilusLogPlugin extends Plugin {
 
     this.addCommand({
       id: 'create-test-note',
-      name: 'Create Nautilus Log test note / 创建 Nautilus Log 测试笔记',
+      name: cmd.createTestNote,
       callback: async () => {
         const base = 'Nautilus Log 测试';
         let path = `${base}.md`;
@@ -737,7 +740,7 @@ export default class NautilusLogPlugin extends Plugin {
 
     this.addCommand({
       id: 'open-nautilus-settings',
-      name: 'Open Nautilus Log settings',
+      name: cmd.openSettings,
       callback: () => {
         (this.app as unknown as { setting: { open(): void } }).setting.open();
       },
@@ -768,10 +771,12 @@ export default class NautilusLogPlugin extends Plugin {
   /** P1-6：上游的 3 条命令面板项 + 2 条块右键菜单项。
    *  见 PORTING-DECISIONS.md §5 与 docs/parity-audit-2026-08-25.md §P1-6。 */
   private registerTimingCommands(): void {
+    // 命令名按当前语言取（用户改语言后需重载插件才生效，见 COMMAND_COPY 注释）。
+    const cmd = commandCopy(this.settings.language);
     // 1/3 Focus current block —— 把光标所在行送上 Timing Line。
     this.addCommand({
       id: 'focus-current-block',
-      name: 'Focus current block on the Timing Line / 聚焦当前行到 Timing Line',
+      name: cmd.focusCurrentBlock,
       editorCheckCallback: (checking: boolean, editor: Editor, info: MarkdownView | MarkdownFileInfo) => {
         const runtime = this.liveRuntime();
         const path = info?.file?.path;
@@ -792,7 +797,7 @@ export default class NautilusLogPlugin extends Plugin {
     // 2/3 Clock out Timing Line.
     this.addCommand({
       id: 'clock-out-timing-line',
-      name: 'Clock out Timing Line / 结束当前计时',
+      name: cmd.clockOutTimingLine,
       checkCallback: (checking: boolean) => {
         const runtime = this.liveRuntime();
         if (!runtime) return false;
@@ -804,7 +809,7 @@ export default class NautilusLogPlugin extends Plugin {
     // 3/3 Locate Primary Plan.
     this.addCommand({
       id: 'locate-primary-plan',
-      name: 'Locate Primary Plan / 定位今天的主计划',
+      name: cmd.locatePrimaryPlan,
       checkCallback: (checking: boolean) => {
         const runtime = this.liveRuntime();
         if (!runtime) return false;

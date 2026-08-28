@@ -225,6 +225,19 @@ test("注册了上游那 3 条命令 + editor-menu 挂载面", () => {
   assert.deepEqual(p.events.map((e) => e.name), ["editor-menu"]);
 });
 
+test("🔴 命令名按语言走 COMMAND_COPY 双语表（不再硬编码斜杠双语）", () => {
+  assert.deepEqual(makePlugin({ language: "en" }).commands.map((c) => c.name), [
+    "Focus current block on the Timing Line",
+    "Clock out Timing Line",
+    "Locate Primary Plan",
+  ]);
+  assert.deepEqual(makePlugin({ language: "zh" }).commands.map((c) => c.name), [
+    "将当前行聚焦到 Timing Line",
+    "结束当前计时",
+    "定位今天的主计划",
+  ]);
+});
+
 test("🔴 总开关关闭 → 3 条命令在命令面板里全部不出现，右键菜单也是空的", () => {
   const p = makePlugin({ tracking: false });
   const editor = { getCursor: () => ({ line: 3 }), getLine: () => "- [ ] 任务 30m" };
