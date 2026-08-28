@@ -1,0 +1,78 @@
+name: Bug Report
+description: Report a bug or unintended behavior in Nautilus Logger
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a bug! Please fill out the form below to help us diagnose and resolve the issue.
+
+  - type: input
+    id: obsidian-version
+    attributes:
+      label: Obsidian Version
+      description: What version of Obsidian are you using?
+      placeholder: e.g. 1.5.12
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin Version
+      description: What version of Nautilus Logger is installed? (Check Settings → Community plugins)
+      placeholder: e.g. 0.1.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      description: What operating system are you running Obsidian on?
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - iOS / iPadOS
+        - Android
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction-steps
+    attributes:
+      label: Reproduction Steps
+      description: How can the issue be reproduced? Please provide clear step-by-step instructions.
+      placeholder: |
+        1. Open a Daily Note
+        2. Insert a ```nautilus code block
+        3. Add task ...
+        4. See error ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: note-content
+    attributes:
+      label: Relevant Note Content Snippet
+      description: Please paste the relevant section of your note (including the nautilus code block and surrounding tasks).
+      render: markdown
+      placeholder: |
+        ```nautilus
+        start: 08:00
+        ```
+        - 08:30-09:30 Morning routine
+        - [ ] Task 1 30m
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Add any error messages from the Obsidian Developer Tools console (Ctrl+Shift+I / Cmd+Opt+I) or screenshots.
+    validations:
+      required: false

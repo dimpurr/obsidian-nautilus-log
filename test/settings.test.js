@@ -25,7 +25,7 @@ const {
   clampMinutes, DESC_LENGTH_SLIDER, POMODORO_SLIDER, workdayEndLabel, workdayEndDesc,
 } = require('./.settings.cjs');
 
-// All 11 keys, with the exact defaults pinned in the task table.
+// All 12 keys, with the exact defaults pinned in the task table.
 const EXPECTED = {
   language: 'en',
   workdayStartHour: 5,
@@ -33,6 +33,7 @@ const EXPECTED = {
   descLength: 22,
   todoDuration: 15,
   urgentTrigger: '',
+  stampCompletionTime: false,
   actualTimeTracking: false,
   timingLineSidebar: true,
   pomodoroMinutes: 45,
@@ -40,12 +41,12 @@ const EXPECTED = {
   forgottenTimerMinutes: 120,
 };
 
-test('DEFAULT_SETTINGS 覆盖全部 11 个键', () => {
+test('DEFAULT_SETTINGS 覆盖全部 12 个键', () => {
   const keys = Object.keys(DEFAULT_SETTINGS);
   for (const k of Object.keys(EXPECTED)) {
     assert.ok(keys.includes(k), `缺少键: ${k}`);
   }
-  assert.equal(keys.length, 11, `应恰好 11 个键，实得 ${keys.length}`);
+  assert.equal(keys.length, 12, `应恰好 12 个键，实得 ${keys.length}`);
 });
 
 test('DEFAULT_SETTINGS 默认值与会表一致', () => {

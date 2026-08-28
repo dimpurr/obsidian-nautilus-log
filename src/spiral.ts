@@ -1255,6 +1255,12 @@ export interface SpiralOptions {
    *  由 main.ts / sidebar.ts 传入；不传则退回历史行为（每次重渲染按
    *  `open: !compact` 重置）。 */
   compactState?: Map<string, boolean>;
+  /** 点击任务切片 → 宿主写回（进度 +10%）。宿主不传 = 盘面只读。
+   *  🔴 只在【非紧凑 + interactive】时挂监听 —— 与 hover/focus 同一通路
+   *  （紧凑侧栏没有可交互切片，P1-8）。事件切片（meeting）不可点：
+   *  对齐上游 `click-to-progress = (and interactive? todo?)`
+   *  （component.cljs:1024）。 */
+  onProgressClick?: (uid: string) => void;
 }
 
 /** 供外部（main.ts）在重渲染前清理上一次的监听。 */
@@ -1570,8 +1576,31 @@ export function renderSpiral(
     centerX: center.x, centerY: center.y, radius: TOOLTIP_ANCHOR_RADIUS,   // P1-9①
   });
 
+  // ── 点击任务切片 → 宿主写回 ────────────────────────────────────────────
+  // 与 hover/focus 同一通路：非紧凑 + interactive（今天）才挂。事件切片
+  // （meeting）不可点 —— 对齐上游 click-to-progress（component.cljs:1024）。
+  // stopPropagation 只挡 slice 内部（free 靶区等），不影响 tooltip 的
+  // mouseenter/focus —— 那些是不同的事件类型。
+  const clickBound: { el: Element; fn: EventListener }[] = [];
+  if (options.onProgressClick && interactive) {
+    allEvents.forEach((ev, i) => {
+      const el = sliceEls[i];
+      if (!el || !ev.todo) return;
+      const fn: EventListener = (e) => {
+        e.preventDefault?.();
+        e.stopPropagation?.();
+        options.onProgressClick?.(ev.uid);
+      };
+      el.addEventListener?.("click", fn);
+      clickBound.push({ el, fn });
+    });
+  }
+
   return {
-    destroy() { tooltip.destroy(); },
+    destroy() {
+      for (const { el, fn } of clickBound) el.removeEventListener?.("click", fn);
+      tooltip.destroy();
+    },
   };
 }
 

@@ -76,7 +76,7 @@ test("T2-119 · 纯函数：按精确键名成员关系与字段真相核对映�
   assert.equal(keys.has("workday-start"), true);
   assert.equal(keys.has("language"), true);
   assert.equal(targets.get("workday-start"), "workdayStartHour");
-  assert.equal(targets.size, 8);
+  assert.equal(targets.size, 9);
 
   const fields = helper.extractNautilusFieldNames(contract);
   assert.equal(fields.has("workdayStartHour"), true);

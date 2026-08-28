@@ -819,6 +819,72 @@ test('A1-127 勾选不得动到正文里的方括号（`[[链接]]` 必须完好
   v.cleanup();
 });
 
+/* ─────────── 点击盘面切片 +10% 进度（bumpProgress）───────────
+ * 语义对齐上游 update-block-progress（component.cljs:518-545）。
+ * 这里是端到端：真实文件系统 + 乐观锁写回，四条分支 + 拒写 + editor 通路。 */
+
+const PROGRESS_NOTE=[
+  '# 2026-08-24',                // 0
+  '```naut',                     // 1
+  '```',                         // 2
+  '- [ ] 写周报 45m d50%',        // 3
+  '- [ ] 回邮件 30m d90%',        // 4
+  '- [ ] 做方案 30m d95%',        // 5
+  '- [x] 已归档 30m d11:30',      // 6
+].join('\n');
+
+test('bumpProgress +10 普通：d50% → d60%，勾选状态不动', async () => {
+  const v=makeVault(); v.write('d.md',PROGRESS_NOTE);
+  await T.bumpProgress('d.md:3', 10, new Date(2026,7,24,10,0));
+  assert.equal(v.read('d.md').split('\n')[3],'- [ ] 写周报 45m d60%');
+  assert.match(v.read('d.md'),/- \[ \] 回邮件 30m d90%/,'其它行不得受损');
+  v.cleanup();
+});
+
+test('bumpProgress 跨到正好 100：勾选 + 去 dNN% + 追加 dHH:MM 锚点', async () => {
+  const v=makeVault(); v.write('d.md',PROGRESS_NOTE);
+  await T.bumpProgress('d.md:4', 10, new Date(2026,7,24,10,0));
+  assert.equal(v.read('d.md').split('\n')[4],'- [x] 回邮件 30m d10:00',
+    'now=10:00 必须锚成 d10:00，且任务被勾选');
+  v.cleanup();
+});
+
+test('bumpProgress 超过 100：去掉 dNN%（回到无进度），不改勾选', async () => {
+  const v=makeVault(); v.write('d.md',PROGRESS_NOTE);
+  await T.bumpProgress('d.md:5', 10, new Date(2026,7,24,10,0));
+  assert.equal(v.read('d.md').split('\n')[5],'- [ ] 做方案 30m');
+  v.cleanup();
+});
+
+test('bumpProgress 从无到有：追加 d10% + 取消勾选 + 剥掉 dHH:MM 锚点', async () => {
+  const v=makeVault(); v.write('d.md',PROGRESS_NOTE);
+  await T.bumpProgress('d.md:6', 10, new Date(2026,7,24,10,0));
+  assert.equal(v.read('d.md').split('\n')[6],'- [ ] 已归档 30m d10%',
+    '已完成任务被重新打开：去 x、去旧锚点、给 10%');
+  v.cleanup();
+});
+
+test('🔴 乐观锁：点击前目标行被外部改掉 → bumpProgress 必须拒写不落盘', async () => {
+  const v=makeVault((cur)=>cur.replace('- [ ] 写周报 45m d50%','- [ ] 写周报（外部改过）45m d50%'));
+  v.write('d.md',PROGRESS_NOTE);
+  await assert.rejects(()=>T.bumpProgress('d.md:3', 10, new Date(2026,7,24,10,0)),
+    /changed while writing/i,
+    '目标行已不是点击时读到的原文，必须中止 —— 否则会把用户对那一行的改动无声抹掉');
+  const out=v.read('d.md');
+  assert.match(out,/- \[ \] 写周报（外部改过）45m d50%/,'外部编辑必须保留');
+  assert.ok(!/- \[ \] 写周报 45m d60%/.test(out),'不得把进度写到外部改动过的行上');
+  v.cleanup();
+});
+
+test('笔记开着编辑器时 bumpProgress 走 editor 分支写回', async () => {
+  const v=makeVaultWithEditor(); v.write('d.md',PROGRESS_NOTE);
+  await T.bumpProgress('d.md:3', 10, new Date(2026,7,24,10,0));
+  const out=v.read('d.md').split('\n');
+  assert.equal(out[3],'- [ ] 写周报 45m d60%','进度必须经 editor 写进文件');
+  assert.equal(out[4],'- [ ] 回邮件 30m d90%','其它行不得受损');
+  v.cleanup();
+});
+
 /* ─────────── A1-152：revealLine 必须用传进来的 leaf ───────────
  * `getRightLeaf(false).openFile()` 不设 active ⇒ getActiveLeaf() 仍是用户的主笔记。
  * 拿 active 的 editor 去 setCursor = 把用户的光标扔到【另一个文件的行号】上，

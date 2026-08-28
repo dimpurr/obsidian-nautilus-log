@@ -505,6 +505,7 @@ vendored runtime 的数据结构里有几个字段在 Obsidian 没有对应概�
 | S13 | **图表回放**（`chartState.playback` + `controls.ts` 的播放按钮） | 从窗口起点回放到当前时刻后自动停止；纯视觉，**绝不写回 Markdown**。上游没有这个交互（认证审计 P1-132） |
 | S14 | **紧凑列表 / 溢出条目**（`compact.ts`） | 窄容器（侧栏）用列表代替悬停提示；溢出条目走 `MarkdownRenderer` 可点跳转（= 原 S8 的实现载体） |
 | S15 | **独立番茄钟**（`pomo.ts`） | 没有任何任务 CLOCK 在跑时，面板表头可启动一个正计时番茄钟；它不写任何块，也不影响 Actual/Planned/Review/螺旋；一旦开始任务 CLOCK 立即被清除 —— CLOCK 永远优先 |
+| S16 | **勾选自动打完成时间戳**（`stampCompletionTime` 设置，默认关） | 上游没有自动行为 —— 它的 `completeTask`（timing-roam.js:533）只翻 `{{TODO}}`→`{{[[DONE]]}}`；Roam 侧打戳靠**独立的 Todo Trigger 插件**（§D8 那条 S3 注释同源）。本移植把「勾选补 `dHH:MM`、取消勾选移除」做成**可选超集**（S3 只覆盖手动命令）。🔴 **管辖范围收窄**：只对【今天 Daily Note】第一个 nautilus 块的计划正文生效（与执行层面板 `readPrimaryPlan` 同一边界），**不学竞品**对全 vault 全文件生效。触发走 `metadataCache.on('changed')` + diff 检测「checkbox 恰好翻转」的行（不是全量归一化，不给早已勾选的老任务补「现在」的时间）；写回复用 §D9 的乐观锁 `writeChange`，绝不整文件覆盖 |
 
 📄 **用户文档覆盖**（认证审计 G1 的 L 区）：S5 / S6 / S10 一度**两份用户文档都没写**，已于 2026-08-26 补进 `README.md` 与 `docs/guide.md`。S6 尤其要紧 —— 它是 §D2 修饰键手势**唯一的挂载面**，用户不可能猜到要按修饰键。
 

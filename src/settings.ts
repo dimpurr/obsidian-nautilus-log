@@ -127,6 +127,7 @@ export interface SettingsCopy {
   descLength: string; descLengthDesc(min: number, max: number): string;
   duration: string; durationDesc: string;
   urgent: string; urgentDesc: string;
+  stampCompletion: string; stampCompletionDesc: string;
   tracking: string; trackingDesc: string;
   sidebar: string; sidebarDesc: string;
   pomodoro: string; pomodoroDesc(min: number, max: number): string;
@@ -147,6 +148,8 @@ export const SETTINGS_COPY: { en: SettingsCopy; zh: SettingsCopy } = {
     durationDesc: 'Default minutes for an untimed flexible task (5–60). Defaults to 15.',
     urgent: 'Urgent Trigger Word',
     urgentDesc: 'Keyword that colors a task urgent red (no spaces, for example urgent). Empty disables.',
+    stampCompletion: 'Stamp completion time',
+    stampCompletionDesc: 'When enabled, checking a task inside today’s Nautilus Log plan appends its completion time (e.g. d14:31); unchecking removes the stamp. Only lines inside today’s plan are affected. Default: off.',
     tracking: 'Execution Layer · Advanced',
     trackingDesc: 'Optional. Turn your plan into action with focus, CLOCK timing, task switching, one-click completion, and daily Review. Enable to reveal execution settings; disabled by default.',
     sidebar: 'Keep Timing Line first in right sidebar',
@@ -170,6 +173,8 @@ export const SETTINGS_COPY: { en: SettingsCopy; zh: SettingsCopy } = {
     durationDesc: '没有写时长的弹性任务默认占用的分钟数（5–60）。默认 15。',
     urgent: '紧急触发词',
     urgentDesc: '使任务显示为紧急红色的关键词（不可包含空格，例如：重要）。留空则关闭。',
+    stampCompletion: '记录完成时间',
+    stampCompletionDesc: '开启后，勾选今天 Nautilus Log 计划里的任务会自动追加完成时间（如 d14:31）；取消勾选则移除。只影响今天计划块内的任务行。默认关闭。',
     tracking: '执行层 · 进阶',
     trackingDesc: '可选功能。将计划转化为行动：支持任务聚焦、CLOCK 计时、多任务切换、一键完成和每日复盘。启用后会在下方显示执行设置；默认关闭。',
     sidebar: '计时任务置顶到右侧边栏',
@@ -372,6 +377,18 @@ export class NautilusLogSettingTab extends PluginSettingTab {
         .setValue(this.plugin.settings.urgentTrigger)
         .onChange(async (value) => {
           this.plugin.settings.urgentTrigger = value;
+          await this.plugin.saveSettings();
+        }));
+
+    // 自动完成时间戳：常驻设置，不挂在执行层总开关下面 ——
+    // metadataCache 通路不依赖 actualTimeTracking（initTimingObsidian 无条件注册）。
+    new Setting(containerEl)
+      .setName(copy.stampCompletion)
+      .setDesc(copy.stampCompletionDesc)
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.stampCompletionTime)
+        .onChange(async (value) => {
+          this.plugin.settings.stampCompletionTime = value;
           await this.plugin.saveSettings();
         }));
 

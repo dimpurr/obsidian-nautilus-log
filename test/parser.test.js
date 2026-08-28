@@ -204,6 +204,39 @@ test('进度 token 不进图例', () => {
 });
 
 // ────────────────────────────────────────────────────────────────────────────
+// bumpProgressInLine：点击盘面切片 +10%（对齐上游 update-block-progress）
+// ────────────────────────────────────────────────────────────────────────────
+
+test('bump +10 普通：d50% → d60%，勾选状态不动', () => {
+  assert.equal(parser.bumpProgressInLine('- [ ] 写周报 45m d50%', 10, 600), '- [ ] 写周报 45m d60%');
+});
+
+test('bump 跨到正好 100：勾选 + 去 dNN% + 追加 dHH:MM 锚点', () => {
+  // nowMinutes=600 → 10:00
+  assert.equal(parser.bumpProgressInLine('- [ ] 写周报 45m d90%', 10, 600), '- [x] 写周报 45m d10:00');
+});
+
+test('bump 超过 100：去掉 dNN%（回到无进度），不改勾选', () => {
+  assert.equal(parser.bumpProgressInLine('- [ ] 写周报 45m d95%', 10, 600), '- [ ] 写周报 45m');
+});
+
+test('bump 从无到有：追加 d10% + 取消勾选 + 剥掉 dHH:MM 锚点', () => {
+  assert.equal(
+    parser.bumpProgressInLine('- [x] 写周报 45m d11:30', 10, 600),
+    '- [ ] 写周报 45m d10%',
+  );
+});
+
+test('bump 从无到有：已是 `- [ ]` 的不再动勾选、只追加', () => {
+  assert.equal(parser.bumpProgressInLine('- [ ] 写周报 45m', 10, 600), '- [ ] 写周报 45m d10%');
+});
+
+test('bump 保留前导缩进（嵌套任务不得掉出子树）', () => {
+  assert.equal(parser.bumpProgressInLine('\t- [ ] 写周报 45m d50%', 10, 600), '\t- [ ] 写周报 45m d60%');
+  assert.equal(parser.bumpProgressInLine('\t- [x] 写周报 45m d11:30', 10, 600), '\t- [ ] 写周报 45m d10%');
+});
+
+// ────────────────────────────────────────────────────────────────────────────
 // 紧急触发词：词边界 + 去空格（audit §P1-8）
 // ────────────────────────────────────────────────────────────────────────────
 

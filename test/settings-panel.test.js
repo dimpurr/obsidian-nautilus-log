@@ -130,6 +130,7 @@ const DEFAULTS = {
   descLength: 22,
   todoDuration: 15,
   urgentTrigger: "",
+  stampCompletionTime: false,
   actualTimeTracking: false,
   timingLineSidebar: true,
   pomodoroMinutes: 45,
@@ -162,7 +163,7 @@ test("🔴 E1-026 设置页整页双语：zh 下每一项的 name/desc 都不再
   const { tab } = makeTab({ language: "zh", actualTimeTracking: true });
   tab.display();
   const page = pageOf(tab);
-  assert.equal(page.length, 11, `应有 11 项设置，实得 ${page.length}`);
+  assert.equal(page.length, 12, `应有 12 项设置，实得 ${page.length}`);
   const cjk = /[一-鿿]/;
   for (const [name, desc] of page) {
     assert.ok(cjk.test(name), `设置项标题仍是纯英文：${name}`);
@@ -173,11 +174,11 @@ test("🔴 E1-026 设置页整页双语：zh 下每一项的 name/desc 都不再
   assert.ok(page.some(([n]) => n === "执行层 · 进阶"));
 });
 
-test("E1-026 en 下同样 11 项，且没有中文漏网", () => {
+test("E1-026 en 下同样 12 项，且没有中文漏网", () => {
   const { tab } = makeTab({ language: "en", actualTimeTracking: true });
   tab.display();
   const page = pageOf(tab);
-  assert.equal(page.length, 11);
+  assert.equal(page.length, 12);
   for (const [name, desc] of page) {
     assert.ok(name && desc, `${name} 缺 name 或 desc`);
     assert.doesNotMatch(name, /[一-鿿]/, `en 页里出现中文标题：${name}`);
@@ -191,10 +192,10 @@ test("SETTINGS_COPY 的 en / zh 键集完全一致（少一个 key 就是一处 
   for (const k of en) assert.equal(typeof S.SETTINGS_COPY.zh[k], typeof S.SETTINGS_COPY.en[k]);
 });
 
-test("主开关关闭时执行层那 4 项不显示（11 → 7）", () => {
+test("主开关关闭时执行层那 4 项不显示（12 → 8）", () => {
   const { tab } = makeTab({ actualTimeTracking: false });
   tab.display();
-  assert.equal(pageOf(tab).length, 7);
+  assert.equal(pageOf(tab).length, 8);
 });
 
 /* ── E1-003 · language onChange 重建面板 ──────────────────────────────── */
@@ -440,4 +441,29 @@ test("🔴 T2-098 runtime 内部状态写盘只落盘、不广播（不得触发
     "runtime 内部写盘不得广播/整页重绘（回归了这个修复就该红）");
   assert.deepEqual(shim.get("pomodoro-state"), { startedAt: 600 },
     "runtime 要在启动时用 settings.get(POMODORO_STATE_KEY) 恢复状态 —— 读回不能断");
+});
+
+/* ── stampCompletionTime 开关 ─────────────────────────────────────────── */
+
+test("stampCompletionTime toggle：默认关；点开落盘、点关落盘", async () => {
+  const { tab, plugin } = makeTab();   // DEFAULTS.stampCompletionTime = false
+  tab.display();
+  const setting = findSetting(tab, S.SETTINGS_COPY.en.stampCompletion);
+  assert.ok(setting, "设置页必须渲染「Stamp completion time」这一项");
+  const toggle = setting.controls[0];
+  assert.equal(toggle.kind, "toggle");
+  assert.equal(toggle.value, false, "默认必须关闭（上游没有自动行为）");
+  await toggle.fire(true);
+  assert.equal(plugin.settings.stampCompletionTime, true);
+  assert.equal(plugin.saved, 1);
+  await toggle.fire(false);
+  assert.equal(plugin.settings.stampCompletionTime, false);
+  assert.equal(plugin.saved, 2);
+});
+
+test("stampCompletionTime 常驻显示：主开关关着也可见（不挂在执行层下面）", () => {
+  const { tab } = makeTab({ actualTimeTracking: false });
+  tab.display();
+  assert.ok(findSetting(tab, S.SETTINGS_COPY.en.stampCompletion),
+    "自动打戳不依赖执行层，主开关关着也必须显示");
 });

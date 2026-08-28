@@ -28,6 +28,7 @@
 
 import type { App, TFile, Editor } from 'obsidian';
 import { extractPlanBody } from './blockconfig';
+import { bumpProgressInLine } from './parser';
 
 /** timing-core 里我们用到的函数的最小签名。vendored CJS，无声明文件，
  *  这里手动钉住接口（照类型猜返回值在本项目已栽过两次跟头）。 */
@@ -88,6 +89,9 @@ export interface TimingHost {
   notify?: (message: string, intent?: 'warning' | 'danger') => void;
   /** 今日 Daily Note 的解析。缺省用 Obsidian daily-notes 插件 + 文件名兜底。 */
   dailyNotePath?: (date: Date) => string | null;
+  /** 自动完成时间戳（`stampCompletionTime`）开关。每次触发时现读，
+   *  避免捕获被整体替换的 settings 对象（与 §D7 shim 同款）。缺省关闭。 */
+  shouldStampCompletion?: () => boolean;
 }
 
 let host: TimingHost | null = null;
@@ -151,7 +155,20 @@ export function initTimingObsidian(next: TimingHost): void {
   if (metadataListener && mc?.off) {
     try { mc.off('changed', metadataListener); } catch { /* ignore */ }
   }
-  metadataListener = (file) => { if (isFileLike(file)) void primeFile(file.path); };
+  metadataListener = (file) => {
+    if (!isFileLike(file)) return;
+    // 缓存里存的是【改动前】的正文（primeFile 之前还没更新），
+    // 正好拿来做「勾选跃迁」的 diff —— 见 stampCheckedTasks。
+    const prev = contentCache.get(file.path);
+    void primeFile(file.path).then(() => {
+      const fresh = contentCache.get(file.path);
+      if (typeof prev === 'string' && typeof fresh === 'string' && prev !== fresh) {
+        // 🔴 自动打戳是 best-effort：乐观锁失败（用户在我们读到之后又改了行）
+        //    是预期内的事，静默放弃，不把错误甩进 metadataCache 的事件循环。
+        void stampCheckedTasks(file.path, prev, fresh).catch(() => { /* ignore */ });
+      }
+    });
+  };
   if (mc?.on) {
     try { mc.on('changed', metadataListener); } catch { /* ignore */ }
   }
@@ -203,6 +220,146 @@ export function disposeTimingObsidian(): void {
   }
   metadataListener = null;
   host = null;
+}
+
+/* ─────────────────────────── `dHH:MM` 自动完成锚点 ─────────────────────────
+ * 语法与 src/main.ts 的 DONE_AT_ANCHOR_RE 同一份拷贝（P1-068 对齐过
+ * parser.ts 的 DONE_AT_RE：分钟可省、大小写不敏感）。改动任何一侧都必须
+ * 同步另一侧 —— 两处各有一个防复发测试钉住（timing-commands.test.js 与
+ * test/timing-stamp.test.js 的 hasDoneAtAnchor 断言）。 */
+
+const DONE_AT_ANCHOR_RE = /(?:^|\s)d\d{1,2}(?::\d{1,2})?(?=\s|$)/i;
+/** 行尾锚点（追加时落在行尾，移除时也只动行尾，不碰标题中间的 `d14:30`）。 */
+const TRAILING_DONE_AT_RE = /(\s)d\d{1,2}(?::\d{1,2})?(?=\s*$)/i;
+
+/** 一行是否已带完成锚点（语法同 parser.ts 的 DONE_AT_RE）。 */
+export function hasDoneAtAnchor(line: string): boolean {
+  return DONE_AT_ANCHOR_RE.test(String(line ?? ''));
+}
+
+/** `Date` → `dHH:MM`。 */
+export function doneAtStamp(now: Date): string {
+  return `d${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+}
+
+/** 已勾选任务行 → 追加 `dHH:MM`。已有锚点 / 非 `- [x]` 任务行返回 null
+ *  （不重复追加、不碰非任务行）。 */
+export function appendDoneAtStamp(line: string, stamp: string): string | null {
+  if (typeof line !== 'string') return null;
+  if (hasDoneAtAnchor(line)) return null;
+  if (!/^\s*[-*+]\s+\[[xX]\]/.test(line)) return null;
+  return `${line.replace(/\s+$/, '')} ${stamp}`;
+}
+
+/** 未勾选任务行 → 移除【行尾】锚点。非 `- [ ]` 任务行或行尾没锚点返回 null。 */
+export function stripTrailingDoneAtStamp(line: string): string | null {
+  if (typeof line !== 'string') return null;
+  if (!/^\s*[-*+]\s+\[ \]/.test(line)) return null;
+  if (!TRAILING_DONE_AT_RE.test(line)) return null;
+  return line.replace(TRAILING_DONE_AT_RE, '').replace(/\s+$/, '');
+}
+
+/** 一条待写的勾选跃迁。`expected` 是【新正文里那一行】的原样（= writeChange
+ *  的乐观锁锚点），`next` 是写回内容。 */
+export interface CheckTransition {
+  action: 'append' | 'strip';
+  line: number;
+  expected: string;
+  next: string;
+}
+
+/** 逐行 diff 计划正文，找出「checkbox 恰好翻转、行内其余部分未变」的行：
+ *  · `- [ ]`→`- [x]`：勾选，缺锚点就追加 `stamp`；
+ *  · `- [x]`→`- [ ]`：取消勾选，行尾带锚点就移除。
+ *  旧/新任意一侧不是 checkbox 行、或除 checkbox 外还有别的改动 → 跳过。
+ *  🔴 这是「勾选这个动作」才打戳的关键：不去全量归一化，绝不把早已勾选的
+ *  老任务补上「现在」的时间。 */
+export function planCheckTransitions(
+  prevLines: string[],
+  newLines: string[],
+  startLine: number,
+  bodyCount: number,
+  stamp: string,
+): CheckTransition[] {
+  const out: CheckTransition[] = [];
+  const CHECKBOX_RE = /^(\s*[-*+]\s+)\[([ xX])\](.*)$/;
+  for (let i = startLine; i < startLine + bodyCount; i += 1) {
+    const oldLine = prevLines[i];
+    const newLine = newLines[i];
+    if (typeof oldLine !== 'string' || typeof newLine !== 'string') continue;
+    const oldM = CHECKBOX_RE.exec(oldLine);
+    const newM = CHECKBOX_RE.exec(newLine);
+    if (!oldM || !newM) continue;                                  // 两侧都必须是任务行
+    if (oldM[1] !== newM[1] || oldM[3] !== newM[3]) continue;      // 只许 checkbox 变化
+    const oldChecked = /[xX]/.test(oldM[2]);
+    const newChecked = /[xX]/.test(newM[2]);
+    if (oldChecked === newChecked) continue;                       // checkbox 没变
+    if (newChecked) {
+      const next = appendDoneAtStamp(newLine, stamp);
+      if (next !== null && next !== newLine) {
+        out.push({ action: 'append', line: i, expected: newLine, next });
+      }
+    } else {
+      const next = stripTrailingDoneAtStamp(newLine);
+      if (next !== null && next !== newLine) {
+        out.push({ action: 'strip', line: i, expected: newLine, next });
+      }
+    }
+  }
+  return out;
+}
+
+/** 正在自动打戳的文件路径 —— 防重入：我们自己的写回会再触发一次
+ *  metadataCache 'changed'，处理中直接跳过，不许起第二轮。 */
+const stampingPaths = new Set<string>();
+
+/** 定位今天计划正文：文件里第一个 nautilus 围栏的闭合线之后、第一个空行之前。
+ *  与 readPrimaryPlan 同款边界（同一个「计划块管辖范围」）。 */
+function findPrimaryPlanBody(lines: string[]): { startLine: number; bodyLines: string[] } | null {
+  let fenceClose = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!FENCE_OPEN_RE.test(lines[i])) continue;
+    let j = i + 1;
+    while (j < lines.length && !FENCE_CLOSE_RE.test(lines[j])) j += 1;
+    if (j < lines.length) { fenceClose = j; break; }
+  }
+  if (fenceClose < 0) return null;
+  const { body, startLine } = extractPlanBody(lines.join('\n'), fenceClose);
+  return { startLine, bodyLines: body.length ? body.split('\n') : [] };
+}
+
+/** 检测 + 乐观锁写回（被 metadataCache 监听器调用）。返回实际写了多少行。
+ *  🔴 管辖范围三重闸：① 设置必须开（host.shouldStampCompletion）；
+ *  ② 文件必须是【今天】的 Daily Note（dailyNotePath）；③ 只扫计划正文
+ *  （findPrimaryPlanBody）。任何一闸不过，一行都不写。
+ *  🔴 每一处写回都走 writeChange —— 内容复核、歧义拒写、写后读回，
+ *  绝不整文件 vault.modify 覆盖。 */
+export async function stampCheckedTasks(
+  path: string,
+  prevText: string,
+  newText: string,
+): Promise<number> {
+  if (stampingPaths.has(path)) return 0;                                   // 防重入
+  if (!host?.shouldStampCompletion || !host.shouldStampCompletion()) return 0; // 设置关
+  const todayPath = dailyNotePath(new Date());
+  if (!todayPath || todayPath !== path) return 0;                          // 非今天日记
+  const prevLines = prevText.split(/\r?\n/);
+  const newLines = newText.split(/\r?\n/);
+  const body = findPrimaryPlanBody(newLines);
+  if (!body) return 0;
+  const changes = planCheckTransitions(
+    prevLines, newLines, body.startLine, body.bodyLines.length, doneAtStamp(new Date()),
+  );
+  if (changes.length === 0) return 0;
+  stampingPaths.add(path);
+  try {
+    for (const c of changes) {
+      await writeChange(path, { kind: 'replace', line: c.line, expected: c.expected, next: c.next });
+    }
+    return changes.length;
+  } finally {
+    stampingPaths.delete(path);
+  }
 }
 
 /* ─────────────────────────── 行级小工具 ─────────────────────────── */
@@ -769,8 +926,15 @@ export async function completeTask(taskUid: string): Promise<boolean> {
   // 🔴 正则必须与 normalizeTaskString 的 `^([-*+])\s+\[(.)\]` 【同形】：锚在行首的
   //    列表标记上、方括号里恰好一个字符。写成裸的 `\[[^\]]?\]` 会去匹配行内
   //    第一个方括号（`[[wiki 链接]]`、`[note]` 之类），有把正文改坏的风险。
-  const next = rawTask.replace(/^(\s*[-*+]\s+)\[.\]/, '$1[x]');
+  let next = rawTask.replace(/^(\s*[-*+]\s+)\[.\]/, '$1[x]');
   if (next === rawTask) throw new Error('Could not check off the task.');
+  // 执行层面板 Complete 按钮打锚点：与 metadataCache 通路共用 appendDoneAtStamp
+  // 与同一开关。面板只列今天主计划（readPrimaryPlan）的任务 ⇒ 天然在管辖范围内，
+  // 不必再判一次「是否今天日记」。一次落笔：勾选 + 锚点同一趟 writeChange。
+  if (host?.shouldStampCompletion?.()) {
+    const stamped = appendDoneAtStamp(next, doneAtStamp(new Date()));
+    if (stamped !== null && stamped !== next) next = stamped;
+  }
   await writeChange(parsed.path, { kind: 'replace', line: parsed.line, expected: rawTask, next });
   // 按内容确认（行号可能漂移）。
   const fresh = await readFreshLines(parsed.path);
@@ -779,6 +943,28 @@ export async function completeTask(taskUid: string): Promise<boolean> {
   if (ci < 0 || timingCore.taskStatus(normalizeTaskString(fresh[ci])) !== 'DONE') {
     throw new Error('Task completion could not be confirmed.');
   }
+  return true;
+}
+
+/** 点击盘面切片：给任务进度 +increment（宿主默认 +10）。
+ *  🔴 必须走本文件的乐观锁写回（applyChange / locateLine：按行内容复核、
+ *  定位不唯一拒写、写后读回确认），与 completeTask 同一套 —— 用户在渲染和
+ *  点击之间改过文件时，逐字整文件覆盖会把改动无声抹掉。语义见
+ *  parser.ts `bumpProgressInLine`（对齐上游 update-block-progress）。 */
+export async function bumpProgress(taskUid: string, increment: number, now: Date): Promise<boolean> {
+  const parsed = splitUid(taskUid);
+  if (!parsed) throw new Error('Task not found.');
+  const lines = await readFreshLines(parsed.path);
+  if (!lines) throw new Error('Task not found.');
+  const rawTask = lines[parsed.line];
+  if (!rawTask) throw new Error('Task not found.');
+  const next = bumpProgressInLine(rawTask, increment, now.getHours() * 60 + now.getMinutes());
+  await writeChange(parsed.path, { kind: 'replace', line: parsed.line, expected: rawTask, next });
+  // 按内容确认（行号可能漂移）。
+  const fresh = await readFreshLines(parsed.path);
+  if (!fresh) throw new Error('Progress update could not be confirmed.');
+  const ci = locateLine(fresh, parsed.line, next);
+  if (ci < 0) throw new Error('Progress update could not be confirmed.');
   return true;
 }
 

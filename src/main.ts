@@ -15,7 +15,15 @@ import { renderCapacityHeader } from './header';
 import { renderChartControls, type ChartControlState } from './controls';
 import { resolveDayState } from './daystate';
 import { NAUTILUS_VIEW_TYPE, NautilusSidebarView, resolveDailyNoteInfo, primeDailyNotesConfig } from './sidebar';
-import { initTimingObsidian, diagnoseTiming, timingCacheReady } from './timing-obsidian';
+import {
+  initTimingObsidian, diagnoseTiming, timingCacheReady, bumpProgress,
+  hasDoneAtAnchor, doneAtStamp,
+} from './timing-obsidian';
+
+// 这两个纯函数按「单一正则真源」迁到了 timing-obsidian.ts（自动打戳与手动命令
+// 共用同一份 DONE_AT 语法）。保持本模块的导出面不变 —— timing-commands.test.js
+// 从 main.ts 取它们。
+export { hasDoneAtAnchor, doneAtStamp };
 import { renderTimingStatusBar } from './statusbar';
 import type { ExecViewContext, TimingRuntime, TimingSnapshot } from './timing-contract';
 import { createTimingRuntime } from './vendor/timing-runtime';
@@ -360,6 +368,13 @@ export class NautilusLogView extends MarkdownRenderChild {
         compactState: this.compactOpen,
         // P0-4：把执行层的 CLOCK 记录喂进去，已完成任务才画得出【实际】耗时。
         clockEntries: this.plugin.timingRuntime?.getSnapshot?.()?.entries ?? [],
+        // 点击任务切片 → +10% 进度。走 timing-obsidian 的乐观锁写回；
+        // 失败（行被外部改过 / 定位歧义）当场提示，不静默。
+        onProgressClick: (uid) => {
+          void bumpProgress(uid, 10, new Date()).catch((err: unknown) => {
+            new Notice(err instanceof Error ? err.message : String(err));
+          });
+        },
       });
     } catch (err) {
       // 图挂了不该带走整个块 —— 容量数字比图更重要，必须还能看见。
@@ -442,22 +457,9 @@ export function focusedTaskUid(snapshot: TimingSnapshot | null): string | null {
  * 🔴 P1「契约漏洞 2」/ P1-068：语法的**唯一权威**是 parser.ts:89 的
  *    `DONE_AT_RE = /(?:^|\s)d(\d{1,2})(?::(\d{1,2}))?(?=\s|$)/i`
  *    —— **分钟可省**（`d14` 合法）、**大小写不敏感**（`D14:30` 合法）。
- *    这里的去重判断原先写成 `/(?:^|\s)d\d{1,2}:\d{2}(?=\s|$)/`（要求分钟、
- *    区分大小写）⇒ 写了 `d14` 的行会被 parser 认成锚点，却在这里被判成
- *    「还没有锚点」而被**再追加一个** `d16:40`，一行两个锚点。现已对齐。
- * 抽成导出的纯函数是为了可测 —— 命令回调里的分支没有任何办法从外部触达。 */
-const DONE_AT_ANCHOR_RE = /(?:^|\s)d\d{1,2}(?::\d{1,2})?(?=\s|$)/i;
-
-/** 一行是否已经带了完成锚点（语法同 parser.ts 的 DONE_AT_RE）。 */
-export function hasDoneAtAnchor(line: string): boolean {
-  return DONE_AT_ANCHOR_RE.test(String(line ?? ''));
-}
-
-/** `Date` → `dHH:MM`。 */
-export function doneAtStamp(now: Date): string {
-  return `d${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-}
-
+ *    `hasDoneAtAnchor` / `doneAtStamp` 已迁到 timing-obsidian.ts（自动打戳
+ *    与手动命令共用同一份正则，避免再抄一份漂移）。`completeWithTimestamp`
+ *    留在本模块：它翻转 checkbox + 追加锚点，是手动命令专属的语义。 */
 /** 勾选当前行并追加完成锚点。返回新行；不该改动时返回 `null`
  *  （非任务行 / 已有锚点 —— 见 P1-070：静默不动是有意的）。 */
 export function completeWithTimestamp(line: string, stamp: string): string | null {
@@ -522,6 +524,9 @@ const SETTINGS_KEY_MAP: Record<string, keyof NautilusSettings> = {
   'pomodoro-minutes': 'pomodoroMinutes',
   'recent-retention-minutes': 'recentRetentionMinutes',
   'forgotten-timer-minutes': 'forgottenTimerMinutes',
+  // 本移植自有设置：没有 vendor 字面量会问它，但映射表保持「每个 camel 字段
+  // 都能被 kebab 键触达」的全覆盖 —— 漏一个就是静默失效（见 §D7 与检测器 4）。
+  'stamp-completion-time': 'stampCompletionTime',
 };
 
 /** 交给 vendored runtime 的 extensionAPI.settings shim。
@@ -662,6 +667,8 @@ export default class NautilusLogPlugin extends Plugin {
       app: this.app,
       notify: (msg: string) => { new Notice(msg); },
       dailyNotePath: () => resolveDailyNoteInfo(this.app).path,
+      // 自动完成时间戳：每次触发现读，settings 对象可能被整体替换（§D7 同款）。
+      shouldStampCompletion: () => this.settings.stampCompletionTime,
     });
 
     // 右侧栏视图 —— 不打开笔记也能看今天的盘。共用 renderSpiral。

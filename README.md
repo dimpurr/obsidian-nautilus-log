@@ -1,5 +1,7 @@
 # Nautilus Logger for Obsidian
 
+**English** · [简体中文](./README.zh.md)
+
 > **Give every minute a job.**
 
 A visual day planner for [Obsidian](https://obsidian.md/). Nautilus Logger turns one

@@ -116,6 +116,75 @@ function parseDoneAt(text: string): number | null {
   return hour * 60 + minute;
 }
 
+/* ────────────────────────────────────────────────────────────────────────────
+ * 点击盘面切片 +10% 进度 —— 语义对齐上游 component.cljs:518-545
+ * `update-block-progress`。竞品（rival/src/parser.ts `bumpProgressInLine`）
+ * 与上游同语义，两边无冲突。
+ *
+ *   · 已有 dNN%：
+ *       N+10 == 100 → 勾选任务（- [ ]→- [x]）、去掉 dNN%、追加 `dHH:MM` 锚点
+ *       N+10 > 100  → 去掉 dNN%（回到无进度，不改勾选状态）
+ *       否则         → 写成 `d(N+10)%`
+ *   · 没有 dNN%：追加 ` d10%`，同时取消勾选（- [x]→- [ ]）并剥掉已有的
+ *     `dHH:MM` 锚点（＝把一件已完成的事重新打开）。
+ *
+ * ⚠️ 正则用本移植的收紧版 PROGRESS_RE（`%` 后必须是空白/行尾），不用上游/竞品
+ *    的宽松版 `(\sd)(\d{1,3})(%)` —— 解析与写回对同一行必须给出同一个答案
+ *    （`d50%foo` 解析为无进度，写回就不该当它有进度）。
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** `minutes → "HH:MM"`。与上游 `minutes->time`（component.cljs:410）同形。
+ *  🔴 仓库里这是第三份本地副本（spiral.ts:312 / compact.ts:71 各有一份）：
+ *  上游没导出它，跨模块共用要新建 util，本轮不动那个范围。 */
+function minutesToTime(minutes: number): string {
+  const h = Math.floor((minutes / 60) % 24);
+  const m = minutes % 60;
+  return (h < 10 ? "0" + h : String(h)) + ":" + (m < 10 ? "0" + m : String(m));
+}
+
+/** `- [ ]` → `- [x]`。与 completeTask（timing-obsidian.ts）同一形：锚在行首
+ *  列表标记上、方括号里恰好一个字符，`[[wiki 链接]]` 之类不会被误伤。 */
+function checkTask(line: string): string {
+  return line.replace(/^(\s*[-*+]\s+)\[.\]/, "$1[x]");
+}
+
+/** `- [x]` / `- [X]` → `- [ ]`。其它非 x 标记（`- [/]` 进行中等）已是未完成，不碰。 */
+function uncheckTask(line: string): string {
+  return line.replace(/^(\s*[-*+]\s+)\[[xX]\]/, "$1[ ]");
+}
+
+/** 给任务行的进度 +increment（宿主默认 +10），返回新行。nowMinutes 用于
+ *  100% 分支的完成锚点（`minutesToTime(nowMinutes)`）。 */
+export function bumpProgressInLine(line: string, increment: number, nowMinutes: number): string {
+  const match = PROGRESS_RE.exec(line);
+  if (match) {
+    const p = Number(match[1]) + increment;
+    // 🔴 用【切片】而不是 `replace(match[0], …)` 来移除 token：match[0] 的
+    //    `(?:^|\s)` 前缀可能不是字符（行首 `^` 是零宽），replace 会把「前导
+    //    空格 + token」一起换掉、给行首凭空加一个空格。切片只拿掉 token 本身。
+    const before = line.slice(0, match.index);
+    const after = line.slice(match.index + match[0].length);
+    if (p === 100) {
+      return checkTask(before + after) + ` d${minutesToTime(nowMinutes)}`;
+    }
+    if (p > 100) {
+      return before + after;
+    }
+    // 保留 match[0] 的 `^` / `\s` 形态：行首 token 不带前导空格，行中带。
+    const lead = /^\s/.test(match[0]) ? " " : "";
+    return before + lead + `d${p}%` + after;
+  }
+  // 没有进度：追加 ` d10%`、取消勾选、剥掉完成锚点。
+  // 🔴 只把【前导缩进】留出来再整体折叠空白 —— 直接 `.replace(/\s+/g,' ')`
+  //    会把嵌套任务的缩进也吃掉，任务掉出它所属的子树。
+  const indent = /^\s*/.exec(line)?.[0] ?? "";
+  const rest = line.slice(indent.length) + ` d${increment}%`;
+  return indent + uncheckTask(rest)
+    .replace(DONE_AT_STRIP_RE, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 /** 紧急触发词的匹配器（audit §P1-8：此前是裸 `includes` 子串匹配）。
  *
  *  🔴 为什么不是 `\b`：JS 的 `\b` 定义在 ASCII `\w`（[A-Za-z0-9_]）上。

@@ -80,11 +80,13 @@ export interface ParsedPlan {
   warnings: PlanWarning[];
 }
 
-/** 本移植的设置面：**6 项常驻 + 5 项执行层 = 11 项**。
+/** 本移植的设置面：**6 项常驻 + 1 项自动打戳 + 5 项执行层 = 12 项**。
  *  🔴 原注释写「8 base + 5 execution」（＝13），与实际字段数不符（认证审计 P1）。
  *  上游 12 项里 `prefix-str` 有意不移植（§D12，Roam 专有的组件前缀文本），
  *  其余口径见 docs/PORTING-DECISIONS.md §1.3。
- *  `actualTimeTracking` 是总开关：关着时它下面 4 项不在设置页显示。 */
+ *  `actualTimeTracking` 是总开关：关着时它下面 4 项不在设置页显示。
+ *  `stampCompletionTime` 是本移植的自有设置（上游没有自动打戳行为，
+ *  Roam 侧靠独立的 Todo Trigger 插件；默认 false，见 PROGRESS.md）。 */
 export interface NautilusSettings {
   language: "en" | "zh";
   workdayStartHour: number;   // 0..23
@@ -92,6 +94,9 @@ export interface NautilusSettings {
   descLength: number;         // 14..28（DESC_LENGTH_SLIDER；上游列表端点）
   todoDuration: number;       // 5..60, fallback for untimed tasks
   urgentTrigger: string;      // "" disables
+  /** 勾选今天计划里的任务时自动追加 `dHH:MM` 完成锚点，取消勾选自动移除。
+   *  只作用于今天 Daily Note 的 nautilus 计划块正文，不是全 vault 的 `- [ ]`。 */
+  stampCompletionTime: boolean;
   // ── Execution layer ──
   actualTimeTracking: boolean;    // master switch; off hides the 4 below
   timingLineSidebar: boolean;     // Clock In pins current task to right sidebar
@@ -107,6 +112,7 @@ export const DEFAULT_SETTINGS: NautilusSettings = {
   descLength: 22,
   todoDuration: 15,
   urgentTrigger: "",
+  stampCompletionTime: false,
   actualTimeTracking: false,
   timingLineSidebar: true,
   pomodoroMinutes: 45,
