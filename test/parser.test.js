@@ -274,6 +274,37 @@ test('触发词含正则元字符不得炸（转义）', () => {
 });
 
 // ────────────────────────────────────────────────────────────────────────────
+// 🔴 移动端合规：正则不得含 lookbehind（社区审核指南「Mobile Considerations」
+//    明令 Avoid lookbehind，而 manifest.json 声明 isDesktopOnly:false）。
+//    实现用消费式前缀 (?:^|\s) 替代 lookbehind，对 .test() 布尔结果完全等价。
+//    回退成 (?<=^|\s) 时这条的 source 检查会红。
+// ────────────────────────────────────────────────────────────────────────────
+
+test('🔴 触发词正则不含 lookbehind（移动端合规，回退即红）', () => {
+  const re = parser.urgentMatcher('urgent');
+  assert.ok(re instanceof RegExp);
+  assert.ok(
+    !re.source.includes('(?<='),
+    `urgentMatcher 的正则源不得含 lookbehind —— 实际 ${re.source}`
+  );
+  // 等价性：行首 / 行尾 / 空白 / 全角空白 都要照旧命中，子串照旧不命中。
+  assert.equal(re.test('urgent 写周报'), true, '行首 token');
+  assert.equal(re.test('写周报 urgent'), true, '行尾 token');
+  assert.equal(re.test('写周报\turgent\t收尾'), true, 'tab 分隔');
+  assert.equal(re.test('写周报　urgent　收尾'), true, '全角空格分隔');
+  assert.equal(re.test('urgently'), false, '英文子串不得误判');
+  assert.equal(re.test('nonurgent'), false, '前缀子串不得误判');
+});
+
+test('🔴 中文触发词正则同样不含 lookbehind，且空白边界语义保持', () => {
+  const re = parser.urgentMatcher('紧急');
+  assert.ok(!re.source.includes('(?<='), '中文触发词的 source 同样不许有 lookbehind');
+  assert.equal(re.test('写周报 紧急'), true);
+  assert.equal(re.test('紧急处理'), false, '连写不命中（\b 会在这里翻车）');
+  assert.equal(re.test('\n紧急'), true, '换行后的行首仍命中');
+});
+
+// ────────────────────────────────────────────────────────────────────────────
 // warningCode 不再被丢弃（audit §P1-8）
 // ────────────────────────────────────────────────────────────────────────────
 

@@ -18,14 +18,16 @@ function setup(){
 
 test('默认隐藏', () => {
   const {host}=setup();
-  assert.equal(host.querySelector('.nautilus-log-tooltip').style.display,'none');
+  const tip=host.querySelector('.nautilus-log-tooltip');
+  assert.ok(tip.classList.contains('nautilus-log-tooltip--hidden'), '显隐走 CSS 类（内联 display 禁令）');
+  assert.equal(tip.style.display, '', '不写内联 display');
 });
 
 test('mouseenter 显示并填入所有行', () => {
   const {host,el}=setup();
   el.dispatchEvent(new dom.window.Event('mouseenter'));
   const tip=host.querySelector('.nautilus-log-tooltip');
-  assert.notEqual(tip.style.display,'none');
+  assert.ok(!tip.classList.contains('nautilus-log-tooltip--hidden'), '显示 = 摘掉隐藏类');
   assert.equal(tip.querySelectorAll('.nautilus-log-tooltip-line').length,3);
   assert.ok(tip.textContent.includes('写周报'));
 });
@@ -34,13 +36,13 @@ test('mouseleave 隐藏', () => {
   const {host,el}=setup();
   el.dispatchEvent(new dom.window.Event('mouseenter'));
   el.dispatchEvent(new dom.window.Event('mouseleave'));
-  assert.equal(host.querySelector('.nautilus-log-tooltip').style.display,'none');
+  assert.ok(host.querySelector('.nautilus-log-tooltip').classList.contains('nautilus-log-tooltip--hidden'));
 });
 
 test('键盘 focus 同样触发（可访问性）', () => {
   const {host,el}=setup();
   el.dispatchEvent(new dom.window.Event('focus'));
-  assert.notEqual(host.querySelector('.nautilus-log-tooltip').style.display,'none');
+  assert.ok(!host.querySelector('.nautilus-log-tooltip').classList.contains('nautilus-log-tooltip--hidden'));
 });
 
 test('destroy 后移除浮层且不再响应', () => {

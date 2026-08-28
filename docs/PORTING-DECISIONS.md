@@ -281,10 +281,10 @@ openPrimaryPlan · warmRightSidebarWindowCache · legacyLogbookIsRunning · show
 | | |
 |---|---|
 | **上游** | `(?<=^|\s)TAG(?=$|\s)`（`component.cljs:625`），读设置时 `replace(/\s/g,"")` 去掉触发词里的空格（`index.js:349`） |
-| **本移植** | 同上。去空格挪到**读取侧**（本移植的设置页没有写入侧清洗那道工序） |
+| **本移植** | 语义同上；**前界不用 lookbehind**。社区插件审核指南（Mobile Considerations）明令 *Avoid lookbehind in regular expressions*，而 manifest.json 声明 `isDesktopOnly:false`。lookahead `(?=$|\s)` 保留（移动端同样支持），前界换成**消费式前缀** `(?:^|\s)`。该正则只被 `.test()` 消费，消费式前缀的布尔结果与 lookbehind 完全等价。去空格挪到**读取侧**（本移植的设置页没有写入侧清洗那道工序） |
 | 🔴 **为什么不能用 `\b`** | JS 的 `\b` 定义在 ASCII `\w` 上，**CJK 字符不属于 `\w`** ⇒ `\b紧急\b` 在任何位置都不匹配，中文触发词会**彻底失效**（实测验证）。空白/行首尾分隔与文字系统无关，中英文同时成立 |
 | **已知后果** | 中文不用空格分词，所以 `紧急处理这件事` 里的 `紧急` **不会**命中 —— 这与上游行为一致（不是本移植引入的），但中文用户需要显式空格分隔 |
-| **偏离** | 额外做了**正则转义**（上游没有）。上游把设置值直塞 pattern，触发词含 `(` 或 `+` 会抛异常连带整张图渲染失败 |
+| **偏离** | ① 前界去掉 lookbehind（见上「本移植」行，移动端合规）；② 额外做了**正则转义**（上游没有）。上游把设置值直塞 pattern，触发词含 `(` 或 `+` 会抛异常连带整张图渲染失败 |
 | **键名** | 上游这个设置的键叫 **`color-1-trigger`**（`index.js`），本移植叫 `urgentTrigger`。🔴 它**不在** `SETTINGS_KEY_MAP` 里，也**不该**加进去 —— vendor 从不问这个键，只有本移植自己的 `parser.ts` 用它（认证审计 P1-073） |
 | **渲染结果** | 命中的**弹性任务**画成红色（`spiral.ts` 的 `URGENT_FILL` / `URGENT_LEGEND`）。🔴 **固定事件的黄色优先**：`meeting` 分支排在 `urgent` 前面，事件不会被改红 |
 

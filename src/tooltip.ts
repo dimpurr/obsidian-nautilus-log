@@ -73,13 +73,15 @@ export function createTooltip(host: HTMLElement): TooltipController {
   const tip = doc.createElement('div');
   tip.className = 'nautilus-log-tooltip';
   tip.setAttribute('role', 'tooltip');
-  tip.style.display = 'none';
+  // 显隐走 CSS 类（`nautilus-log-tooltip--hidden`，styles.css），不写内联
+  // display —— 社区审核指南。visibility 是例外（测量协议，见 PROGRESS.md）。
+  tip.classList.add('nautilus-log-tooltip--hidden');
   host.appendChild(tip);
 
   // 每个目标注册的监听都记下来，destroy 时逐个摘掉 —— 否则重渲染会累积泄漏。
   let bound: { el: Element; type: string; fn: EventListener }[] = [];
 
-  function hide(): void { tip.style.display = 'none'; }
+  function hide(): void { tip.classList.add('nautilus-log-tooltip--hidden'); }
 
   function show(t: TooltipTarget, geo: { centerX: number; centerY: number; radius: number }): void {
     tip.empty?.();
@@ -91,8 +93,8 @@ export function createTooltip(host: HTMLElement): TooltipController {
       tip.appendChild(row);
     }
     // 先显示再量尺寸，否则 offsetWidth 是 0，定位会全部挤到左上角。
-    tip.style.display = 'block';
-    tip.style.visibility = 'hidden';
+    tip.classList.remove('nautilus-log-tooltip--hidden');
+    tip.style.visibility = 'hidden';   // ⚠️ 测量协议，见 PROGRESS.md —— 不是 display 切换
 
     const anchor = core.radialTooltipGeometry({
       startMinutes: t.startMinutes, endMinutes: t.endMinutes,

@@ -255,6 +255,50 @@ test("destroy() 之后 interval 不再触发", (t) => {
 });
 
 /* ------------------------------------------------------------------ */
+/* 🔴 社区审核 Security 项：图标必须用 DOM API 构造，不写 innerHTML      */
+/* ------------------------------------------------------------------ */
+
+test("🔴 图标用 DOM API 构造，不写 innerHTML（回退即红）", () => {
+  const { dom, container, opts, storageKey, handlers } = makeFixture();
+  // 审核的机械检查盯的是 `el.innerHTML =` 赋值。装一个抛错的 setter：
+  // 实现里若还写 innerHTML，渲染当下就会炸；不写才走得到正常路径。
+  const desc = Object.getOwnPropertyDescriptor(dom.window.Element.prototype, "innerHTML");
+  Object.defineProperty(dom.window.Element.prototype, "innerHTML", {
+    configurable: true,
+    enumerable: desc.enumerable,
+    get() { return desc.get.call(this); },
+    set() { throw new Error("innerHTML assignment detected"); },
+  });
+  try {
+    const { destroy } = renderChartControls(
+      container,
+      initialState(),
+      handlers,
+      SETTINGS,
+      opts,
+      storageKey,
+    );
+
+    // 图标还在：三个按钮各带一个 <svg>，子元素与上游 path 集一致。
+    const svgs = container.querySelectorAll("button svg");
+    assert.equal(svgs.length, 3, "眼睛/播放/折叠各一个 svg");
+    // showDone=false 初始 => 眼睛是 ICON_EYE_OFF（path + line，无 circle）。
+    assert.ok(svgs[0].querySelector("path"), "眼睛图标有 path（上游 M17.94…）");
+    assert.ok(svgs[0].querySelector("line"), "眼睛图标有 line（x1=1 y1=1 x2=23 y2=23）");
+    assert.ok(svgs[1].querySelector("polygon"), "播放图标有 polygon（5 3 19 12 …）");
+
+    // 点眼睛切到 showDone => ICON_EYE（path + circle）替换上去。
+    container.querySelectorAll("button")[0].click();
+    const eyeOn = container.querySelectorAll("button svg")[0];
+    assert.ok(eyeOn.querySelector("circle"), "眼睛开启态图标有 circle（cx=12 cy=12 r=3）");
+
+    destroy();
+  } finally {
+    Object.defineProperty(dom.window.Element.prototype, "innerHTML", desc);
+  }
+});
+
+/* ------------------------------------------------------------------ */
 /* 认证审计 C2-054 · localStorage 键的命名空间前缀                      */
 /* ------------------------------------------------------------------ */
 
@@ -399,16 +443,20 @@ test("🔴 C2-057/C2-024 折叠后：块根拿 nautilus-log-collapsed，按钮�
     "折叠态必须离开 header-actions —— 否则会跟着被藏掉的头部一起消失",
   );
   assert.notEqual(bar.parentNode, actions);
-  assert.equal(
-    header.style.display,
-    "none",
-    "上游折叠后整块只剩一排按钮；容量头部留着会从 height:0 的容器里溢出来",
+  assert.ok(
+    header.classList.contains("nautilus-log-collapsed-hidden"),
+    "上游折叠后整块只剩一排按钮；容量头部留着会从 height:0 的容器里溢出来"
+    + "（内联 display 禁令：走 CSS 类）",
   );
+  assert.equal(header.style.display, "", "折叠隐藏不写内联 display");
 
   buttonsOf(container)[2].click();   // 展开回来
 
   assert.equal(container.classList.contains("nautilus-log-collapsed"), false);
-  assert.equal(header.style.display, "", "展开后头部还原");
+  assert.ok(
+    !header.classList.contains("nautilus-log-collapsed-hidden"),
+    "展开后头部还原（摘掉隐藏类）",
+  );
   assert.equal(
     container.querySelector(".nautilus-log-controls-top").parentNode,
     actions,

@@ -155,11 +155,14 @@ export function renderPomoControl(
   root.append(startBtn, running, closeBtn);
   container.appendChild(root);
 
-  /* `hidden` on a styled element loses to its author `display` rule, so set
-   *  both: the attribute for semantics, inline display for effect. */
+  /* `hidden` 在带作者 display 规则的元素上会输给它（UA 样式特异度为 0），
+   *  所以【语义】走 hidden 属性、【效果】走 .is-hidden 类 —— styles.css 里
+   *  `.nautilus-log-timing__pomo .is-hidden { display:none !important }`
+   *  压得过 `.nautilus-log-timing__trigger` 的 inline-flex。不写内联 display：
+   *  社区审核指南明确反对 `el.style.display =`。 */
   const setVisible = (node: HTMLElement, visible: boolean): void => {
     node.hidden = !visible;
-    node.style.display = visible ? '' : 'none';
+    node.classList.toggle('is-hidden', !visible);
   };
 
   const render = (): void => {

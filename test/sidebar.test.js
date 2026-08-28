@@ -327,6 +327,26 @@ test('🔴 RQ-7 Daily Notes 配了非默认日期格式时，路径必须按它�
   assert.equal(found.path, 'Journal/24-08-2026.md');
 });
 
+/* ─────────── 官方指南：Use normalizePath() to clean up user-defined paths ───────────
+ * 日记路径由 Daily Notes 的用户配置（folder + format）拼出。folder 可能带
+ * 反斜杠（Windows）、尾部/重复斜杠 —— 不经 normalizePath 会拼出一个
+ * vault.getAbstractFileByPath 认不出的脏路径（回退实现 = 这两条直接红）。 */
+test('🔴 normalizePath：folder 带反斜杠（Windows 形态）时路径被清洗', async () => {
+  const app = makeApp({ 'Daily/_Daily/2026-08-24.md': MULTI_BLOCK },
+                       { folder: 'Daily\\_Daily' });   // 真机 Windows 上 daily-notes.json 就是这种值
+  const found = await resolvePrimaryPlan(app, SETTINGS);
+  assert.ok(found, '带反斜杠的 folder 必须也能定位到今日笔记');
+  assert.equal(found.path, 'Daily/_Daily/2026-08-24.md');
+});
+
+test('🔴 normalizePath：folder 带重复斜杠时路径被清洗', async () => {
+  const app = makeApp({ 'Journal/2026-08-24.md': MULTI_BLOCK },
+                       { folder: 'Journal//' });
+  const found = await resolvePrimaryPlan(app, SETTINGS);
+  assert.ok(found, '重复斜杠的 folder 必须也能定位');
+  assert.equal(found.path, 'Journal/2026-08-24.md');
+});
+
 /* ================================================================== */
 /* 认证审计 C2-058 / C2-101 / L2-127 · 侧栏的控制栏、骨架与面板顺序      */
 /* ================================================================== */

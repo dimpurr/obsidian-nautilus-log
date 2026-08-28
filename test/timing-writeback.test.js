@@ -10,6 +10,11 @@ const esbuild=require('esbuild');
 esbuild.buildSync({entryPoints:[path.join(__dirname,'../src/timing-obsidian.ts')],bundle:true,
   format:'cjs',platform:'node',outfile:path.join(__dirname,'.tw.cjs'),external:['obsidian'],logLevel:'error'});
 const T=require('./.tw.cjs');
+// 冷缓存告警的独立 bundle：主 bundle 的 contentCache 会被前面的测试填满，
+// 而「预热后仍为空」要求全局缓存为空 —— 只有一份全新模块实例才撑得出这场景。
+esbuild.buildSync({entryPoints:[path.join(__dirname,'../src/timing-obsidian.ts')],bundle:true,
+  format:'cjs',platform:'node',outfile:path.join(__dirname,'.tw-cold.cjs'),external:['obsidian'],logLevel:'error'});
+const TC=require('./.tw-cold.cjs');
 
 /** 用真实文件系统撑起一个最小 vault。vault.process 走真实原子读改写。
  *  externalEdit 非空时：在【第一次】vault.process 落笔前，先把外部编辑写进磁盘
@@ -447,6 +452,44 @@ test('RQ-4 resolve 的那一刻缓存必须已经填好（不是 onLayoutReady �
   assert.ok(T.readPrimaryPlan(new Date(2026,7,26,9,0)).plan,
     'resolve 之后必须立刻读得到 —— 执行层就是等它才启动的');
   v.cleanup();
+});
+
+/* ─────────── 社区审核：默认控制台只该出现 error ───────────
+ * 预热后缓存仍为空 = 执行层全面失明（readPrimaryPlan / readAllEntries 都只认
+ * 这份缓存），必须让用户看见。此前用 console.warn，审核指南要求 default
+ * console 只该有 error。这条守卫 console.error / 不退回 console.warn。 */
+test('🔴 预热后缓存仍为空时用 console.error 告警（不是 console.warn）', async () => {
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'nl-cold-'));
+  const files=new Map([['2026-08-26.md',{path:'2026-08-26.md'}]]);
+  const readyCbs=[];
+  const vault={
+    getAbstractFileByPath:p=>files.get(p)||null,
+    getMarkdownFiles:()=>[...files.values()],
+    // 🔴 cachedRead 全失败 => 预热后缓存仍为空 => 触发 cold-cache 告警
+    cachedRead:async()=>{ throw new Error('read failure'); },
+    read:async()=>{ throw new Error('read failure'); },
+  };
+  const app={vault,
+    workspace:{ iterateAllLeaves(){}, getLeaf:()=>null, openLinkText:async()=>{},
+                onLayoutReady(cb){ readyCbs.push(cb); } },
+    metadataCache:{on(){},off(){}}};
+  const errors=[], warns=[];
+  const origError=console.error, origWarn=console.warn;
+  console.error=(...a)=>{ errors.push(a.join(' ')); };
+  console.warn=(...a)=>{ warns.push(a.join(' ')); };
+  try {
+    TC.initTimingObsidian({app});
+    readyCbs[0]();               // 触发 onLayoutReady → 预热 → warnIfCacheStillCold
+    await TC.timingCacheReady();
+    assert.ok(errors.some(m=>m.includes('同步内容缓存预热后仍为空')),
+      '缓存仍空必须 console.error —— 执行层会全面失明，用户该看到');
+    assert.ok(!warns.some(m=>m.includes('同步内容缓存预热后仍为空')),
+      '不得退回 console.warn（社区审核：默认控制台只该出现 error）');
+  } finally {
+    console.error=origError;
+    console.warn=origWarn;
+    fs.rmSync(dir,{recursive:true,force:true});
+  }
 });
 
 /* ═══════════════════════════════════════════════════════════════════════

@@ -191,21 +191,31 @@ export function bumpProgressInLine(line: string, increment: number, nowMinutes: 
  *     触发词是中文时（`紧急`），`急` 不是 `\w` ⇒ `\b急\b` 的边界判定整个翻转，
  *     `紧急处理` 反而会命中、`写周报 紧急` 反而不命中 —— 比裸子串还糟。
  *
- *  ⇒ 抄上游 `component.cljs:625-627 get-color-pattern` 的做法：
- *     `(?<=^|\s)TAG(?=$|\s)` —— 用【空白或行首尾】做分隔符。这条规则与文字系统
- *     无关，中英文同时成立：
+ *  ⇒ 语义抄上游 `component.cljs:625-627 get-color-pattern`：用【空白或行首尾】
+ *     做分隔符。这条规则与文字系统无关，中英文同时成立：
  *       英文 trigger=`urgent`：`urgent 写周报` ✓ / `urgently` ✗ / `nonurgent` ✗
  *       中文 trigger=`紧急`  ：`写周报 紧急` ✓ / `紧急处理`（连写）✗
  *     代价：中文用户必须把触发词当成独立 token 写（前后留空格，或写成 `#紧急`
  *     单独一段）—— 这正是上游的语义，不做超集。
  *
- *  偏离上游一处：这里对触发词做正则转义。上游把设置值直接塞进 re-pattern，
- *  触发词含 `(` / `+` 时会抛异常连带整个渲染挂掉；转义只影响这类病态输入。 */
+ *  🔴 本移植【不用上游的 lookbehind】`(?<=^|\s)` —— 社区插件审核指南
+ *     「Mobile Considerations」明令 Avoid lookbehind，而 manifest.json 声明
+ *     `isDesktopOnly: false`。lookahead `(?=$|\s)` 保留（移动端同样支持）；
+ *     前界改用【消费式前缀】`(?:^|\s)`（见 PORTING-DECISIONS.md §D8c）。
+ *     该正则只被 `.test()` 消费（parsePlan 的 urgent 判定），消费式前缀的
+ *     布尔结果与 lookbehind 完全等价。
+ *
+ *  偏离上游二处：① 前界去 lookbehind（见上）；② 对触发词做正则转义 ——
+ *  上游把设置值直接塞进 re-pattern，触发词含 `(` / `+` 时会抛异常连带整个
+ *  渲染挂掉；转义只影响这类病态输入。 */
 const urgentMatcherCache = new Map<string, RegExp>();
-function urgentMatcher(trigger: string): RegExp {
+/** 导出供测试钉「不含 lookbehind」—— 审核的机械检查正是扫 `(?<=`。
+ *  本函数不被任何渲染路径直接 import（parsePlan 内部用它），导出只为可测。 */
+export function urgentMatcher(trigger: string): RegExp {
   let re = urgentMatcherCache.get(trigger);
   if (!re) {
-    re = new RegExp(`(?<=^|\\s)${trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=$|\\s)`);
+    const escaped = trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    re = new RegExp(`(?:^|\\s)${escaped}(?=$|\\s)`);
     urgentMatcherCache.set(trigger, re);
   }
   return re;

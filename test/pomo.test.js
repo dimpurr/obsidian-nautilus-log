@@ -179,6 +179,20 @@ test("click start → count-up elapsed rises with each tick", (t) => {
   handle.destroy();
 });
 
+test("🔴 显隐走 CSS 类（is-hidden），不写内联 display（回退即红）", (t) => {
+  const { container, handle } = setup(t);
+  const startBtn = container.querySelector(selectors.start);
+  const running = container.querySelector(selectors.running);
+
+  // idle：start 可见，running 隐藏。两类元素都不许有内联 display。
+  assert.equal(startBtn.style.display, "", "可见元素不留内联 display");
+  assert.equal(running.style.display, "", "隐藏元素同样不写内联 display（社区审核禁令）");
+  assert.ok(running.classList.contains("is-hidden"), "隐藏 = 带 is-hidden 类");
+  assert.ok(!startBtn.classList.contains("is-hidden"), "可见 = 不带 is-hidden 类");
+
+  handle.destroy();
+});
+
 test("past threshold → is-overdue added and the count KEEPS rising", (t) => {
   const { container, clock, handle } = setup(t, {
     snapshot: (now) => ({ standalonePomodoro: { startedAt: now - 50 * 60 * 1000 } }),

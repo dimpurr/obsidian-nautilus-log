@@ -78,6 +78,23 @@ function stub(){ const s={ setValue(){return s;}, setPlaceholder(){return s;},
 
 function setIcon(el, name){ if (el && el.setAttribute) el.setAttribute('data-icon', name); }
 
+/** Obsidian 的 normalizePath：反斜杠→正斜杠，折叠重复斜杠，剥 `.` / 解析 `..`，
+ *  去尾部斜杠。sidebar.ts 用它清洗用户配置（folder + format）拼出的日记路径，
+ *  mock 必须与真身同构，否则「文件夹名带反斜杠」的测试会在夹具里假绿。 */
+function normalizePath(p){
+  p = String(p ?? '').replace(/\\/g, '/');
+  const parts = p.split('/');
+  const normalized = [];
+  for (const part of parts) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') {
+      if (normalized.length > 0 && normalized[normalized.length - 1] !== '..') normalized.pop();
+      else normalized.push(part);
+    } else normalized.push(part);
+  }
+  return normalized.join('/');
+}
+
 module.exports = { Plugin, PluginSettingTab, ItemView, MarkdownRenderChild,
-  Notice, TFile, TFolder, WorkspaceLeaf, Setting, setIcon,
+  Notice, TFile, TFolder, WorkspaceLeaf, Setting, setIcon, normalizePath,
   MarkdownRenderer: { render: async()=>{}, renderMarkdown: async()=>{} } };

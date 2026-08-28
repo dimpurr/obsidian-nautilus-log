@@ -1521,3 +1521,20 @@ button.nautilus-log-exec-plan-heading:hover { color: var(--nautilus-log-text-mai
   font-variant-numeric: tabular-nums;
 }
 .nautilus-log-exec-review-actual { color: var(--nautilus-log-text-main); }
+
+/* ================================================================
+   社区审核合规 · 内联 display 禁令（官方指南：不用 el.style.display =，用 CSS 类）
+   ================================================================ */
+
+/* 折叠骨架：被临时藏起来的兄弟节点。挂这个类的元素一律不显示。
+ * !important 复刻原先内联 `display:none` 的强制语义 —— 压得过
+ * `.nautilus-log-header{display:grid}` 等作者规则。 */
+.nautilus-log-collapsed-hidden { display: none !important; }
+
+/* 悬停提示的显隐。visibility 是测量协议（PROGRESS.md），不属于这里。 */
+.nautilus-log-tooltip--hidden { display: none; }
+
+/* 独立番茄钟的三个控件。`hidden` 属性的 UA 样式会输给作者 display 规则，
+ * 所以效果交给这个类；`.nautilus-log-timing__pomo` 前缀保证不撞 Obsidian
+ * 自带的 `.is-hidden`。 */
+.nautilus-log-timing__pomo .is-hidden { display: none !important; }

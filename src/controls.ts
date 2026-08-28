@@ -61,7 +61,21 @@ const STOP_PLAYBACK_LABEL: Record<string, string> = {
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-function svgIcon(inner: string, size = 16): Element {
+/** 一个 SVG 子元素的规格。图标走 DOM API（createElementNS）构造，**不写
+ *  `el.innerHTML =`** —— 社区插件审核指南把 innerHTML 列在 Security 下，
+ *  即使这里拼的是静态图标 path、不含用户输入，机械审核也会命中。 */
+interface SvgChildSpec {
+  tag: string;
+  attrs: Record<string, string>;
+}
+
+function svgChild(spec: SvgChildSpec): Element {
+  const el = document.createElementNS(SVG_NS, spec.tag);
+  for (const [key, value] of Object.entries(spec.attrs)) el.setAttribute(key, value);
+  return el;
+}
+
+function svgIcon(children: SvgChildSpec[], size = 16): Element {
   const svg = document.createElementNS(SVG_NS, "svg");
   svg.setAttribute("width", String(size));
   svg.setAttribute("height", String(size));
@@ -72,30 +86,36 @@ function svgIcon(inner: string, size = 16): Element {
   svg.setAttribute("stroke-linecap", "round");
   svg.setAttribute("stroke-linejoin", "round");
   svg.setAttribute("aria-hidden", "true");
-  svg.innerHTML = inner;
+  for (const child of children) svg.appendChild(svgChild(child));
   return svg;
 }
 
-const ICON_EYE =
-  '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>' +
-  '<circle cx="12" cy="12" r="3"></circle>';
-const ICON_EYE_OFF =
-  '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 ' +
-  '0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1 ' +
-  '-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>' +
-  '<line x1="1" y1="1" x2="23" y2="23"></line>';
-const ICON_PLAY = '<polygon points="5 3 19 12 5 21 5 3"></polygon>';
-const ICON_STOP = '<rect x="5" y="5" width="14" height="14" rx="2"></rect>';
+const ICON_EYE: SvgChildSpec[] = [
+  { tag: "path", attrs: { d: "M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" } },
+  { tag: "circle", attrs: { cx: "12", cy: "12", r: "3" } },
+];
+const ICON_EYE_OFF: SvgChildSpec[] = [
+  { tag: "path", attrs: { d: "M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1 -2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" } },
+  { tag: "line", attrs: { x1: "1", y1: "1", x2: "23", y2: "23" } },
+];
+const ICON_PLAY: SvgChildSpec[] = [
+  { tag: "polygon", attrs: { points: "5 3 19 12 5 21 5 3" } },
+];
+const ICON_STOP: SvgChildSpec[] = [
+  { tag: "rect", attrs: { x: "5", y: "5", width: "14", height: "14", rx: "2" } },
+];
 /* Expanded -> chevron up ("click to collapse"); collapsed -> chevron down
  * ("click to expand").  Mirrors upstream collapse-button. */
-const ICON_COLLAPSE =
-  '<rect x="3" y="4" width="18" height="16" rx="2.5"></rect>' +
-  '<path d="M3 9h18"></path>' +
-  '<path d="m9 16 3-3 3 3"></path>';
-const ICON_EXPAND =
-  '<rect x="3" y="4" width="18" height="16" rx="2.5"></rect>' +
-  '<path d="M3 9h18"></path>' +
-  '<path d="m9 13 3 3 3-3"></path>';
+const ICON_COLLAPSE: SvgChildSpec[] = [
+  { tag: "rect", attrs: { x: "3", y: "4", width: "18", height: "16", rx: "2.5" } },
+  { tag: "path", attrs: { d: "M3 9h18" } },
+  { tag: "path", attrs: { d: "m9 16 3-3 3 3" } },
+];
+const ICON_EXPAND: SvgChildSpec[] = [
+  { tag: "rect", attrs: { x: "3", y: "4", width: "18", height: "16", rx: "2.5" } },
+  { tag: "path", attrs: { d: "M3 9h18" } },
+  { tag: "path", attrs: { d: "m9 13 3 3 3-3" } },
+];
 
 /* ------------------------------------------------------------------ */
 /* localStorage persistence (guarded — storage can throw in some        */
@@ -306,14 +326,16 @@ export function renderChartControls(
   /* 骨架同步（认证审计 C2-023 / C2-024 / C2-057）                        */
   /* ------------------------------------------------------------------ */
 
-  /** 被本组件临时藏起来的兄弟节点（折叠态）。展开时逐一还原。 */
+  /** 被本组件临时藏起来的兄弟节点（折叠态）。展开时逐一还原。
+   *  🔴 藏/显走 `nautilus-log-collapsed-hidden` CSS 类（styles.css），不写
+   *  内联 display —— 社区审核指南。restore 只摘类，元素的自然 display 由
+   *  它自己的类规则决定，因此不再需要 data-nl-prev-display 那份快照。 */
   const hidden: HTMLElement[] = [];
 
   function showHiddenSiblings(): void {
     while (hidden.length > 0) {
       const node = hidden.pop();
-      if (node) node.style.display = node.dataset.nlPrevDisplay || "";
-      if (node) delete node.dataset.nlPrevDisplay;
+      if (node) node.classList.remove("nautilus-log-collapsed-hidden");
     }
   }
 
@@ -355,9 +377,8 @@ export function renderChartControls(
     // 🔴 不用 `instanceof HTMLElement` —— 测试里只往 globalThis 注入了
     //    window/document，构造器本身不在全局，会直接 ReferenceError。
     for (const child of Array.from(container.children) as HTMLElement[]) {
-      if (child === root || !child.style || !child.dataset) continue;
-      child.dataset.nlPrevDisplay = child.style.display;
-      child.style.display = "none";
+      if (child === root || !child.classList) continue;
+      child.classList.add("nautilus-log-collapsed-hidden");
       hidden.push(child);
     }
   }

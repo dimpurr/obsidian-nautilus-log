@@ -17,7 +17,7 @@
  * Upstream baseline: 404KSG/roam-nautilus-log @ 7bf19a1d
  */
 
-import { ItemView, TFile, type App, type WorkspaceLeaf } from 'obsidian';
+import { ItemView, TFile, normalizePath, type App, type WorkspaceLeaf } from 'obsidian';
 import { renderSpiral, type SpiralHandle } from './spiral';
 import { renderCapacityHeader, enableContainerQueries } from './header';
 import { renderChartControls, type ChartControlState } from './controls';
@@ -123,7 +123,10 @@ function formatDate(format: string): string {
 }
 
 /** 解析今天的 Daily Note 路径。优先用内置 Daily Notes 插件的 format/folder；
- *  读不到就退回根目录的 `YYYY-MM-DD.md`，并把 viaPlugin 置 false 供 UI 提示。 */
+ *  读不到就退回根目录的 `YYYY-MM-DD.md`，并把 viaPlugin 置 false 供 UI 提示。
+ *  🔴 官方指南要求 *Use normalizePath() to clean up user-defined paths* ——
+ *  folder/format 都是用户配置，拼出的路径要过一道 `normalizePath`（吞掉
+ *  反斜杠 / 重复斜杠 / `.` 段，Obsidian 里文件夹名与日期格式都可能带）。 */
 export function resolveDailyNoteInfo(app: App): DailyNoteInfo {
   const opts = readDailyNotesOptions(app);
   // 🔴 只要拿到 folder 或 format 之一就算配置有效。
@@ -133,10 +136,11 @@ export function resolveDailyNoteInfo(app: App): DailyNoteInfo {
   if (opts && (opts.folder || opts.format)) {
     const folder = opts.folder || '';
     const dateStr = formatDate(opts.format || 'YYYY-MM-DD');   // format 缺省即 Obsidian 默认
-    return { path: folder ? `${folder}/${dateStr}.md` : `${dateStr}.md`, viaPlugin: true };
+    const path = folder ? `${folder}/${dateStr}.md` : `${dateStr}.md`;
+    return { path: normalizePath(path), viaPlugin: true };
   }
   const dateStr = formatDate('YYYY-MM-DD');
-  return { path: `${dateStr}.md`, viaPlugin: false };
+  return { path: normalizePath(`${dateStr}.md`), viaPlugin: false };
 }
 
 /** 找出文本里【第一个】nautilus 代码块，返回块内配置源码 + 闭围栏的行号。
