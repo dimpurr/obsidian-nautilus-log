@@ -231,12 +231,16 @@ minutes 会变成忘关告警态（`is-forgotten`）。
 
 命令面板里注册了 **8 条**命令。前 5 条始终可用：
 
+> 命令名跟随「语言」设置。下表按中文列出，括号里是英文名。
+> ⚠️ 命令名与 ribbon 提示是在插件加载时注册的，**改完语言要重载 Obsidian 才会更新**；
+> 其余界面文案立即生效。
+
 | 命令 | 作用 |
 | --- | --- |
-| **Open Nautilus Log sidebar / 打开侧栏** | 打开右侧栏视图（与 ribbon 的指南针图标同义） |
-| **Diagnose execution layer / 诊断执行层** | 把执行层这条链的每一环取值报成一条 Notice：注入路径 / 文件是否存在 / 同步缓存命中数 / 围栏正则是否命中。面板说「今天没有 Nautilus Log」时按它，别猜 |
-| **Complete task with timestamp / 勾选并打完成时间戳** | 勾选光标所在任务行并追加 `dHH:MM` 完成锚点。默认不绑快捷键，可在 设置 → 快捷键 自行绑定。非任务行、或已有锚点时**静默不动** |
-| **Create Nautilus Log test note / 创建 Nautilus Log 测试笔记** | 生成一份带测试场景的笔记（同名已存在就加序号，绝不覆盖） |
+| **打开侧栏（Open sidebar）** | 打开右侧栏视图（与 ribbon 的指南针图标同义） |
+| **诊断执行层（Diagnose execution layer）** | 把执行层这条链的每一环取值报成一条 Notice：注入路径 / 文件是否存在 / 同步缓存命中数 / 围栏正则是否命中。面板说「今天没有 Nautilus Log」时按它，别猜 |
+| **勾选任务并记录完成时间（Complete task with timestamp）** | 勾选光标所在任务行并追加 `dHH:MM` 完成锚点。默认不绑快捷键，可在 设置 → 快捷键 自行绑定。非任务行、或已有锚点时**静默不动** |
+| **创建测试笔记（Create test note）** | 生成一份带测试场景的笔记（同名已存在就加序号，绝不覆盖） |
 | **Open Nautilus Log settings** | 打开设置 |
 
 后 3 条是上游原有的执行层命令，**只在总开关 Actual time tracking 打开时出现**
@@ -244,9 +248,9 @@ minutes 会变成忘关告警态（`is-forgotten`）。
 
 | 命令 | 作用 |
 | --- | --- |
-| **Focus current block on the Timing Line / 聚焦当前行到 Timing Line** | 把光标所在行送上 Timing Line（Clock In） |
-| **Clock out Timing Line / 结束当前计时** | 合上当前 CLOCK |
-| **Locate Primary Plan / 定位今天的主计划** | 跳到今天 Daily Note 的第一个 nautilus 块 |
+| **将当前行聚焦到 Timing Line（Focus current block on the Timing Line）** | 把光标所在行送上 Timing Line（Clock In） |
+| **结束当前计时（Clock out Timing Line）** | 合上当前 CLOCK |
+| **定位今天的主计划（Locate Primary Plan）** | 跳到今天 Daily Note 的第一个 nautilus 块 |
 
 **TODO 行右键菜单**：总开关打开后，在编辑器里右键一个任务行会多出 **Clock In** /
 **Clock Out** 两项（是否出现由当前行的状态决定）。总开关关着时右键菜单里也一项都
