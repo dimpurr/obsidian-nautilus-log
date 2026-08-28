@@ -11,7 +11,7 @@
 | | |
 |---|---|
 | 上游 | [`404KSG/roam-nautilus-log`](https://github.com/404KSG/roam-nautilus-log) |
-| vendor 基线 | `86b97c0`（2026-08-25 升级，原基线 `7bf19a1d`） |
+| vendor 基线 | `14e8d07`（2026-08-28 升级，原基线 `86b97c0`，初基线 `7bf19a1d`） |
 | 本移植版本 | `0.1.0+` |
 | 已知欠账 | [`parity-audit-2026-08-25.md`](parity-audit-2026-08-25.md) |
 
@@ -150,20 +150,41 @@ npm test
 
 ## 3. 数据层契约（上游 `timing-roam.js` 的 16 个函数）
 
-`timing-runtime.js` 从数据层 import 固定的 **16** 个函数（⚠️ 本节曾写「17 个」，与下面自己列的名单数不上 —— 名单一直是对的，数字错了；认证审计 P1-030），实现它们即可让 runtime + topbar 直接跑：
+`timing-runtime.js` 从数据层 import 固定的 **16** 个函数（⚠️ 本节曾写「17 个」，与下面自己列的名单数不上 —— 名单一直是对的，数字错了；认证审计 P1-030），实现它们即可让 runtime + topbar 直接跑。
 
-```
-readAllEntries · readEntriesForTaskUids · readBlockString · readPrimaryPlan ·
-createRunningClock · closeClock · deleteClock · updateGraphBlock · completeTask ·
-openTaskInMainWindow · openTaskInRightSidebar · frontBlockInRightSidebar ·
-openPrimaryPlan · warmRightSidebarWindowCache · legacyLogbookIsRunning · showToast
+**上游 HEAD（`14e8d07`）16 个函数完整签名**：
+
+```javascript
+readPrimaryPlan(date = new Date(), fallbackMinutes = 15)
+readAllEntries()
+readEntriesForTaskUids(taskUids = [])
+readBlockString(uid)
+createRunningClock(taskUid, now, knownTaskString = '')
+closeClock(entry, now)
+deleteClock(entry)
+updateGraphBlock(uid, string)
+completeTask(taskUid, statusOwnerUid = taskUid)           // 🔴 HEAD 签名变更
+openPrimaryPlan(planUid, { sidebar = false } = {})
+openTaskInMainWindow(taskUid)
+warmRightSidebarWindowCache()
+frontBlockInRightSidebar(taskUid)
+openTaskInRightSidebar(taskUid)
+legacyLogbookIsRunning()
+showToast(message, intent = 'warning')
 ```
 
 对应实现全在 `src/timing-obsidian.ts`。
 
-🔴 **「16 个」只是 runtime 那条线**。上游 `timing-commands.js` 还额外 import 了 **`getFocusedBlockUid`**。本移植的三条执行层命令是**自己重写**的（`main.ts registerTimingCommands`，靠 `editor.getCursor()` 直接拿行号），所以不需要它；但如果重做移植时想**原样复用上游的 `timing-commands.js`**，就得再实现这一个 —— 只按「固定 16 个」实现会卡住（认证审计 P1-034）。
+🔴 **「16 个」只是老 runtime 那条线，HEAD 新增了 5 个数据层导出**：
+- `pageTitleFor(date = new Date())` 与 `projectPrimaryPlanPull(pullSnapshot, previous = null, fallbackMinutes = 15)`：**被 vendor 引擎（`timing-runtime.js`）import**（必须实现）。
+- `updateGraphBlockOpen(uid, open)` / `moveGraphBlock({ uid, parentUid, order })` / `showActionToast({ message, actionLabel, onAction, intent = 'success' } = {})`：只被 `tidy-plan.js` 用（我们不移植 Tidy，见 §D28，不需要实现）。
+- （另外上游 `timing-commands.js` 还额外 import 了 **`getFocusedBlockUid()`**。本移植的三条执行层命令是**自己重写**的，靠 `editor.getCursor()` 直接拿行号，所以不需要它；但若想原样复用上游命令层则必须实现；认证审计 P1-034）。
 
-🔴 **签名会随上游变**。`openPrimaryPlan(planUid)` 在上游 `d807ea4` 变成 `(planUid, { sidebar })` —— 升级时必须核对这 16 个函数的调用签名，否则新参数被静默丢弃（不报错、不炸测试）。⚠️ §7 曾把这条写成「第 6 号检测器」，但**那个检测器从来没有实现过**；实际的第 6 号是怪癖钉子。见 §7 的订正。
+🔴 **签名会随上游变，且同一类事故已发生第二次**：
+1. 第一次：`openPrimaryPlan(planUid)` 在上游 `d807ea4` 变成 `(planUid, { sidebar = false } = {})`；
+2. 第二次：`completeTask(taskUid)` 在上游 `14e8d07` 变成 `(taskUid, statusOwnerUid = taskUid)`。
+
+**新参数带默认值 ⇒ JS 静默丢实参 ⇒ 不报错不炸测试**。这就是为什么升级必须严格核对签名，且本轮增加了第 9 号检测器（机械比对 vendor import 面 vs 适配层导出面，防范接口悬空；详见 §7）。
 
 ---
 
@@ -311,11 +332,14 @@ openPrimaryPlan · warmRightSidebarWindowCache · legacyLogbookIsRunning · show
 | **上游** | HEAD 起支持 `((uid))` 引用当可复用任务：裸引用继承源 TODO/DONE、本地时长覆盖源时长、外层显式标记可重开已完成的源 |
 | **本移植** | **不接线**。`resolveTaskInstance` 在不传 `references` / `readString` 时会**优雅降级到纯本地解析**，整套引用机器变成惰性代码 |
 | **为什么** | Roam 块引用语义无直接对应。Obsidian 的近似物是 `![[笔记#^块id]]`，语义与生命周期都不同 |
+| **连带** | `timing-core.js:isStructuralBlock` 只被 `resolveTaskInstance` 内部调用，随本决策一起变惰性（audit baseline 已登记，理由见 §D28 附表） |
 | **可能的未来** | 「可复用任务 + 每日实例」在 Obsidian 里说得通（例行任务写在别处、每天引用一次）。但这是**新特性立项**，不是移植遗漏 |
 
 ### §D11 ⛔ 不移植：`plan-watch.js`
 
 上游 `bc60f9b` / `2a8b525` 引入的 281 行 Roam Pull Watch 三层去重 watcher。Obsidian 无等价物；本移植用 `metadataCache.on('changed')` + 60s tick 覆盖文件变更，另**补了上游没有的**「设置变更立即广播重绘」（上游是 `index.js` 里 dispatch 自定义事件）。runtime 的 `watchPlan` 参数保留不传。
+
+**执行层的事件驱动刷新（2026-08-28 补充）**：上游靠 Pull Watch 在编辑日记的当下把最新 Pull 送进 runtime；不移植它之后，执行层只能靠 runtime 内部轮询刷新（基线 15s / 上游 HEAD 起 `RECOVERY_REFRESH_INTERVAL_MS = 5min`）—— 用户手动改今天的日记后面板最多要等 5 分钟才反映。本移植在 `timing-obsidian.ts` 把 `metadataCache 'changed'` 接到 `runtime.requestRefresh()`：今天的 Daily Note 一变就刷（复用 `dailyNotePath` 那条链判断「是不是今天那篇」），连续打字由 150ms 防抖合并成一次，本插件自己的写回由 `selfWritePaths` 闸门滤掉（runtime 内部已自刷，不许起「写回 → 事件 → 刷新 → 写回」的循环）。钩子经 `setDailyNoteRefreshCallback` 接线，只跟着执行层总开关注册/注销，插件卸载时随 `disposeTimingObsidian` 一并摘掉。
 
 ### §D12 ⛔ 不移植：`prefix-str` 设置项
 
@@ -478,6 +502,38 @@ vendored runtime 的数据结构里有几个字段在 Obsidian 没有对应概�
 
 审计依据：社区插件库自动审核 Recommendation「Local Storage」；代码注释引用见 `src/controls.ts` 存储段 + `PROGRESS.md`。
 
+### §D28 ⛔ 不移植：Tidy（计划整理）
+
+| | |
+|---|---|
+| **上游** | 2026-08-26 引入 `src/tidy-plan.js`，一键把已结算事项稳定前置（并折叠）、未结算事项按原相对顺序后置，支持通知内一键撤销（Undo）。写回依靠 Roam 图数据库的 `moveBlock` / `updateBlock` API |
+| **本移植** | **有意不移植**。不引入 `tidy-plan.js`，不提供 Tidy 整理按钮与撤销链路 |
+| **决策依据** | 见下方 4 条核心理由（按决策权重排序） |
+
+**决策依据（按顺序）**：
+
+1. **读侧收益我们已经有了** —— Tidy 解决「列表乱、看不清还剩什么」，而我们的 Plan 视图本来就只显示未完成的直接子任务（README 的执行层三视图表、`src/exec-panel.ts`），**而且一个字节都没碰用户的文件**。
+2. **写侧成本恰好是最贵的那种** —— 它要搬多行块（任务 + 缩进子项 + `LOGBOOK::` 抽屉 + 多条 CLOCK），而我们的乐观锁（`LineChange` 三种 kind）**严格是为单行改动设计的**。循环调单行写回会：行号漂移、标题与抽屉扯断、状态机读到半重排中间态、同名行触发歧义拒写。⇒ 必须新造一套「计划正文区间级原子写回」。**批量重排用户 Markdown 是我们能加的最危险的操作**，而数据安全正是本移植的核心取舍。
+3. **形态不同，这不是缺失是设计的另一面** —— Roam 里计划活在大纲，Tidy 是唯一重排手段；我们的计划是**普通 Markdown**（§D4 的核心选择，"stays editable, reorderable"），用户本来就能自己拖、自己折叠。选了「文件归用户所有」，就不该反过来批量重写它。
+4. **我们模型里行序即优先级** —— 批量重排在我们这里语义比上游重。
+
+🔴 **逃生口（将来若要做的硬纪律）**：
+- 如果将来真要做，**先单独造那套区间级原子写回、单独测透，再接 Tidy 逻辑**，绝对不要把两件事捆在一个 PR 里。
+- 另外 `log-core.js` 里的 `stableTidyOrder` / `childOrderMoves` 是纯函数、随 vendor 升级已经在手上了。
+- 🔴 **不要 vendor `tidy-plan.js`**：它硬编码了 Roam 数据层的 5 个 import（`moveGraphBlock` / `readChildren` / `showActionToast` / `showToast` / `updateGraphBlockOpen`），强行适配等于在沙地上建塔。
+
+**随 vendor 一起搬进来的孤儿符号（会绊到检测器，已登记豁免）**
+
+`scripts/audit-baseline.json`（理由各见其 `__why`）：
+
+| 残留 | 位置 | 为什么豁免 |
+|---|---|---|
+| `log-core.js:tidy`（文案 key） | `UI_COPY` | 孤儿文案：tidy 动作未接，渲染路径不存在 |
+| `log-core.js:stableTidyOrder` / `childOrderMoves` | log-core 导出 | 只被 `tidy-plan.js` 调用，本移植无该模块 |
+| `timing-core.js:isStructuralBlock` | timing-core 导出 | 只被 `resolveTaskInstance`（§D10 未接线）内部调用，与 `actualMinutesToday`（baseline 已有条目）同类 |
+
+🔴 每次升级都会再把这三类符号带进来。**如果哪次升级里 tidy 变成了主渲染路径，本条决策要重新评估。**
+
 ## 5. 挂载面重排
 
 | 上游挂载面 | 上游插入方式 | 本移植 | 位置 |
@@ -538,10 +594,11 @@ vendored runtime 的数据结构里有几个字段在 Obsidian 没有对应概�
 | 6 | **怪癖钉子** | [`test/reality-quirks.md`](../test/reality-quirks.md) 里每条 `## RQ-n` 都必须有一行「钉住它的测试」，且那个文件真的存在、真的含那个测试名。**没有豁免** —— 怪癖表只许变长 | 断链即红 |
 | 7 | **测试必须接触被测代码** | 每个 `test/*.test.js` 至少引用一次 `src/`（`require` / esbuild `entryPoints` / `readFileSync` 皆可） | 🔴 `test/locate.test.js`：**把 `main.ts` 的定位算法在测试文件里重写了一遍，然后测那份重写** —— 100% 通过，而被测代码一行都没跑到 |
 | 8 | **平行正则漂移** | `src/parser.ts` 逐字抄 `src/vendor/timing-core.js` 的两条正则（`DONE_AT_RE`↔`DONE_TIME_RE`、`PROGRESS_RE`↔`PROGRESS_RE`）必须逐字一致 | 🔴 认证审计 T1-127：上游不导出 `doneTime`/`durationTokens`/`removeTaskState`，本移植只能抄正则。上游一改正则，复制件不跟着动、测试也不红 ⇒ 静默漂移。检测器把两侧 source 逐字比对，漂了直接红（`test/detector-mapping.test.js` 两条 T1-127 用例钉住） |
+| 9 | **适配层导出面** | `src/vendor/*.js` 中从 `'./timing-roam'` 导入的所有符号必须在 `src/timing-obsidian.ts` 中被导出（支持多行 import / 别名 / export 各种语法，反向超集不报） | 🔴 2026-08-28 升级到 `14e8d07` 时靠人肉核对才发现新增了 `pageTitleFor` / `projectPrimaryPlanPull`。本检测器把「跟上游漂移」从一次人肉调研，变成构建期的一条红灯（`test/detector-mapping.test.js` D-009 钉住） |
 
-> 🔴 **「17 函数签名检测器」不在表里，因为它不存在。** 数据层签名的核对方式见 §3 的说明（升级时人工核对 16 个函数 + `getFocusedBlockUid`）。要么有人把它实现出来再加回本表，要么就别在文档里假装有这道保障 —— **假保障比没保障更危险**（同 §8 的结论）。
+> 🔴 **「17 函数签名检测器」不在表里，因为它不存在。** 数据层签名的核对方式见 §3 的说明（升级时人工核对 16 个函数 + `getFocusedBlockUid`）。第 9 号检测器负责机械抓出「新增了 import 但适配层未导出」，参数签名的语义级核对仍需人工复核。
 
-> ⭐ 前 3 个检测器之所以有效，是因为本移植**CSS 与 i18n 是整份搬的、代码是逐个写的**。两者之差就是一张现成的欠账清单。第 7 个是另一类：它不比较两份东西，只是把「测试有没有碰到产品代码」这件本该不言自明的事变成机械判定。
+> ⭐ 前 3 个检测器之所以有效，是因为本移植**CSS 与 i18n 是整份搬的、代码是逐个写的**。两者之差就是一张现成的欠账清单。第 7 个是另一类：它不比较两份东西，只是把「测试有没有碰到产品代码」这件本该不言自明的事变成机械判定。第 9 个则把 vendor import 与适配层 export 的接口悬空变为构建期红灯。
 
 **baseline 纪律**：已知欠账走 [`scripts/audit-baseline.json`](../scripts/audit-baseline.json)。**新增**的孤儿让退出码非 0，存量不会；修掉一条就从 baseline 里删掉 —— **baseline 只许变短，不许变长**（脚本会把「已修好却还留在 baseline 里」的条目也报成回归）。`__why` 里每条豁免**必须给出真实理由**；给不出来的就标 🔴 真欠账，不许用「待评估」占位。
 
@@ -672,9 +729,13 @@ MIT，版权行三代未改，本移植同样不改。
 处理方式是在中英 README 都加一节「它会碰你 vault 里的什么」，把读 / 写 / 存三件事说全，
 包括「这个插件里没有任何联网代码」。
 
-⚠️ 上游 2026-08-25 的 PR #1434 做过这方面的收窄
-（"read CLOCK data only from tasks relevant to the active Plan and Review"），
-跟随 vendor 基线时会一并拿到。
+⚠️ **订正（2026-08-28 升级实测）**：本节此前写上游 PR #1434「跟随 vendor 基线时会一并拿到」。**实测：那四条声称里「read CLOCK only from relevant tasks」在基线 `86b97c0` 里就有了**，我们早就拿到（`readEntriesForTaskUids` 按 uid 的 path 限定扫描）。真正新加的是「一秒 tick 不碰图」和「recovery 挪 idle lane」，都是**稳态刷新**的优化。
+
+而我们的全库扫描两个入口上游**一个都没消掉**：
+- `primeTimingCache`（`timing-obsidian.ts` 约 147 行）是**本移植自己的设计**（§D6 同步读缓存），上游 Roam 没有等价物
+- `readAllEntries`（约 556 行）—— **上游 HEAD 自己也还在 `initialize()` 里调**（`timing-runtime.js:578`）
+
+根因是形态差异：上游是图数据库有 pull API，我们是文件系统。**要收窄得我们自己设计，不能指望跟随基线白拿。**
 
 ### §P5 · 发布链路
 
