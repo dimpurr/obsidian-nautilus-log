@@ -26,6 +26,10 @@
   --nautilus-log-past-event-fill: rgba(252, 194, 0, 0.24);
   --nautilus-log-slot-hover: rgba(86, 101, 116, 0.08);
   --nautilus-log-slot-stroke: rgba(86, 101, 116, 0.5);
+  /* 可点击标题链接色 —— 此前从未定义，永远 fallback 到 #137cbd（Blueprint 深蓝），
+     深色主题下对比度约 2.6:1。映射到 Obsidian 官方链接/强调色，随主题自动切换。
+     vendor 基线 upstream-extension.css:1366,1526 也引用同名变量，定义在此一并覆盖。 */
+  --nautilus-log-page-link: var(--link-color, var(--text-accent));
 }
 
 .theme-dark {
@@ -50,6 +54,8 @@
   --nautilus-log-past-event-fill: rgba(242, 193, 78, 0.23);
   --nautilus-log-slot-hover: rgba(199, 207, 214, 0.09);
   --nautilus-log-slot-stroke: rgba(199, 207, 214, 0.54);
+  /* 与 :root 同一映射；--link-color/--text-accent 本身就是主题自适应值 */
+  --nautilus-log-page-link: var(--link-color, var(--text-accent));
 }
 
 .nautilus-log-container {
@@ -417,7 +423,10 @@
 .nautilus-log-event-slice-group--interactive:hover .nautilus-log-slice,
 .nautilus-log-event-slice-group--interactive:focus .nautilus-log-slice {
   filter: brightness(1.08) drop-shadow(0 2px 6px rgba(0, 0, 0, 0.15));
-  stroke: rgba(255, 255, 255, 0.7);
+  /* 描边用 --text-normal：它定义上就是「与当前主题背景对比最强的文字色」，
+     浅色主题=深描边、深色主题=浅描边，对彩色切片和页面背景都可见。
+     原 rgba(255,255,255,0.7) 在浅色主题下与白底融为一体；这是 :focus 的唯一视觉反馈，不许丢。 */
+  stroke: var(--text-normal);
   stroke-width: 1.5px;
 }
 
@@ -1142,11 +1151,13 @@
   color: var(--nl-exec-text, #303744);
 }
 
-/* notice（runtime 推送的错误 / 提示） */
+/* notice（runtime 推送的错误 / 提示）—— warning 语义，随主题自动变色：
+   官方只有 --text-warning（文字色），没有 --background-modifier-warning，
+   故背景/描边用 color-mix 把 --text-warning 兑透明，深浅主题都是同一套琥珀色系。 */
 .nautilus-log-exec-notice {
-  background: rgba(206, 129, 31, 0.08);
-  border-bottom: 1px solid rgba(206, 129, 31, 0.17);
-  color: #9c5e0b;
+  background: color-mix(in srgb, var(--text-warning) 10%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--text-warning) 25%, transparent);
+  color: var(--text-warning);
   font-size: 12px;
   line-height: 1.45;
   padding: 8px 12px;
