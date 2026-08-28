@@ -8,15 +8,14 @@
 #   ② 执行层改成延后启动后，侧栏在那之前就渲染完了，执行区永远空着
 # 两个都是「跨模块的组合失效」，单元测试原理上看不见。
 #
-# 依赖：cua-driver（宿主侧 computer-use，见 DimCollabS knowledge/tools/Cua-Driver.md）
+# 依赖：cua-driver（宿主侧 computer-use）
 #      daemon 要活着：cua-driver status / cua-driver serve
 #
 # 用法：
 #   VAULT=~/path/to/vault scripts/smoke.sh              # 自动找 Obsidian 窗口
-#   VAULT=... WINDOW_TITLE='DimLifeS' scripts/smoke.sh  # 指定窗口
+#   VAULT=... WINDOW_TITLE='MyVault' scripts/smoke.sh   # 指定窗口
 #
-# 🔴 零写死 path：机器 / vault 特定值一律 env 注入（DimCollabS knowledge/README
-#    的「SOP 附带脚本」条例）。
+# 🔴 零写死 path：机器 / vault 特定值一律 env 注入。
 
 set -euo pipefail
 
