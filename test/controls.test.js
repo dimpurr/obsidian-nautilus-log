@@ -2,15 +2,23 @@
  * controls.test.js — chart control button bar (src/controls.ts).
  *
  * Runs in jsdom: bundle controls.ts with esbuild into a single CJS file, install
- * the jsdom window/document/localStorage globals, then drive the three buttons
- * and assert on the `onChange` snapshots.
+ * the jsdom window/document globals, then drive the three buttons and assert on
+ * the `onChange` snapshots.
+ *
+ * 2026-08-28（社区审核 Local Storage 项）：折叠态的持久化从 `window.localStorage`
+ * 换成 Obsidian 官方 device-local API（`app.loadLocalStorage` / `saveLocalStorage`），
+ * 以【注入】的方式交给组件 —— 测试用内存 Map 模拟存储缝，不再碰 jsdom 的
+ * localStorage。旧的 C2-054 用例断言从「jsdom localStorage」改成「注入的 store」。
  *
  * Covered:
  *   · Eye       -> onChange receives showDone flipped
- *   · Collapse  -> onChange receives collapsed flipped AND localStorage written
+ *   · Collapse  -> onChange receives collapsed flipped AND the injected storage
+ *                  is written; a rebuilt component reads the persisted value back
  *   · Play      -> playback starts at workdayStartMinutes and advances;
  *                  a second click stops and returns playback to null
  *   · destroy() -> the playback interval stops firing (fake clock)
+ *   · storage throwing (webviews) must never take the chart down
+ *   · grep guard: no localStorage / sessionStorage anywhere under src/**
  */
 
 "use strict";
@@ -39,7 +47,7 @@ new Function("module", "exports", "require", result.outputFiles[0].text)(
   moduleShim.exports,
   require,
 );
-const { renderChartControls } = moduleShim.exports;
+const { renderChartControls, collapsedStorageFromApp } = moduleShim.exports;
 
 /* ------------------------------------------------------------------ */
 /* Fixtures                                                            */
@@ -72,6 +80,16 @@ function makeFixture(overrides = {}) {
     ...overrides,
   };
   const storageKey = "nautilus-log:collapsed:v1:test-block";
+
+  // 🔴 存储现在是【注入】的（社区审核 Local Storage 项，2026-08-28）。
+  //    测试用内存 Map 模拟真实实现（app.loadLocalStorage/saveLocalStorage）；
+  //    collapsedStorageFromApp 那条用例单独钉工厂本身。
+  const store = new Map();
+  const storage = {
+    read: (key) => store.get(key) === true,
+    write: (key, value) => { store.set(key, value); },
+  };
+
   const calls = [];
   const handlers = {
     onChange(next) {
@@ -79,7 +97,7 @@ function makeFixture(overrides = {}) {
     },
   };
 
-  return { dom, container, opts, storageKey, calls, handlers };
+  return { dom, container, opts, storageKey, storage, store, calls, handlers };
 }
 
 function initialState(extra = {}) {
@@ -95,7 +113,7 @@ function buttonsOf(container) {
 /* ------------------------------------------------------------------ */
 
 test("点眼睛 -> onChange 收到 showDone 取反", () => {
-  const { container, opts, storageKey, calls, handlers } = makeFixture();
+  const { container, opts, storageKey, storage, calls, handlers } = makeFixture();
   const { destroy } = renderChartControls(
     container,
     initialState(),
@@ -103,6 +121,7 @@ test("点眼睛 -> onChange 收到 showDone 取反", () => {
     SETTINGS,
     opts,
     storageKey,
+    storage,
   );
 
   const [eye] = buttonsOf(container);
@@ -120,8 +139,8 @@ test("点眼睛 -> onChange 收到 showDone 取反", () => {
   destroy();
 });
 
-test("点折叠 -> onChange 收到 collapsed 取反，且 localStorage 写入", () => {
-  const { dom, container, opts, storageKey, calls, handlers } = makeFixture();
+test("点折叠 -> onChange 收到 collapsed 取反，且写入注入的存储", () => {
+  const { container, opts, storage, store, storageKey, calls, handlers } = makeFixture();
   const { destroy } = renderChartControls(
     container,
     initialState(),
@@ -129,6 +148,7 @@ test("点折叠 -> onChange 收到 collapsed 取反，且 localStorage 写入", 
     SETTINGS,
     opts,
     storageKey,
+    storage,
   );
 
   const [, , collapse] = buttonsOf(container);
@@ -136,26 +156,26 @@ test("点折叠 -> onChange 收到 collapsed 取反，且 localStorage 写入", 
   collapse.click();
   assert.equal(calls[calls.length - 1].collapsed, true, "collapsed 取反");
   assert.equal(
-    dom.window.localStorage.getItem(storageKey),
-    "true",
-    "折叠态写入 localStorage",
+    store.get(storageKey),
+    true,
+    "折叠态写入注入的存储（不再是 window.localStorage）",
   );
   assert.equal(collapse.getAttribute("aria-expanded"), "false", "aria-expanded 跟随状态");
 
   collapse.click();
   assert.equal(calls[calls.length - 1].collapsed, false, "再点一次展开");
   assert.equal(
-    dom.window.localStorage.getItem(storageKey),
-    "false",
-    "展开态也写入 localStorage",
+    store.get(storageKey),
+    false,
+    "展开态也写入注入的存储",
   );
 
   destroy();
 });
 
-test("localStorage 已记住折叠 -> 首次渲染即用记住的值并同步给 onChange", () => {
-  const { dom, container, opts, storageKey, calls, handlers } = makeFixture();
-  dom.window.localStorage.setItem(storageKey, "true");
+test("注入的存储已记住折叠 -> 首次渲染即用记住的值并同步给 onChange", () => {
+  const { container, opts, storage, store, storageKey, calls, handlers } = makeFixture();
+  store.set(storageKey, true);
 
   const { destroy } = renderChartControls(
     container,
@@ -164,10 +184,11 @@ test("localStorage 已记住折叠 -> 首次渲染即用记住的值并同步给
     SETTINGS,
     opts,
     storageKey,
+    storage,
   );
 
   assert.equal(calls.length, 1, "渲染时同步一次真实的折叠态");
-  assert.equal(calls[0].collapsed, true, "折叠态来自 localStorage");
+  assert.equal(calls[0].collapsed, true, "折叠态来自注入的存储");
 
   // 折叠态下按钮应为「展开」文案 + chevron-down
   const [, , collapse] = buttonsOf(container);
@@ -178,7 +199,7 @@ test("localStorage 已记住折叠 -> 首次渲染即用记住的值并同步给
 
 test("点播放 -> playback 从 workdayStart 推进；再点停止 -> 回到 null", (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
-  const { container, opts, storageKey, calls, handlers } = makeFixture();
+  const { container, opts, storageKey, storage, calls, handlers } = makeFixture();
   const { destroy } = renderChartControls(
     container,
     initialState(),
@@ -186,6 +207,7 @@ test("点播放 -> playback 从 workdayStart 推进；再点停止 -> 回到 nul
     SETTINGS,
     opts,
     storageKey,
+    storage,
   );
 
   const [, play] = buttonsOf(container);
@@ -213,9 +235,9 @@ test("点播放 -> playback 从 workdayStart 推进；再点停止 -> 回到 nul
 
 test("本组件不自行停止回放（自动停止归宿主）", (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
-  const { container, opts, storageKey, calls, handlers } = makeFixture();
+  const { container, opts, storageKey, storage, calls, handlers } = makeFixture();
   const { destroy } = renderChartControls(
-    container, initialState(), handlers, SETTINGS, opts, storageKey,
+    container, initialState(), handlers, SETTINGS, opts, storageKey, storage,
   );
   const [, play] = buttonsOf(container);
   play.click();
@@ -228,7 +250,7 @@ test("本组件不自行停止回放（自动停止归宿主）", (t) => {
 
 test("destroy() 之后 interval 不再触发", (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
-  const { container, opts, storageKey, calls, handlers } = makeFixture();
+  const { container, opts, storageKey, storage, calls, handlers } = makeFixture();
   const { destroy } = renderChartControls(
     container,
     initialState(),
@@ -236,6 +258,7 @@ test("destroy() 之后 interval 不再触发", (t) => {
     SETTINGS,
     opts,
     storageKey,
+    storage,
   );
 
   const [, play] = buttonsOf(container);
@@ -259,7 +282,7 @@ test("destroy() 之后 interval 不再触发", (t) => {
 /* ------------------------------------------------------------------ */
 
 test("🔴 图标用 DOM API 构造，不写 innerHTML（回退即红）", () => {
-  const { dom, container, opts, storageKey, handlers } = makeFixture();
+  const { dom, container, opts, storageKey, storage, handlers } = makeFixture();
   // 审核的机械检查盯的是 `el.innerHTML =` 赋值。装一个抛错的 setter：
   // 实现里若还写 innerHTML，渲染当下就会炸；不写才走得到正常路径。
   const desc = Object.getOwnPropertyDescriptor(dom.window.Element.prototype, "innerHTML");
@@ -277,6 +300,7 @@ test("🔴 图标用 DOM API 构造，不写 innerHTML（回退即红）", () =>
       SETTINGS,
       opts,
       storageKey,
+      storage,
     );
 
     // 图标还在：三个按钮各带一个 <svg>，子元素与上游 path 集一致。
@@ -299,18 +323,18 @@ test("🔴 图标用 DOM API 构造，不写 innerHTML（回退即红）", () =>
 });
 
 /* ------------------------------------------------------------------ */
-/* 认证审计 C2-054 · localStorage 键的命名空间前缀                      */
+/* 认证审计 C2-054 · 设备本地存储键的命名空间前缀                        */
 /* ------------------------------------------------------------------ */
 
 /** 上游 `component.cljs:1417-1418` 的键是
  *  `"nautilus-log:collapsed:v1:" + block-uid`；本移植的调用方传的是裸的
- *  `"<path>.md:<lineOffset>"`，于是 vault 级 localStorage 里躺着一个毫无
- *  命名空间、也没有版本位的键。
+ *  `"<path>.md:<lineOffset>"`，于是存储里躺着一个毫无命名空间、也没有版本位
+ *  的键。
  *
  *  ⚠️ 旧测试抓不到这条 —— 它把**自己造的、已经带前缀的**键喂进被测函数，
  *  再断言同一个键被写了，永远自洽。这条测试传的是**调用方真实会传的裸键**。 */
-test("🔴 C2-054 折叠态的 localStorage 键带 nautilus-log:collapsed:v1: 前缀", () => {
-  const { dom, container, opts, calls, handlers } = makeFixture();
+test("🔴 C2-054 折叠态的设备本地存储键带 nautilus-log:collapsed:v1: 前缀", () => {
+  const { container, opts, storage, store, calls, handlers } = makeFixture();
   const blockKey = "Daily/2026-08-24.md:12";   // main.ts / sidebar.ts 真实传入的形态
 
   const { destroy } = renderChartControls(
@@ -320,20 +344,20 @@ test("🔴 C2-054 折叠态的 localStorage 键带 nautilus-log:collapsed:v1: �
     SETTINGS,
     opts,
     blockKey,
+    storage,
   );
 
   const [, , collapse] = buttonsOf(container);
   collapse.click();
 
   assert.equal(calls[calls.length - 1].collapsed, true);
-  assert.equal(
-    dom.window.localStorage.getItem(blockKey),
-    null,
-    "裸键不该出现在 vault 级 localStorage 里（无命名空间会撞上别的插件）",
+  assert.ok(
+    !store.has(blockKey),
+    "裸键不该出现在存储里（无命名空间会撞上别的插件）",
   );
   assert.equal(
-    dom.window.localStorage.getItem(`nautilus-log:collapsed:v1:${blockKey}`),
-    "true",
+    store.get(`nautilus-log:collapsed:v1:${blockKey}`),
+    true,
     "必须写在上游那个带版本位的命名空间下",
   );
 
@@ -341,7 +365,7 @@ test("🔴 C2-054 折叠态的 localStorage 键带 nautilus-log:collapsed:v1: �
 });
 
 test("🔴 C2-054 已带前缀的键原样通过（幂等，不叠第二层前缀）", () => {
-  const { dom, container, opts, storageKey, handlers } = makeFixture();
+  const { container, opts, storage, store, storageKey, handlers } = makeFixture();
   const { destroy } = renderChartControls(
     container,
     initialState(),
@@ -349,15 +373,133 @@ test("🔴 C2-054 已带前缀的键原样通过（幂等，不叠第二层前�
     SETTINGS,
     opts,
     storageKey,                      // "nautilus-log:collapsed:v1:test-block"
+    storage,
   );
   buttonsOf(container)[2].click();
-  assert.equal(dom.window.localStorage.getItem(storageKey), "true");
+  assert.equal(store.get(storageKey), true);
   assert.equal(
-    dom.window.localStorage.getItem(`nautilus-log:collapsed:v1:${storageKey}`),
-    null,
+    store.get(`nautilus-log:collapsed:v1:${storageKey}`),
+    undefined,
     "不能把前缀叠两层",
   );
   destroy();
+});
+
+/* ------------------------------------------------------------------ */
+/* 2026-08-28 · 注入式存储的语义                                        */
+/* ------------------------------------------------------------------ */
+
+test("🔴 折叠 -> 写进注入的存储；重建组件 -> 读回还是折叠的", () => {
+  const { container, opts, storage, store, storageKey, calls, handlers } = makeFixture();
+  const first = renderChartControls(
+    container,
+    initialState(),
+    handlers,
+    SETTINGS,
+    opts,
+    storageKey,
+    storage,
+  );
+
+  buttonsOf(container)[2].click();   // 折叠
+  assert.equal(store.get(storageKey), true, "折叠态写进注入的存储");
+  first.destroy();
+
+  // 重建：同一个存储缝（模拟宿主视图重建，app 没变）。
+  const fresh = document.createElement("div");
+  document.body.appendChild(fresh);
+  const calls2 = [];
+  const second = renderChartControls(
+    fresh,
+    initialState(),   // 调用方仍不知道是折叠的
+    { onChange: (next) => calls2.push(next) },
+    SETTINGS,
+    opts,
+    storageKey,
+    storage,
+  );
+
+  assert.equal(calls2.length, 1, "重建时同步一次真实的折叠态");
+  assert.equal(calls2[0].collapsed, true, "从注入的存储读回折叠态");
+  assert.ok(fresh.classList.contains("nautilus-log-collapsed"), "重建后图表就是折叠的");
+
+  second.destroy();
+  fresh.remove();
+});
+
+test("🔴 存储抛异常时图表照常渲染（webview storage 不可用的纪律）", () => {
+  const { container, opts, storageKey, calls, handlers } = makeFixture();
+  const throwing = {
+    read() { throw new Error("storage read unavailable"); },
+    write() { throw new Error("storage write unavailable"); },
+  };
+
+  const { destroy } = renderChartControls(
+    container,
+    initialState(),
+    handlers,
+    SETTINGS,
+    opts,
+    storageKey,
+    throwing,
+  );
+
+  // 渲染没炸：三个按钮都在，读不到持久态不等于有折叠态，不触发多余 onChange。
+  const buttons = buttonsOf(container);
+  assert.equal(buttons.length, 3, "存储不可用图表照常渲染");
+  assert.equal(calls.length, 0, "读不到持久态时不该额外同步 onChange");
+
+  buttons[2].click();
+  assert.equal(calls[calls.length - 1].collapsed, true, "折叠交互不受存储抛错影响");
+  destroy();
+});
+
+test("collapsedStorageFromApp 把 App 的 device-local API 映射成布尔缝", () => {
+  const backing = new Map();
+  const written = [];
+  const fakeApp = {
+    loadLocalStorage(key) { return backing.has(key) ? backing.get(key) : null; },
+    saveLocalStorage(key, data) {
+      written.push([key, data]);
+      if (data === null) backing.delete(key);
+      else backing.set(key, data);
+    },
+  };
+  const storage = collapsedStorageFromApp(fakeApp);
+
+  assert.equal(storage.read("missing"), false, "缺省/null -> 未折叠");
+  storage.write("k", true);
+  assert.deepEqual(written[0], ["k", true], "写直接透传 saveLocalStorage（boolean 原值）");
+  assert.equal(storage.read("k"), true, "boolean true 读回 true");
+  storage.write("k", false);
+  assert.equal(storage.read("k"), false, "boolean false 读回 false");
+});
+
+test("🔴 src/** 不再出现 window.localStorage / sessionStorage（社区审核机械检查，回退即红）", () => {
+  const fs = require("node:fs");
+  const root = path.join(__dirname, "..", "src");
+  const files = [];
+  (function walk(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.(ts|js)$/.test(entry.name)) files.push(full);
+    }
+  })(root);
+  assert.ok(files.length > 0, "扫描到 src/ 下的源码文件");
+
+  const offenders = [];
+  for (const f of files) {
+    const lines = fs.readFileSync(f, "utf8").split("\n");
+    lines.forEach((line, i) => {
+      if (/\bwindow\.localStorage\b/.test(line)
+          || /\bsessionStorage\b/.test(line)
+          || /\blocalStorage\b/.test(line)) {
+        offenders.push(`${path.relative(root, f)}:${i + 1}: ${line.trim()}`);
+      }
+    });
+  }
+  assert.deepEqual(offenders, [], "src/** 出现 localStorage/sessionStorage —— 审核的机械检查扫的就是这个");
 });
 
 /* ------------------------------------------------------------------ */
@@ -386,7 +528,7 @@ function makeShellFixture(overrides = {}) {
 }
 
 test("🔴 C2-023 控制栏挂进 header-actions 列（图例之前），不再是块根的兄弟", () => {
-  const { container, actions, legend, opts, storageKey, handlers } = makeShellFixture();
+  const { container, actions, legend, opts, storageKey, storage, handlers } = makeShellFixture();
   const { destroy } = renderChartControls(
     container,
     initialState(),
@@ -394,6 +536,7 @@ test("🔴 C2-023 控制栏挂进 header-actions 列（图例之前），不再�
     SETTINGS,
     opts,
     storageKey,
+    storage,
   );
 
   const bar = container.querySelector(".nautilus-log-controls-top");
@@ -412,7 +555,7 @@ test("🔴 C2-023 控制栏挂进 header-actions 列（图例之前），不再�
 });
 
 test("🔴 C2-057/C2-024 折叠后：块根拿 nautilus-log-collapsed，按钮条浮回块根，头部不再显示", () => {
-  const { container, actions, header, opts, storageKey, handlers } = makeShellFixture();
+  const { container, actions, header, opts, storageKey, storage, handlers } = makeShellFixture();
   const { destroy } = renderChartControls(
     container,
     initialState(),
@@ -420,6 +563,7 @@ test("🔴 C2-057/C2-024 折叠后：块根拿 nautilus-log-collapsed，按钮�
     SETTINGS,
     opts,
     storageKey,
+    storage,
   );
 
   assert.equal(

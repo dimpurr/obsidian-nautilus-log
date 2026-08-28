@@ -466,6 +466,16 @@ vendored runtime 的数据结构里有几个字段在 Obsidian 没有对应概�
 **代价**：端点被抄了一份，上游改量程时不会自动跟随 —— 由 §7 第 5 号检测器（vendor 逐字节比对）
 在升级时提示，届时人工核对。审计 ID：L1-003 / L1-004。
 
+### §D27 折叠态的持久化改用 Obsidian 官方 device-local 存储（不再用浏览器 `localStorage`）
+
+| | |
+|---|---|
+| **上游** | `component.cljs:1417-1418` 用浏览器 `localStorage` 存折叠位（`read-collapsed-state` / `write-collapsed-state`），键 `"nautilus-log:collapsed:v1:" + block-uid` |
+| **本移植** | 换成 Obsidian 官方 `app.loadLocalStorage` / `app.saveLocalStorage`（1.8.7 起，自带 vault 级命名空间）。`controls.ts` 不直接摸全局，而是让宿主**注入**一个 `CollapsedStorage` 缝（`collapsedStorageFromApp(app)` 工厂；测试注入内存实现） |
+| **为什么** | 社区插件审核的 **Local Storage** Recommendation（"Persists data in localStorage … instead of the Obsidian plugin data APIs"）。折叠态是**每台设备的 UI 状态**：用 `saveData` 会跟着 Obsidian Sync 跨设备同步、且每次折叠都写一遍 `data.json` —— device-local 语义正确。设置项仍走 `loadData`/`saveData`（§1.3），不动 |
+| **代价/边界** | ① **老键不迁移**：用户之前存在浏览器 `localStorage` 里的折叠位丢了就丢了（它只是 UI 折叠位；且 `saveLocalStorage` 的键空间自带 vault 前缀，老键也读不回来）。② 运行在 Obsidian **< 1.8.7** 时该 API 不存在 ⇒ 存储读写抛错，被 `readCollapsed`/`writeCollapsed` 的 try/catch 兜住 ⇒ 折叠态不持久、但图表照常渲染（既有纪律，有测试钉住）。③ 键的前缀逻辑**保留**（C2-054）：`saveLocalStorage` 自己带 vault 隔离，但我们的前缀还带**版本位**，将来迁移格式靠它 |
+
+审计依据：社区插件库自动审核 Recommendation「Local Storage」；代码注释引用见 `src/controls.ts` 存储段 + `PROGRESS.md`。
 
 ## 5. 挂载面重排
 

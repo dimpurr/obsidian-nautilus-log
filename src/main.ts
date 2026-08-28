@@ -12,7 +12,7 @@ import { parsePlan, taskDescription } from './parser';
 import { renderCompactOverview, renderOverflowPanel, renderWarningPanel } from './compact';
 import { renderSpiral } from './spiral';
 import { renderCapacityHeader } from './header';
-import { renderChartControls, type ChartControlState } from './controls';
+import { renderChartControls, collapsedStorageFromApp, type ChartControlState } from './controls';
 import { resolveDayState } from './daystate';
 import { NAUTILUS_VIEW_TYPE, NautilusSidebarView, resolveDailyNoteInfo, primeDailyNotesConfig } from './sidebar';
 import {
@@ -347,6 +347,8 @@ export class NautilusLogView extends MarkdownRenderChild {
         nowMinutes: dayState.interactive ? nowMinutes() : schedule.startMinutes,
       },
       `${this.sourcePath}:${lineOffset}`,
+      // 折叠态走 Obsidian 官方 device-local 存储（注入，不在 controls 里摸全局）。
+      collapsedStorageFromApp(this.plugin.app),
     );
 
     if (this.chartState.collapsed) {

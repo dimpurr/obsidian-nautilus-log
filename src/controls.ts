@@ -6,9 +6,11 @@
  * (main.ts / spiral.ts) from the `onChange` snapshots we emit:
  *
  *   · showDone  toggles the visibility of completed items;
- *   · collapsed is remembered per block via localStorage (upstream's
- *     read/write-collapsed-state), so a collapsed chart stays collapsed
- *     across reloads;
+ *   · collapsed is remembered per block via Obsidian's device-local storage
+ *     (`app.loadLocalStorage`/`saveLocalStorage`, injected as a
+ *     `CollapsedStorage` seam by the host — 2026-08-28 起不再用浏览器原生
+ *     Web Storage，见 PROGRESS.md), so a collapsed chart stays collapsed
+ *     across reloads on this device;
  *   · playback  is `null` when idle and `{ minute }` while replaying the day —
  *     推进由【宿主】驱动（见下方 startPlayback 注释），本组件不持有定时器
  *     and stop automatically on arrival.  It never touches the Markdown.
@@ -118,15 +120,51 @@ const ICON_EXPAND: SvgChildSpec[] = [
 ];
 
 /* ------------------------------------------------------------------ */
-/* localStorage persistence (guarded — storage can throw in some        */
-/* Obsidian webviews and must never take the whole chart down).        */
+/* Device-local storage persistence (guarded — storage can throw in    */
+/* some Obsidian webviews and must never take the whole chart down).   */
+/*                                                                     */
+/* 2026-08-28：存储后端从浏览器 Web Storage 换成 Obsidian 官方   */
+/* `app.loadLocalStorage` / `app.saveLocalStorage`（社区审核的     */
+/* Local Storage Recommendation）。折叠态是每台设备的 UI 状态，用   */
+/* saveData 会跟着 Obsidian Sync 跨设备同步且每次折叠都写一遍       */
+/* data.json —— 语义见 PROGRESS.md。                             */
 /* ------------------------------------------------------------------ */
+
+/**
+ * 存储缝。宿主注入（main.ts / sidebar.ts 用 `collapsedStorageFromApp` 从
+ * `app` 构造；测试注入内存实现）。只表达「这个键折叠了没有」，不关心底层
+ * 是什么 —— 键的命名空间/版本位由 `collapsedStorageKey` 管。
+ *
+ * 🔴 实现【允许抛错】—— Obsidian 的 webview 里 storage 可能不可用，也可能
+ *    运行在 API 缺失（< 1.8.7）的老版本上。抛错由 readCollapsed /
+ *    writeCollapsed 兜住，绝不让图表塌掉。
+ */
+export interface CollapsedStorage {
+  read(key: string): boolean;
+  write(key: string, value: boolean): void;
+}
+
+/** 工厂的结构类型。刻意不 import obsidian —— 保持本模块「jsdom 下原样可跑」
+ * 的性质（本文件头部注释）。与 `App` 的这两个方法逐字对齐。 */
+export interface CollapsedStorageApp {
+  loadLocalStorage(key: string): unknown;
+  saveLocalStorage(key: string, data: unknown): void;
+}
+
+/** 把 Obsidian `App` 的官方 device-local 存储映射成本组件的布尔缝。
+ *  `loadLocalStorage` 返回保存时的原值：我们存 boolean 就取回 boolean。 */
+export function collapsedStorageFromApp(app: CollapsedStorageApp): CollapsedStorage {
+  return {
+    read: (key) => app.loadLocalStorage(key) === true,
+    write: (key, value) => app.saveLocalStorage(key, value),
+  };
+}
 
 /**
  * 认证审计 C2-054：上游的键是 `"nautilus-log:collapsed:v1:" + block-uid`
  * （`component.cljs:1417-1418`）。本移植的调用方传的是裸的
- * `"<path>.md:<lineOffset>"` —— vault 级的 localStorage 里于是躺着一个毫无
- * 命名空间的键，既撞得上别的插件，也没有版本位可供将来迁移。
+ * `"<path>.md:<lineOffset>"` —— 不带命名空间会撞得上别的插件，也没有版本
+ * 位可供将来迁移。
  *
  * 命名空间在**这里**补，而不是要求每个调用方自己拼：调用方只知道「这是哪
  * 一块」，键的格式与版本位是本组件的实现细节（本文件的 doc 一直是这么写
@@ -140,17 +178,17 @@ export function collapsedStorageKey(blockKey: string): string {
     : `${COLLAPSED_STORAGE_PREFIX}${blockKey}`;
 }
 
-function readCollapsed(storageKey: string): boolean {
+function readCollapsed(storage: CollapsedStorage, storageKey: string): boolean {
   try {
-    return window.localStorage.getItem(storageKey) === "true";
+    return storage.read(storageKey);
   } catch {
     return false;
   }
 }
 
-function writeCollapsed(storageKey: string, value: boolean): void {
+function writeCollapsed(storage: CollapsedStorage, storageKey: string, value: boolean): void {
   try {
-    window.localStorage.setItem(storageKey, String(value));
+    storage.write(storageKey, value);
   } catch {
     // Storage unavailable — collapse still applies for this session.
   }
@@ -194,9 +232,12 @@ function clearChildren(node: Node): void {
  * `state` seeds the component; `handlers.onChange` receives a full snapshot
  * after every interaction (and once at render if the persisted collapsed value
  * differs from the passed-in one).  `blockKey` identifies the block whose
- * collapsed state is remembered; the localStorage namespace/version prefix is
- * added here (`collapsedStorageKey`, 认证审计 C2-054), so callers pass a bare
- * block identity such as `"<path>.md:<lineOffset>"`.
+ * collapsed state is remembered; the device-local storage namespace/version
+ * prefix is added here (`collapsedStorageKey`, 认证审计 C2-054), so callers pass
+ * a bare block identity such as `"<path>.md:<lineOffset>"`.  `storage` is the
+ * persistence seam — the host injects `collapsedStorageFromApp(app)` (or a test
+ * double).  It may throw in webviews; the try/catch that keeps the chart alive
+ * lives here, not in the caller.
  *
  * Mount point mirrors upstream `component.cljs:1874-1881`: expanded charts put
  * the bar in the header's actions column (before the legend); collapsed charts
@@ -213,6 +254,7 @@ export function renderChartControls(
   settings: NautilusSettings,
   opts: { workdayStartMinutes: number; workdayEndMinutes: number; nowMinutes: number },
   blockKey: string,
+  storage: CollapsedStorage,
 ): { destroy(): void } {
   const controlsCopy = core.uiCopy(settings.language).controls;
   const stopLabel = STOP_PLAYBACK_LABEL[settings.language] ?? STOP_PLAYBACK_LABEL.en;
@@ -221,7 +263,7 @@ export function renderChartControls(
   // Local working state.  Persisted collapse wins over the passed-in value,
   // mirroring upstream where read-collapsed-state seeds the atom.
   const initialCollapsed = !!state.collapsed;
-  const persistedCollapsed = readCollapsed(storageKey);
+  const persistedCollapsed = readCollapsed(storage, storageKey);
   const needsCollapseSync = persistedCollapsed && !initialCollapsed;
 
   let current: ChartControlState = {
@@ -293,7 +335,7 @@ export function renderChartControls(
   collapseBtn.className = "nautilus-log-toggle-btn nautilus-log-collapse-btn";
   collapseBtn.addEventListener("click", () => {
     current.collapsed = !current.collapsed;
-    writeCollapsed(storageKey, current.collapsed);
+    writeCollapsed(storage, storageKey, current.collapsed);
     handlers.onChange({ ...current });
     updateCollapse();
   });
