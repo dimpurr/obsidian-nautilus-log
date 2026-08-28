@@ -9,7 +9,7 @@ note into a living spiral schedule: fixed events stay fixed, flexible tasks flow
 into the time that remains, and overload never disappears from view.
 
 
-![Nautilus Logger — spiral day planner with explicit time capacity](https://raw.githubusercontent.com/dimpurr/obsidian-nautilus-logger/main/docs/assets/overview.png)
+![Nautilus Logger, a spiral day planner with explicit time capacity](https://raw.githubusercontent.com/dimpurr/obsidian-nautilus-logger/main/docs/assets/overview.png)
 
 ## Where this comes from
 
@@ -17,32 +17,31 @@ This is a port of one specific project:
 
 > ### 🧭 [**Nautilus Log for Roam Research**](https://github.com/404KSG/roam-nautilus-log) by [404KSG](https://github.com/404KSG)
 >
-> Not "inspired by" — **ported**. Its scheduling and capacity engine
-> (`log-core.js`, `timing-core.js`, `timing-runtime.js`, `timing-topbar.js`)
-> lives in this repository **byte-for-byte unchanged** under
-> [`src/vendor/`](src/vendor/). Every scheduling decision, every capacity number,
-> every CLOCK format you see here was designed there.
+> The scheduling and capacity engine (`log-core.js`, `timing-core.js`,
+> `timing-runtime.js`, `timing-topbar.js`) is vendored under
+> [`src/vendor/`](src/vendor/) **byte-for-byte unchanged**, so the numbers you
+> see here are computed by upstream's code rather than by a reimplementation of it.
 >
-> What this project adds is an Obsidian **adapter**: the same engine, fed from
-> Markdown files instead of a Roam graph.
+> What this project adds is the Obsidian side: the same engine, fed from Markdown
+> files instead of a Roam graph.
 
-That project in turn descends from earlier work, which is acknowledged separately
-in [Credits](#credits) — but they are **ancestors of the upstream**, not sources
-of this port.
+That project has ancestors of its own, listed in [Credits](#credits). They shaped
+the upstream, which is why they are kept separate from the line above.
 
 > ⚠️ **Status: not in the Obsidian community plugin store yet.**
 > See [Installation](#installation) for how to install it today.
 
-> **Contributing / re-porting?** Read [`docs/PORTING-DECISIONS.md`](docs/PORTING-DECISIONS.md) first —
-> it is the single source of truth for every place this port deliberately diverges from upstream,
-> and is written so that *upstream + that document* is enough to redo the port from scratch.
+> **Contributing, or porting this somewhere else?** Start with
+> [`docs/PORTING-DECISIONS.md`](docs/PORTING-DECISIONS.md). It records every place this port
+> deliberately diverges from upstream, in enough detail that *upstream plus that document*
+> is enough to redo the port from scratch.
 
 ## Installation
 
-> Not in the community plugin store yet. Three ways to install today —
-> **BRAT is the one to pick if you want updates.**
+> Not in the community plugin store yet. There are three ways to install it today.
+> **Pick BRAT if you want updates.**
 
-### Option 1 — BRAT (recommended, auto-updates)
+### Option 1: BRAT (recommended, auto-updates)
 
 1. Install [**BRAT**](https://github.com/TfTHacker/obsidian42-brat) from
    Obsidian's Community Plugins.
@@ -54,7 +53,7 @@ of this port.
 
 BRAT tracks this repo's GitHub releases and updates the plugin for you.
 
-### Option 2 — Manual
+### Option 2: Manual
 
 1. Download `main.js`, `manifest.json` and `styles.css` from the
    [latest release](https://github.com/dimpurr/obsidian-nautilus-logger/releases/latest).
@@ -63,7 +62,7 @@ BRAT tracks this repo's GitHub releases and updates the plugin for you.
 4. Restart Obsidian (or **Reload app without saving**), then enable the plugin
    in Community Plugins.
 
-### Option 3 — One-liner (macOS / Linux)
+### Option 3: One-liner (macOS / Linux)
 
 Run from **inside your vault folder**:
 
@@ -78,13 +77,13 @@ Then reload Obsidian and enable the plugin.
 
 ### Getting started
 
-After enabling, run the command **"Create Nautilus Logger test note"** from the
-command palette — it writes a small example note so you can see the spiral
-immediately. Or add this to today's Daily Note:
+After enabling, run **Create test note** from the command palette. It writes a
+small example note, so you can see the spiral before you commit to a format. The
+shorter route is to paste this into today's Daily Note:
 
 ````markdown
 ```naut
-start: 8:30
+start: 8
 ```
 - 09:00-10:00 Standup
 - [ ] Write the report 90m
@@ -99,14 +98,13 @@ start: 8:30
 
 ## What it gives you
 
-- **A plan that fits time.** See Planned demand, Available time, fixed Events,
-  remaining capacity, and work that cannot fit today.
-- **Flexible scheduling without a black box.** Events keep their time; unfinished
-  tasks move forward in written order.
-- **A day shaped around you.** Start at any whole hour and continue past midnight
-  when the plan belongs to a late or overnight schedule.
-- **A useful daily review.** Compare Planned and Actual time without leaving your
-  ordinary notes.
+- The capacity figures are explicit: planned demand, available time, time already
+  claimed by fixed events, what is left, and the work that will not fit today.
+- Events keep the times you gave them. Unfinished tasks fill the gaps in the
+  order you wrote them.
+- The day can start at any whole hour, and run past midnight when that is where
+  the plan actually goes.
+- Planned against actual, in the same note you were already writing in.
 
 Scheduling is deterministic: events claim their ranges first, then whole tasks
 fill suitable gaps from the current moment. Tasks that cannot fit appear in
@@ -114,9 +112,9 @@ fill suitable gaps from the current moment. Tasks that cannot fit appear in
 
 ## Plan format
 
-Unlike the Roam original — where the component reads its child blocks — this port
-keeps the plan **as ordinary Markdown below the code block**, because Obsidian
-code blocks have siblings rather than children. The block itself holds the
+The Roam original has the component read its child blocks. Obsidian code blocks
+have siblings rather than children, so this port keeps the plan **as ordinary
+Markdown below the code block**. The block itself holds the
 per-day overrides:
 
 ````markdown
@@ -136,14 +134,14 @@ stays editable, reorderable, and visible to Tasks and Dataview. The plan ends at
 the first blank line. Both ```` ```nautilus ```` and the shorter ```` ```naut ````
 are accepted.
 
-- **A time range pins the line to the clock** — `12:30-14:00`, `9 to 10:45`.
+- **A time range pins the line to the clock**: `12:30-14:00`, `9 to 10:45`.
   This works with or without a checkbox, so `- [ ] 09:00-10:00 Standup` is a
   fixed event you can still tick off.
-- **A single start time also pins it** — `- [ ] 09:00 Write brief 30m` becomes
+- **A single start time also pins it.** `- [ ] 09:00 Write brief 30m` becomes
   09:00–09:30. Without a duration it uses the configured default.
   A bare number is *not* read as a time (`Read chapter 9` stays flexible);
   write `9:00` or `9am` to mean a clock time.
-- **An unchecked task with no clock time is flexible** — it flows into whatever
+- **An unchecked task with no clock time is flexible.** It flows into whatever
   time remains.
 - **Line order is priority.** Reorder the lines and the schedule follows.
 - Durations support `30m`, `30min`, `1h`, and `1h30m`.
@@ -153,8 +151,8 @@ are accepted.
 
 ### Completed work
 
-A completed task needs a **completion time** to be drawn — the engine refuses to
-invent history it was not given. Write it as a `d`-prefixed anchor:
+A completed task needs a **completion time** before it can be drawn. The engine
+will not invent history it was not given. Write it as a `d`-prefixed anchor:
 
 ```markdown
 - [x] Academic reading 40m d11:20
@@ -165,7 +163,7 @@ counts as done (it stops consuming capacity) but cannot be placed on the chart.
 
 Rather than typing anchors by hand, use the command **Complete task with
 timestamp**, which ticks the current line and appends the current time. It ships
-with **no default hotkey** — bind one in Settings → Hotkeys if you want it.
+with **no default hotkey**. Bind one in Settings → Hotkeys if you want it.
 
 ### Style
 
@@ -204,19 +202,19 @@ Time is written into your note next to the task as Org-style CLOCK lines under a
 ```
 
 - **Only an unfinished task can own the Timing Line**, and only one CLOCK runs at a
-  time — switching tasks closes the previous CLOCK and opens the next at the same
+  time. Switching tasks closes the previous CLOCK and opens the next at the same
   instant.
 - With **Timing line in sidebar** on, Clock In also fronts the active task in the
   right sidebar.
 - **Recent** keeps the last 45 minutes of closed work (Recent retention minutes;
   `0` disables).
-- The **Pomodoro threshold** (45 min) changes only the live signal when reached —
-  it never stops work. With no task CLOCK active, the panel header starts a
+- The **Pomodoro threshold** (45 min) changes the live signal when reached. It
+  does not stop anything. With no task CLOCK active, the panel header starts a
   standalone count-up POMO that writes nothing and touches neither Actual, Planned,
   Review, nor the spiral; starting a task CLOCK clears it, because CLOCK always has
   priority.
 - The **forgotten-timer warning** (120 min) flags a CLOCK left running that long.
-  It warns — it never stops or deletes a CLOCK. `0` disables it.
+  It only warns; it never stops or deletes a CLOCK. `0` disables it.
 - Actual time is never capped at Planned. Without an explicit completion anchor
   (`dHH:MM`) or an Actual end, Nautilus Logger does not invent history.
 
@@ -249,7 +247,7 @@ display day; otherwise it falls back to today.
 |---|---|
 | **Today** | Red now-hand; tasks laid out from *this moment*; capacity counts the time that is left |
 | **Past** | No now-hand; the elapsed hatching covers the whole day; tasks laid out from the day's start; capacity counts the **whole day**; "relative to now" interactions (eye, playback) are off |
-| **Future** | No now-hand and **no hatching at all** — tomorrow has not started, so nothing has elapsed; otherwise as above |
+| **Future** | No now-hand and **no hatching at all**, since tomorrow has not started, so nothing has elapsed; otherwise as above |
 
 The rules for the three cases come from the upstream engine's `timelineDayState`;
 this port only tells it *which day the note is about*.
@@ -277,32 +275,32 @@ The scheduling and capacity engine is reused **unchanged** from the Roam version
 
 ## Credits
 
-**The direct source of this port is [404KSG/roam-nautilus-log](https://github.com/404KSG/roam-nautilus-log)**
-— see [Where this comes from](#where-this-comes-from). Everything below is the
+**The direct source of this port is [404KSG/roam-nautilus-log](https://github.com/404KSG/roam-nautilus-log)**;
+see [Where this comes from](#where-this-comes-from). Everything below is the
 lineage *that project* descends from. They are acknowledged here because the MIT
 license and the idea both travel down this chain, but this port did not take code
 from them directly.
 
 - **[roam-depot-render-template](https://github.com/8bitgentleman/roam-depot-render-template)**
-  by [Matt Vogel](https://github.com/8bitgentleman) — the Roam extension
-  scaffolding the whole lineage descends from, and the copyright holder named in
-  the MIT license this project still carries.
+  by [Matt Vogel](https://github.com/8bitgentleman). The Roam extension scaffolding
+  the whole lineage descends from; its copyright line is still the one in this
+  project's MIT license.
 - **[Nautilus](https://github.com/tombarys/roam-depot-nautilus)**
-  by [Tomáš Baránek](https://github.com/tombarys) — the original spiral-planning
+  by [Tomáš Baránek](https://github.com/tombarys). The original spiral-planning
   concept. The spiral is not decoration: its narrowing coils mirror one's
   diminishing energy for creative work over a day.
 - **[Nautilus Enhanced](https://github.com/hopeserena/nautilus-enhanced)**
-  by [hopeserena](https://github.com/hopeserena) — eliminated the timer memory
-  leak, added bilingual settings, Bézier connectors, and CJK typography fixes.
+  by [hopeserena](https://github.com/hopeserena). Fixed the timer memory leak, and
+  added bilingual settings, Bézier connectors and CJK typography fixes.
 - 🧭 **[Nautilus Log](https://github.com/404KSG/roam-nautilus-log)**
-  by [404KSG](https://github.com/404KSG) — **the project this one is ported from.**
+  by [404KSG](https://github.com/404KSG). **The project this one is ported from.**
   It turned the spiral into a real planner: the capacity model
   (Planned / Available / Overload / No fitting slot), the optional execution layer
   with `LOGBOOK::` / `CLOCK:` tracking, Planned-vs-Actual review, overnight chart
   windows, and a test suite. Its engine runs here unmodified.
 - **[Roam Logbook](https://github.com/forrestchang/roam-logbook)**
-  by [forrestchang](https://github.com/forrestchang) — the inspiration upstream
-  drew on for compatible CLOCK tracking.
+  by [forrestchang](https://github.com/forrestchang). What upstream drew on for
+  compatible CLOCK tracking.
 
 The time-allocation philosophy is inspired by the
 [YNAB Method](https://www.ynab.com/the-four-rules/). Nautilus Logger is not
