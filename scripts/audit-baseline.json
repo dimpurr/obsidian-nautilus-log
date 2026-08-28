@@ -1,13 +1,18 @@
 {
   "orphanCss": [],
-  "orphanCopy": [],
+  "orphanCopy": [
+    "log-core.js:tidy"
+  ],
   "unreachableExports": [
+    "log-core.js:childOrderMoves",
     "log-core.js:END_HOURS",
     "log-core.js:START_HOURS",
     "log-core.js:resolveRendererSettings",
+    "log-core.js:stableTidyOrder",
     "timing-core.js:ACTIVE_WORK_WINDOW_MINUTES",
     "timing-core.js:FORGOTTEN_CLOCK_MINUTES",
     "timing-core.js:actualMinutesToday",
+    "timing-core.js:isStructuralBlock",
     "timing-core.js:resolveBlockReferences",
     "timing-core.js:resolveTaskInstance",
     "timing-core.js:selectPrimaryPlan",
@@ -15,10 +20,15 @@
   ],
   "unmappedSettingKeys": [],
   "testsWithoutSrc": [],
+  "missingAdapterExports": [],
   "__why": {
     "__检测器修复说明": "2026-08-26 认证审计发现检测器有 4 处假阴性（死模块当发射面/当消费者、注释当发射、只认 CJS export、只认 X={ 不认 Object.freeze({），修完后欠账从 8 条暴露到 55 条。这份 baseline 是修复后的真实基线。同日新增第 7 号检测器「空转测试」。",
     "nautilus-log-container/-content/-shell/-collapsed": "🔴 真欠账，非豁免：块根实际类名是 nautilus-log。导致控制栏 hover 浮现与折叠态样式失效（认证审计 C2-056/057）",
     "createTimingTopbar": "§D3 有意不 import（挂载被 .rm-topbar 门控，且形态是 body 上的绝对定位 popover —— 正是那条决策否决掉的挂载面）。",
+    "log-core.js:tidy": "✅ 真实理由：§D28 有意不移植 tidy-plan.js（整理已完成任务/已过去事件）；tidy 是 UI_COPY 里随 vendor 14e8d07 一起搬进来的 key，tidy 动作未接，渲染路径不存在（孤儿文案）。",
+    "log-core.js:stableTidyOrder/log-core.js:childOrderMoves": "✅ 真实理由：§D28 不移植 tidy-plan.js；这两个函数只被上游 src/tidy-plan.js 调用，本移植没有该模块。",
+    "timing-core.js:isStructuralBlock": "✅ 真实理由：§D10 连带 —— 只被 resolveTaskInstance（未接线的引用解析）内部调用，属「不需要直接调用的内部导出」（与 actualMinutesToday 同类）。",
+    "__2026-08-28 vendor 14e8d07 升级": "vendor 从 86b97c0 升到 14e8d07，新增上游 tidy-plan.js 功能（本移植不移植，见 §D28）。随 vendor 搬入 4 条 shape 兼容残留：孤儿文案 log-core.js:tidy + 引擎导出 log-core.js:stableTidyOrder/childOrderMoves（只被 tidy-plan.js 调）+ timing-core.js:isStructuralBlock（只被 §D10 未接线的 resolveTaskInstance 调）。全部给真实理由后登记。⚠️ baseline 因此变长 —— 这是 vendor 升级带来的形状兼容表面，不是新积欠账；已按「每条豁免有真实理由」登记。",
     "resolveTaskInstance/resolveBlockReferences": "§D10 有意不接线（Roam 块引用的每日实例模型无直接对应；不传 references/readString 时会优雅降级到纯本地解析）。",
     "selectPrimaryPlan/resolveRendererSettings": "§D4 用代码块围栏定位与块内配置替代。⚠️ 副作用：跟着丢掉了 resolveRendererSettings 里的 boundedInteger 钳制，于是块内 default-duration / legend-length 没有任何范围限制（§1.1 已登记，认证审计 P1-058/115）。",
     "actualMinutesToday": "✅ 真实理由（此前写「待评估」，那不是理由）：它是 timing-core 【自己内部】就在用的助手（buildDailyReview 与 durationMetadata 各调它算 Actual 分钟数），本移植需要的数字通过那两个更高层的 API 拿到，不必也不该自己再调一次。⇒ 不是欠账，是「不需要直接调用的内部导出」。",

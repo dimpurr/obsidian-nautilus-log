@@ -153,3 +153,111 @@ test("T1-127 · 弄坏 parser.ts 抄来的正则，平行正则检测器必须�
     rmSync(work, { recursive: true, force: true });
   }
 });
+
+test("D-009 · 纯函数：多行 import / 别名 / 注释剥离 / 各类 export 正确解析", async () => {
+  const helper = await import(pathToFileURL(join(ROOT, "scripts", "vendor-adapter-check.mjs")));
+
+  // 1. 测试从 vendor 源码提取 ./timing-roam import 名单（支持多行、别名、.js 后缀、注释剥离）
+  const vendorSnippet = `
+    // import { commentFake } from './timing-roam';
+    /* import { blockFake } from './timing-roam'; */
+    import {
+      closeClock,
+      completeTask as finishTask,
+      /* 内联注释 */
+      createRunningClock,
+    } from './timing-roam.js';
+    import { showToast } from "./timing-roam";
+    const { updateGraphBlock, helper: localHelper } = require('./timing-roam');
+  `;
+  const imports = helper.extractTimingRoamImports(vendorSnippet);
+  assert.deepEqual(imports, [
+    "closeClock",
+    "completeTask",
+    "createRunningClock",
+    "helper",
+    "showToast",
+    "updateGraphBlock",
+  ]);
+
+  // 2. 测试从 adapter 源码提取各类 export
+  const adapterSnippet = `
+    // export function commentedOut() {}
+    export function closeClock() {}
+    export async function createRunningClock() {}
+    export const SOME_CONST = 1;
+    export interface TimingEntry {}
+    export type TimingHost = {};
+    export default function defaultFn() {}
+    export { localA, localB as finishTask };
+  `;
+  const exports = helper.extractAdapterExports(adapterSnippet);
+  assert.equal(exports.has("closeClock"), true);
+  assert.equal(exports.has("createRunningClock"), true);
+  assert.equal(exports.has("SOME_CONST"), true);
+  assert.equal(exports.has("TimingEntry"), true);
+  assert.equal(exports.has("TimingHost"), true);
+  assert.equal(exports.has("default"), true);
+  assert.equal(exports.has("localA"), true);
+  assert.equal(exports.has("finishTask"), true);
+  assert.equal(exports.has("commentedOut"), false);
+
+  // 3. 测试比对逻辑：缺失被抓，多余导出不报错
+  const analysis = helper.analyzeAdapterExports(
+    [{ path: "src/vendor/timing-runtime.js", text: vendorSnippet }],
+    adapterSnippet,
+  );
+  // vendorSnippet 要了: closeClock (有), completeTask (无), createRunningClock (有), helper (无), showToast (无), updateGraphBlock (无)
+  assert.deepEqual(analysis, [
+    "timing-runtime.js:completeTask",
+    "timing-runtime.js:helper",
+    "timing-runtime.js:showToast",
+    "timing-runtime.js:updateGraphBlock",
+  ]);
+
+  // 真实仓库的 src/timing-obsidian.ts 与真实 vendor 模块比对必须零缺失
+  const realObsidian = readFileSync(join(ROOT, "src/timing-obsidian.ts"), "utf8");
+  const realRuntime = readFileSync(join(ROOT, "src/vendor/timing-runtime.js"), "utf8");
+  const cleanAnalysis = helper.analyzeAdapterExports(
+    [{ path: "src/vendor/timing-runtime.js", text: realRuntime }],
+    realObsidian,
+  );
+  assert.deepEqual(cleanAnalysis, [], "真实仓库中 vendor 的 import 必须全在 timing-obsidian.ts 中导出");
+});
+
+test("D-009 · 检测器在干净仓库上 missingAdapterExports 必须为 0 且 exit 0", async () => {
+  const out = await runDetector(ROOT);
+  assert.equal(out.nonZeroExit, undefined, "干净仓库应当 exit 0");
+  assert.equal((out.regressions.missingAdapterExports || []).length, 0);
+  assert.deepEqual(out.result.missingAdapterExports, []);
+});
+
+test("D-009 · 人为在 vendor 的 import 里加不存在的名字，检测器必须红", async () => {
+  const work = mkdtempSync(join(tmpdir(), "nautilus-detector-vendor-import-"));
+  try {
+    cpSync(ROOT, work, {
+      recursive: true,
+      filter: (p) => !p.includes(`${require("node:path").sep}node_modules`)
+        && !p.includes(`${require("node:path").sep}.git`),
+    });
+    const vendorRuntimePath = join(work, "src", "vendor", "timing-runtime.js");
+    const original = readFileSync(vendorRuntimePath, "utf8");
+    // 人为在多行 import 里插入不存在的符号（如 14e8d07 升级时新增的符号）
+    writeFileSync(
+      vendorRuntimePath,
+      original.replace(
+        "} from './timing-roam';",
+        "  nonexistentVendorImportSymbol,\n} from './timing-roam';",
+      ),
+    );
+    const out = await runDetector(work);
+    assert.equal(out.nonZeroExit, true, "人为加入不存在的 vendor import 必须让检测器退出非 0");
+    const fresh = out.regressions.missingAdapterExports || [];
+    assert.ok(
+      fresh.includes("timing-runtime.js:nonexistentVendorImportSymbol"),
+      `未实现的 vendor import 必须被捕获，实际列表：${JSON.stringify(fresh)}`,
+    );
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+});

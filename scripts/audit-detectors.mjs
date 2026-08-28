@@ -5,7 +5,7 @@
  * 为什么这几条有效：本移植的 **CSS 与 i18n 是整份从上游搬来的、代码是逐个写的**。
  * 两者之差就是一张现成的欠账清单 —— 不需要人去回忆上游有什么。
  *
- * 七个检测器全是机械判定，零语义推断：
+ * 九个检测器全是机械判定，零语义推断：
  *   1. 孤儿 CSS      styles.css 里有规则、代码从不发射的类
  *   2. 孤儿文案      引擎文案表里有 key、渲染路径不可达
  *   3. 引擎导出面    src/vendor/*.js 导出了、没有任何调用点的符号
@@ -14,6 +14,7 @@
  *   6. 怪癖钉子      test/reality-quirks.md 里每条现实怪癖必须有一个真实存在的测试钉住
  *   7. 空转测试      test/*.test.js 里没有任何一处引用 src/ 的（＝没碰到被测代码）
  *   8. 平行正则漂移  parser.ts 逐字抄 vendor 的正则必须一直逐字一致（T1-127）
+ *   9. 适配层导出面  vendor 从 ./timing-roam 导入的符号必须在 timing-obsidian.ts 里导出
  *
  * 用法：
  *   node scripts/audit-detectors.mjs           # 人读的报告
@@ -27,6 +28,7 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analyzeSettingKeyMap } from './setting-map-check.mjs';
+import { analyzeAdapterExports } from './vendor-adapter-check.mjs';
 
 // 🔴 NT_AUDIT_ROOT 只服务测试：让检测器读一份【临时仓库副本】，用真实代码
 //   验证「映射目标不对会被抓」。生产路径不设它。
@@ -294,6 +296,17 @@ function parallelRegexDrift() {
   return out;
 }
 
+/* ── 9. 适配层导出面 ─────────────────────────────────────────────────────
+ * src/vendor/*.js 里所有 from './timing-roam' 的 import 名单必须在
+ * src/timing-obsidian.ts 里有对应的 export（函数 / 常量 / 接口 / 命名导出）。
+ * 抓的是上游升级时新增了 import、而适配层未实现导致运行时找不到符号。 */
+function missingAdapterExports() {
+  const obsidianPath = 'src/timing-obsidian.ts';
+  const obsidianText = exists(obsidianPath) ? read(obsidianPath) : '';
+  const vendors = vendorSources();
+  return analyzeAdapterExports(vendors, obsidianText);
+}
+
 /* ── 汇总 ───────────────────────────────────────────────────────────────── */
 const result = {
   orphanCss: orphanCss(),
@@ -304,12 +317,13 @@ const result = {
   danglingQuirkPins: danglingQuirkPins(),
   testsWithoutSrc: testsWithoutSrc(),
   parallelRegexDrift: parallelRegexDrift(),
+  missingAdapterExports: missingAdapterExports(),
 };
 
 const BASELINE_PATH = 'scripts/audit-baseline.json';
 const baseline = exists(BASELINE_PATH) ? JSON.parse(read(BASELINE_PATH)) : {};
 const regressions = {};
-for (const key of ['orphanCss', 'orphanCopy', 'unreachableExports', 'unmappedSettingKeys', 'testsWithoutSrc']) {
+for (const key of ['orphanCss', 'orphanCopy', 'unreachableExports', 'unmappedSettingKeys', 'testsWithoutSrc', 'missingAdapterExports']) {
   const known = new Set(baseline[key] || []);
   const fresh = result[key].filter((x) => !known.has(x));
   if (fresh.length) regressions[key] = fresh;
@@ -330,6 +344,7 @@ if (process.argv.includes('--json')) {
     unreachableExports: '引擎导出但零调用',
     unmappedSettingKeys: '未映射的设置键（会静默落硬编码兜底）',
     testsWithoutSrc: '空转测试（整个文件没引用过 src/，＝没碰到被测代码）',
+    missingAdapterExports: '适配层未实现的 vendor import（从 ./timing-roam 导入但在 timing-obsidian.ts 没导出）',
   };
   for (const [k, title] of Object.entries(label)) {
     console.log(`\n## ${title} — ${result[k].length} 条`);
